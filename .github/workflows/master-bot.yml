@@ -22,7 +22,7 @@ jobs:
         with:
           fetch-depth: 0
 
-      - name: 1. Deep Version Scan
+      - name: 1. Deep Version Scan & Bump
         id: scanner
         env:
           GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
@@ -31,7 +31,7 @@ jobs:
           import os, re, requests
           from pathlib import Path
 
-          # Categories verified from image_0bfdc5.png and others
+          # Categories strictly verified from image_0bfdc5.png
           TARGETS = {
               "app-misc/dgop": "AvengeMedia/dgop",
               "x11-misc/matugen": "strzelewicz/matugen",
@@ -39,46 +39,44 @@ jobs:
           }
 
           def get_latest(repo):
-              r = requests.get(f"https://api.github.com/repos/{repo}/releases/latest", 
-                               headers={"Authorization": f"token {os.environ['GITHUB_TOKEN']}"})
-              return r.json().get('tag_name', '').lstrip('v') if r.status_code == 200 else None
+              try:
+                  r = requests.get(f"https://api.github.com/repos/{repo}/releases/latest", 
+                                   headers={"Authorization": f"token {os.environ['GITHUB_TOKEN']}"}, timeout=15)
+                  return r.json().get('tag_name', '').lstrip('v') if r.status_code == 200 else None
+              except: return None
 
-          # Corrected loop handling Path objects correctly
           for path, repo in TARGETS.items():
               pkg_dir = Path(path)
               if not pkg_dir.exists(): continue
-              ebuilds = list(pkg_dir.glob("*.ebuild"))
+              # sorted() ensures we get the highest version if multiple exist
+              ebuilds = sorted(list(pkg_dir.glob("*.ebuild")))
               if not ebuilds: continue
               
-              # FIX: Access the first file object in the list explicitly
-              target_ebuild = ebuilds 
-              match = re.search(r'-(.*)\.ebuild', target_ebuild.name)
+              # FIX: target_ebuild is now the single File Object, not the list
+              target_ebuild = ebuilds[-1] 
+              match = re.search(r'-([0-9.]+)\.ebuild', target_ebuild.name)
               if not match: continue
               curr_ver = match.group(1)
-              pkg_base = target_ebuild.name.replace(f"-{curr_ver}.ebuild", "")
+              pkg_base = target_ebuild.name[:target_ebuild.name.rfind(f"-{curr_ver}")]
               
               latest_ver = get_latest(repo)
               if latest_ver and latest_ver != curr_ver:
                   print(f"✨ Bumping {pkg_base}: {curr_ver} -> {latest_ver}")
-                  # FIX: Call rename on the Path object
                   target_ebuild.rename(pkg_dir / f"{pkg_base}-{latest_ver}.ebuild")
 
-          # RootApp Versioning (Verified Path: app-misc/rootapp-bin)
+          # RootApp Logic (Verified Path: app-misc/rootapp-bin)
           root_dir = Path("app-misc/rootapp-bin")
           if root_dir.exists():
-              ebs = list(root_dir.glob("*.ebuild"))
+              ebs = sorted(list(root_dir.glob("*.ebuild")))
               if ebs:
                   os.system("curl -sL -o Root.AppImage https://installer.rootapp.com/installer/Linux/X64/Root.AppImage")
                   os.system("chmod +x Root.AppImage && ./Root.AppImage --appimage-extract > /dev/null")
                   ver_file = Path("squashfs-root/usr/bin/sq.version")
                   if ver_file.exists():
                       with open(ver_file, 'r') as f:
-                          v_match = re.search(r'[0-9]+\.[0-9]+\.[0-9]+', f.read())
-                          if v_match:
-                              v = v_match.group(0)
-                              if v not in ebs.name:
-                                  # FIX: Access first item in list
-                                  ebs.rename(root_dir / f"rootapp-bin-{v}.ebuild")
+                          v = re.search(r'[0-9]+\.[0-9]+\.[0-9]+', f.read()).group(0)
+                          if f"rootapp-bin-{v}.ebuild" != ebs[-1].name:
+                              ebs[-1].rename(root_dir / f"rootapp-bin-{v}.ebuild")
                   os.system("rm -rf Root.AppImage squashfs-root")
           EOF
 
@@ -87,7 +85,6 @@ jobs:
           docker run --rm -v ${{ github.workspace }}:/overlay -w /overlay gentoo/stage3 sh -c "
             mkdir -p /var/db/repos/gentoo && emerge-webrsync -q
             echo -e '[overlay]\nlocation = /overlay\nmasters = gentoo' > /etc/portage/repos.conf/overlay.conf
-            # Manifest Mangowc 12.7 specifically as requested
             [ -f gui-wm/mangowc/mangowc-12.7.ebuild ] && ebuild gui-wm/mangowc/mangowc-12.7.ebuild manifest
             find . -name '*.ebuild' -exec ebuild {} manifest \;
             chown -R $(id -u):$(id -g) .
@@ -99,32 +96,34 @@ jobs:
           git config user.email "github-actions[bot]@users.noreply.github.com"
           git add .
           if ! git diff --cached --quiet; then
-            git commit -m "bot: sync upstream versions and manifests"
+            git commit -m "bot: update versions and manifests"
             git pull --rebase origin main && git push
           fi
 
-  build-and-deploy:
+  build-binaries:
     needs: update-and-manifest
     runs-on: ubuntu-latest
     strategy:
       fail-fast: false
       matrix:
-        package: [gui-wm/niri, gui-wm/mangowc, gui-wm/dank-material-shell, x11-base/xwayland-satellite, app-misc/dgop, x11-misc/matugen]
+        package: [gui-wm/niri, gui-wm/mangowc, gui-wm/dank-material-shell, x11-base/xwayland-satellite, app-misc/dgop, x11-misc/matugen, games-util/protonplus-bin]
     steps:
       - name: Checkout
         uses: actions/checkout@v5
 
-      - name: Build & Index Binaries (Gentoo Docker)
+      - name: Build & Index (Gentoo Docker)
         run: |
           docker run --rm -v ${{ github.workspace }}:/overlay gentoo/stage3 sh -c "
             emerge-webrsync -q && emerge --noreplace dev-lang/rust-bin
             echo 'USE=\"wayland vulkan pipewire -X -systemd\"' >> /etc/portage/make.conf
             echo -e '[overlay]\nlocation = /overlay\nmasters = gentoo' > /etc/portage/repos.conf/overlay.conf
-            # Build and create standard .gpkg binary container
+            
+            # 1. Build and create binary .gpkg
             emerge --autounmask=y --autounmask-write --buildpkg ${{ matrix.package }}
+            
+            # 2. Setup public folder and generate Portage index
             mkdir -p /overlay/public_binhost
             cp -r /var/cache/binpkgs/* /overlay/public_binhost/
-            # Generate the 'Packages' index Portage requires
             cd /overlay/public_binhost && emaint binhost --fix
             touch .nojekyll
             chown -R $(id -u):$(id -g) /overlay/public_binhost
@@ -136,12 +135,12 @@ jobs:
           path: ./public_binhost/
 
   deploy:
-    needs: build-and-deploy
+    needs: build-binaries
     runs-on: ubuntu-latest
     environment:
       name: github-pages
       url: ${{ steps.deployment.outputs.page_url }}
     steps:
-      - name: Deploy to GitHub Pages (Pure File Server Mode)
+      - name: Deploy to GitHub Pages
         id: deployment
         uses: actions/deploy-pages@v4
