@@ -31,7 +31,6 @@ jobs:
           import os, re, requests
           from pathlib import Path
 
-          # STRICT MAPPINGS FROM image_0d660b.png
           STABLE_TARGETS = {
               "app-misc/dgop": "AvengeMedia/dgop",
               "x11-misc/matugen": "strzelewicz/matugen",
@@ -45,13 +44,15 @@ jobs:
                   return r.json().get('tag_name', '').lstrip('v') if r.status_code == 200 else None
               except: return None
 
-          # FIX 1: Correct the Mangowc version (12.7 -> 0.12.7) to prevent 404
+          # FIX: Correct Mangowc version (12.7 -> 0.12.7) to fix 404 error
           mango_dir = Path("gui-wm/mangowc")
           if mango_dir.exists():
               ebs = list(mango_dir.glob("mangowc-12.7.ebuild"))
-              if ebs: ebs.rename(mango_dir / "mangowc-0.12.7.ebuild")
+              if ebs: 
+                  # INDEX IS MANDATORY HERE
+                  ebs.rename(mango_dir / "mangowc-0.12.7.ebuild")
 
-          # FIX 2: Correct ProtonPlus structure (must match folder name)
+          # FIX: Correct ProtonPlus naming to match valid Gentoo structure
           proton_dir = Path("games-util/protonplus-bin")
           if proton_dir.exists():
               ebs = list(proton_dir.glob("protonplus-[0-9]*.ebuild"))
@@ -59,14 +60,15 @@ jobs:
                   if "protonplus-bin" not in eb.name:
                       eb.rename(proton_dir / eb.name.replace("protonplus-", "protonplus-bin-"))
 
-          # FIX 3: Update versions for stable packages using explicit indexing
+          # FIX: Update versions using explicit indexing to avoid AttributeError
           for path, repo in STABLE_TARGETS.items():
               pkg_dir = Path(path)
               if not pkg_dir.exists(): continue
               ebuilds = sorted(list(pkg_dir.glob("*.ebuild")))
               if not ebuilds: continue
               
-              target_eb = ebuilds # LINE-BY-LINE VERIFIED INDEXING
+              # INDEX [-1] ENSURES WE ACCESS THE HIGHEST VERSIONED FILE
+              target_eb = ebuilds[-1] 
               match = re.search(r'-([0-9.]+)\.ebuild', target_eb.name)
               if not match: continue
               curr_ver = match.group(1)
@@ -74,21 +76,22 @@ jobs:
               
               latest_ver = get_latest(repo)
               if latest_ver and latest_ver != curr_ver:
+                  print(f"✨ Bumping {pkg_base}: {curr_ver} -> {latest_ver}")
                   target_eb.rename(pkg_dir / f"{pkg_base}-{latest_ver}.ebuild")
 
           # RootApp Logic
           root_dir = Path("app-misc/rootapp-bin")
           if root_dir.exists():
-              ebs = list(root_dir.glob("*.ebuild"))
+              ebs = sorted(list(root_dir.glob("*.ebuild")))
               if ebs:
                   os.system("curl -sL -o Root.AppImage https://installer.rootapp.com/installer/Linux/X64/Root.AppImage")
                   os.system("chmod +x Root.AppImage && ./Root.AppImage --appimage-extract > /dev/null")
-                  v_file = Path("squashfs-root/usr/bin/sq.version")
-                  if v_file.exists():
-                      with open(v_file, 'r') as f:
+                  ver_file = Path("squashfs-root/usr/bin/sq.version")
+                  if ver_file.exists():
+                      with open(ver_file, 'r') as f:
                           v = re.search(r'[0-9]+\.[0-9]+\.[0-9]+', f.read()).group(0)
-                          if f"rootapp-bin-{v}.ebuild" != ebs.name:
-                              ebs.rename(root_dir / f"rootapp-bin-{v}.ebuild")
+                          if f"rootapp-bin-{v}.ebuild" != ebs[-1].name:
+                              ebs[-1].rename(root_dir / f"rootapp-bin-{v}.ebuild")
                   os.system("rm -rf Root.AppImage squashfs-root")
           EOF
 
@@ -98,13 +101,12 @@ jobs:
             mkdir -p /var/db/repos/gentoo /etc/portage/repos.conf
             echo 'FEATURES=\"-userfetch -ipc-sandbox -network-sandbox -pid-sandbox\"' >> /etc/portage/make.conf
             emerge-webrsync -q
-            # Fix repository name mismatch from logs
             echo -e '[gentoo-nexus]\nlocation = /overlay\nmasters = gentoo' > /etc/portage/repos.conf/gentoo-nexus.conf
             find . -name '*.ebuild' -exec ebuild {} manifest \;
             chown -R $(id -u):$(id -g) .
           "
 
-      - name: 3. Commit and Push
+      - name: 3. Commit and Rebase
         run: |
           git config user.name "github-actions[bot]"
           git config user.email "github-actions[bot]@users.noreply.github.com"
@@ -139,13 +141,13 @@ jobs:
             chown -R $(id -u):$(id -g) /overlay/job_out
           "
 
-      - name: Upload Intermediate
+      - name: Upload Artifact
         uses: actions/upload-artifact@v4
         with:
           name: binpkg-${{ strategy.job-index }}
           path: job_out/
 
-  deploy-binhost:
+  deploy-pages:
     needs: build-binaries
     runs-on: ubuntu-latest
     environment:
@@ -153,7 +155,7 @@ jobs:
     steps:
       - name: Checkout
         uses: actions/checkout@v5
-      - name: Download Artifacts
+      - name: Download all artifacts
         uses: actions/download-artifact@v4
         with:
           path: combined/
@@ -167,7 +169,7 @@ jobs:
             cd /overlay/public_binhost && emaint binhost --fix
             touch .nojekyll && chown -R $(id -u):$(id -g) /overlay/public_binhost
           "
-      - name: Upload Pages
+      - name: Upload Pages Artifact
         uses: actions/upload-pages-artifact@v3
         with:
           path: ./public_binhost/
