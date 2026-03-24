@@ -13,16 +13,40 @@ jobs:
     steps:
       - name: Checkout
         uses: actions/checkout@v5
+
       - name: Build
         run: |
           docker run --rm -v ${{ github.workspace }}:/overlay gentoo/stage3 sh -c "
-            emerge-webrsync -q && emerge --noreplace dev-lang/rust-bin
+            set -e
+            mkdir -p /var/db/repos/gentoo /etc/portage/repos.conf
+            echo 'FEATURES=\"-userfetch -ipc-sandbox -network-sandbox -pid-sandbox\"' >> /etc/portage/make.conf
+            echo 'DISTDIR=\"/overlay/distfiles\"' >> /etc/portage/make.conf
+            mkdir -p /overlay/distfiles
+
+            emerge-webrsync -q
+
+            # Install required tooling and enable GURU overlay
+            emerge --noreplace app-eselect/eselect-repository dev-vcs/git
+            eselect repository enable guru
+            emaint sync -r guru
+
+            # Set overlay and GURU repo configs
             echo -e '[overlay]\nlocation = /overlay\nmasters = gentoo' > /etc/portage/repos.conf/overlay.conf
-            emerge --buildpkg ${{ github.event.inputs.atom }}
-            mkdir -p /overlay/public && cp -r /var/cache/binpkgs/* /overlay/public/
-            cd /overlay/public && emaint binhost --fix
+            echo -e '[guru]\nlocation = /var/db/repos/guru\nmasters = gentoo' >> /etc/portage/repos.conf/guru.conf
+
+            # Build the requested package (auto‑accept any needed keywords/use flags)
+            emerge --autounmask=y --autounmask-write --autounmask-continue --buildpkg ${{ github.event.inputs.atom }}
+
+            # Prepare binhost directory
+            mkdir -p /overlay/public
+            cp -r /var/cache/binpkgs/* /overlay/public/ 2>/dev/null || true
+            cd /overlay/public
+            if ls *.tbz2 1>/dev/null 2>&1; then
+                emaint binhost --fix
+            fi
             chown -R $(id -u):$(id -g) /overlay/public
           "
+
       - name: Deploy
         uses: peaceiris/actions-gh-pages@v4
         with:
