@@ -171,6 +171,8 @@ jobs:
             set -e
             mkdir -p /var/db/repos/gentoo /etc/portage/repos.conf
             echo 'FEATURES=\"-userfetch -ipc-sandbox -network-sandbox -pid-sandbox\"' >> /etc/portage/make.conf
+            echo 'DISTDIR=\"/overlay/distfiles\"' >> /etc/portage/make.conf
+            mkdir -p /overlay/distfiles
             emerge-webrsync -q
             echo -e '[gentoo-nexus]\nlocation = /overlay\nmasters = gentoo' > /etc/portage/repos.conf/gentoo-nexus.conf
             find . -name '*.ebuild' -exec ebuild {} manifest \;
@@ -219,11 +221,9 @@ jobs:
           if not ebuilds:
               print("")
               exit(0)
-          with open(ebuilds[0], 'r') as f:
-              content = f.read()
-              m = re.search(r'^version=(\S+)', content, re.MULTILINE)
-              if m:
-                  print(m.group(1).strip('"\''))
+          match = re.search(r'-([0-9.]+)\.ebuild$', ebuilds[0])
+          if match:
+              print(match.group(1))
           PY
           )
           BINHOST="https://ackerman-00.github.io/gentoo-nexus/Packages"
@@ -241,6 +241,8 @@ jobs:
             set -e
             mkdir -p /var/db/repos/gentoo /etc/portage/repos.conf
             echo 'FEATURES=\"-userfetch -ipc-sandbox -network-sandbox -pid-sandbox\"' >> /etc/portage/make.conf
+            echo 'DISTDIR=\"/overlay/distfiles\"' >> /etc/portage/make.conf
+            mkdir -p /overlay/distfiles
             emerge-webrsync -q
             emerge --noreplace dev-lang/go
             emerge --noreplace dev-lang/rust-bin
@@ -258,12 +260,6 @@ jobs:
 
             mkdir -p /overlay/job_out
             cp -r /var/cache/binpkgs/* /overlay/job_out/ 2>/dev/null || true
-            cd /var/cache/binpkgs
-            if [ ! -f Packages ]; then
-                touch /overlay/job_out/Packages
-            else
-                cp Packages /overlay/job_out/
-            fi
             chown -R $(id -u):$(id -g) /overlay/job_out
           "
 
@@ -288,21 +284,28 @@ jobs:
           path: combined/
           pattern: binpkg-*
           merge-multiple: true
-      - name: Prepare for deployment
+
+      - name: Generate True Gentoo Index
         run: |
-          find combined -name "Packages" -exec cat {} \; | sort -u > combined/Packages
-          touch combined/.nojekyll
-          mkdir -p public_binhost
-          cp -r combined/* public_binhost/
+          docker run --rm -v ${{ github.workspace }}:/overlay -w /overlay gentoo/stage3 sh -c "
+            mkdir -p /overlay/public_binhost
+            cp -r /overlay/combined/* /overlay/public_binhost/ 2>/dev/null || true
+            # Rebuild the Packages index correctly
+            cd /overlay/public_binhost && emaint binhost --fix
+            touch .nojekyll
+            chown -R $(id -u):$(id -g) /overlay/public_binhost
+          "
           cat > public_binhost/index.html << 'HTML'
           <!DOCTYPE html>
           <html><head><title>Gentoo Nexus Binhost</title></head>
           <body><h1>Gentoo Nexus Binhost</h1><pre>$(ls -1 public_binhost)</pre></body></html>
           HTML
+
       - name: Upload Pages Artifact
         uses: actions/upload-pages-artifact@v3
         with:
           path: ./public_binhost/
+
       - name: Deploy
         id: deployment
         uses: actions/deploy-pages@v4
