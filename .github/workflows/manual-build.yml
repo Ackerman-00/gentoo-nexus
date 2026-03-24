@@ -1,0 +1,35 @@
+name: Manual Package Build
+
+on:
+  workflow_dispatch:
+    inputs:
+      package_atom:
+        description: 'Full atom to build (e.g., gui-wm/niri)'
+        required: true
+        default: 'gui-wm/niri'
+
+jobs:
+  manual-build:
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v5
+
+      - name: Build Package
+        run: |
+          docker run --rm -v ${{ github.workspace }}:/overlay gentoo/stage3 sh -c "
+            emerge-webrsync -q && emerge --noreplace dev-lang/rust-bin
+            echo 'USE=\"wayland -X\"' >> /etc/portage/make.conf
+            echo -e '[overlay]\nlocation = /overlay\nmasters = gentoo' > /etc/portage/repos.conf/overlay.conf
+            emerge --autounmask=y --autounmask-write --buildpkg ${{ github.event.inputs.package_atom }}
+            mkdir -p /overlay/binaries && cp -r /var/cache/binpkgs/* /overlay/binaries/
+          "
+
+      - name: Deploy to Release
+        uses: softprops/action-gh-release@v2
+        with:
+          tag_name: binaries-latest
+          files: binaries/**/*
+          prerelease: true
+        env:
+          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
