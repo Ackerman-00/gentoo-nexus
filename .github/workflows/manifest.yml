@@ -24,27 +24,25 @@ jobs:
             -v ${{ github.workspace }}:/overlay \
             -w /overlay \
             gentoo/stage3 sh -c "
-              # 1. Disable user privilege dropping so Docker can write files
+              # 1. Fix missing folder warning and disable user privilege dropping
+              mkdir -p /var/db/repos/gentoo
               echo 'FEATURES=\"-userfetch\"' >> /etc/portage/make.conf
               
-              # 2. Download the official Gentoo tree (required for eclasses)
+              # 2. Download the official Gentoo tree
               echo 'Fetching Gentoo tree (this takes ~1 minute)...'
               emerge-webrsync -q
               
-              # 3. Register your overlay locally
+              # 3. Register your overlay locally (Fixed EOF issue)
+              echo 'Registering overlay...'
               mkdir -p /etc/portage/repos.conf
-              cat << 'EOF' > /etc/portage/repos.conf/overlay.conf
-              [overlay]
-              location = /overlay
-              masters = gentoo
-              auto-sync = no
-              EOF
+              echo '[overlay]' > /etc/portage/repos.conf/overlay.conf
+              echo 'location = /overlay' >> /etc/portage/repos.conf/overlay.conf
+              echo 'masters = gentoo' >> /etc/portage/repos.conf/overlay.conf
+              echo 'auto-sync = no' >> /etc/portage/repos.conf/overlay.conf
               
               # 4. Find every ebuild and generate its Manifest hash
               echo 'Generating Manifests...'
-              for f in \$(find . -name '*.ebuild'); do
-                ebuild \"\$f\" manifest
-              done
+              find . -name '*.ebuild' -exec ebuild {} manifest \;
               
               # 5. Fix permissions so GitHub Actions can commit the files
               chown -R $(id -u):$(id -g) .
@@ -55,8 +53,8 @@ jobs:
           git config user.name "github-actions[bot]"
           git config user.email "github-actions[bot]@users.noreply.github.com"
           
-          # Only add Manifest files to avoid committing junk
-          git add */*/Manifest
+          # Add all changes (this avoids the fatal pathspec error)
+          git add .
           
           # If there are changes, commit and push them
           if ! git diff --cached --quiet; then
