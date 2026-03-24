@@ -8,7 +8,7 @@ SRC_URI="https://installer.rootapp.com/installer/Linux/X64/Root.AppImage -> ${P}
 
 LICENSE="custom"
 SLOT="0"
-KEYWORDS="~amd64"
+KEYWORDS="amd64"
 
 RESTRICT="bindist mirror test"
 
