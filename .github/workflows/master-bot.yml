@@ -31,17 +31,11 @@ jobs:
           import os, re, requests, subprocess, stat
           from pathlib import Path
 
-          # ------------------------------------------------------------------
-          # Stable packages (numeric versions, not live)
-          # ------------------------------------------------------------------
           STABLE_TARGETS = {
               "app-misc/dgop": "AvengeMedia/dgop",
               "games-util/protonplus-bin": "Vysp3r/ProtonPlus"
           }
 
-          # ------------------------------------------------------------------
-          # Helper functions
-          # ------------------------------------------------------------------
           def get_latest(repo):
               try:
                   r = requests.get(
@@ -51,8 +45,8 @@ jobs:
                   )
                   if r.status_code == 200:
                       return r.json().get('tag_name', '').lstrip('v')
-              except Exception as e:
-                  print(f"⚠️ GitHub API error for {repo}: {e}")
+              except:
+                  pass
               return None
 
           def get_appimage_version(filepath):
@@ -64,8 +58,8 @@ jobs:
                   out = subprocess.run(['strings', filepath], capture_output=True, text=True, timeout=10).stdout
                   m = re.search(r'(\d+\.\d+\.\d+)', out)
                   if m: return m.group(1)
-              except Exception as e:
-                  print(f"⚠️ Could not extract AppImage version from {filepath}: {e}")
+              except:
+                  pass
               return None
 
           def get_latest_commit(repo_url):
@@ -73,13 +67,11 @@ jobs:
                   out = subprocess.check_output(['git', 'ls-remote', repo_url, 'HEAD'], timeout=30, stderr=subprocess.DEVNULL).decode()
                   m = re.search(r'([a-f0-9]{40})', out)
                   if m: return m.group(1)
-              except Exception as e:
-                  print(f"⚠️ Could not get latest commit for {repo_url}: {e}")
+              except:
+                  pass
               return None
 
-          # ------------------------------------------------------------------
-          # 1. Fix mangowc version (12.7 -> 0.12.7) – one-time correction
-          # ------------------------------------------------------------------
+          # fix mangowc version (12.7 -> 0.12.7)
           mango_dir = Path("gui-wm/mangowc")
           if mango_dir.exists():
               ebs = list(mango_dir.glob("mangowc-12.7.ebuild"))
@@ -87,9 +79,7 @@ jobs:
                   ebs[0].rename(mango_dir / "mangowc-0.12.7.ebuild")
                   print("🐧 Renamed mangowc to 0.12.7")
 
-          # ------------------------------------------------------------------
-          # 2. Fix ProtonPlus naming (add "-bin") – one-time correction
-          # ------------------------------------------------------------------
+          # fix ProtonPlus naming (add "-bin")
           proton_dir = Path("games-util/protonplus-bin")
           if proton_dir.exists():
               for eb in proton_dir.glob("protonplus-[0-9]*.ebuild"):
@@ -98,9 +88,7 @@ jobs:
                       eb.rename(proton_dir / new_name)
                       print(f"🔄 Renamed {eb.name} -> {new_name}")
 
-          # ------------------------------------------------------------------
-          # 3. Bump stable packages from GitHub releases
-          # ------------------------------------------------------------------
+          # bump stable packages
           for path, repo in STABLE_TARGETS.items():
               pkg_dir = Path(path)
               if not pkg_dir.exists():
@@ -108,87 +96,76 @@ jobs:
               ebs = sorted(pkg_dir.glob("*.ebuild"))
               if not ebs:
                   continue
-
               target_file = ebs[0]
               match = re.search(r'-([0-9.]+)\.ebuild$', target_file.name)
               if not match:
                   continue
               curr_ver = match.group(1)
               pkg_name = target_file.name.replace(f"-{curr_ver}.ebuild", "")
-
               latest_ver = get_latest(repo)
               if latest_ver and latest_ver != curr_ver:
                   print(f"✨ Bumping {pkg_name}: {curr_ver} -> {latest_ver}")
                   target_file.rename(pkg_dir / f"{pkg_name}-{latest_ver}.ebuild")
 
-          # ------------------------------------------------------------------
-          # 4. Live ebuilds (version=9999) – update commit hash
-          # ------------------------------------------------------------------
-          live_dirs = [
-              "gui-wm/niri",
-              "x11-base/xwayland-satellite",
-              "x11-misc/matugen"
-          ]
+          # live ebuilds: detect by filename or version=9999
+          live_dirs = ["gui-wm/niri", "x11-base/xwayland-satellite", "x11-misc/matugen"]
           for live_dir in live_dirs:
               pkg_dir = Path(live_dir)
               if not pkg_dir.exists():
                   continue
-              ebs = list(pkg_dir.glob("*.ebuild"))
-              for eb in ebs:
+              for eb in pkg_dir.glob("*.ebuild"):
                   with open(eb, 'r') as f:
                       content = f.read()
                   m = re.search(r'^version=(\S+)', content, re.MULTILINE)
-                  if m and m.group(1).strip('"\'') == '9999':
-                      # Extract repo URL
-                      repo_match = re.search(r'^(?:EGIT|GIT)_REPO_URI=(["\'])(.*?)\1', content, re.MULTILINE)
-                      if not repo_match:
-                          gh_match = re.search(r'https://github\.com/([A-Za-z0-9_.-]+/[A-Za-z0-9_.-]+)', content)
-                          if gh_match:
-                              repo_url = f"https://github.com/{gh_match.group(1)}"
-                              repo_match = (None, None, repo_url)  # fake match
-                      if repo_match:
-                          repo_url = repo_match[2] if len(repo_match) > 2 else repo_match.group(2)
-                          new_commit = get_latest_commit(repo_url)
-                          if new_commit:
-                              if '_commit=' in content:
-                                  new_content = re.sub(r'(_commit=["\']?)[a-f0-9]+', r'\1' + new_commit, content)
-                              else:
-                                  # Insert _commit after version
-                                  new_content = re.sub(r'(^version=.*)', r'\1\n_commit="' + new_commit + '"', content, flags=re.MULTILINE)
-                              if new_content != content:
-                                  with open(eb, 'w') as f:
-                                      f.write(new_content)
-                                  print(f"🔄 Updated live {eb.name} commit to {new_commit[:8]}")
-                          else:
-                              print(f"⚠️ Could not get latest commit for {eb.name}")
-                  else:
-                      print(f"ℹ️ {eb.name} is not a live ebuild (version != 9999)")
+                  is_live = (eb.name.endswith("-9999.ebuild") or (m and m.group(1).strip('"\'') == '9999'))
+                  if not is_live:
+                      print(f"ℹ️ {eb.name} is not a live ebuild")
+                      continue
 
-          # ------------------------------------------------------------------
-          # 5. RootApp AppImage tracking (with error handling)
-          # ------------------------------------------------------------------
+                  repo_match = re.search(r'^(?:EGIT|GIT)_REPO_URI=(["\'])(.*?)\1', content, re.MULTILINE)
+                  if not repo_match:
+                      gh_match = re.search(r'https://github\.com/([A-Za-z0-9_.-]+/[A-Za-z0-9_.-]+)', content)
+                      if gh_match:
+                          repo_url = f"https://github.com/{gh_match.group(1)}"
+                      else:
+                          print(f"⚠️ Could not find repo URL in {eb.name}")
+                          continue
+                  else:
+                      repo_url = repo_match.group(2)
+
+                  new_commit = get_latest_commit(repo_url)
+                  if new_commit:
+                      if '_commit=' in content:
+                          new_content = re.sub(r'(_commit=["\']?)[a-f0-9]+', r'\1' + new_commit, content)
+                      else:
+                          new_content = re.sub(r'(^EAPI=.*)', r'\1\n_commit="' + new_commit + '"', content, flags=re.MULTILINE)
+                      if new_content != content:
+                          with open(eb, 'w') as f:
+                              f.write(new_content)
+                          print(f"🔄 Updated live {eb.name} commit to {new_commit[:8]}")
+                  else:
+                      print(f"⚠️ Could not get latest commit for {eb.name}")
+
+          # RootApp AppImage tracking
           root_dir = Path("app-misc/rootapp-bin")
           if root_dir.exists():
               ebs = list(root_dir.glob("*.ebuild"))
               if ebs:
-                  # Download AppImage
-                  print("📥 Downloading Root.AppImage...")
                   ret = os.system("curl -sLf -o Root.AppImage https://installer.rootapp.com/installer/Linux/X64/Root.AppImage")
-                  if ret == 0 and os.path.exists("Root.AppImage"):
+                  if ret == 0 and os.path.exists("Root.AppImage") and os.path.getsize("Root.AppImage") > 0:
                       version = get_appimage_version("Root.AppImage")
                       if version and version not in ebs[0].name:
                           ebs[0].rename(root_dir / f"rootapp-bin-{version}.ebuild")
                           print(f"📦 Updated rootapp-bin to {version}")
                       else:
-                          print("ℹ️ RootApp version unchanged or not detected.")
+                          print("ℹ️ RootApp version unchanged or not detected")
                   else:
-                      print("❌ Failed to download Root.AppImage (curl exit code {ret})")
-                  # Clean up
+                      print(f"❌ RootApp download failed (curl exit {ret})")
                   if os.path.exists("Root.AppImage"):
                       os.remove("Root.AppImage")
           EOF
 
-      - name: 2. Generate Manifests (Gentoo Container)
+      - name: 2. Generate Manifests
         run: |
           docker run --rm -v ${{ github.workspace }}:/overlay -w /overlay gentoo/stage3 sh -c "
             set -e
@@ -200,7 +177,7 @@ jobs:
             chown -R $(id -u):$(id -g) .
           "
 
-      - name: 3. Commit and Push (safe branch handling)
+      - name: 3. Commit and Push
         run: |
           git config user.name "github-actions[bot]"
           git config user.email "github-actions[bot]@users.noreply.github.com"
@@ -212,7 +189,7 @@ jobs:
               git pull --rebase origin main
               git push
             else
-              echo "Not on main branch, skipping push. Branch: $branch"
+              echo "Not on main branch, skipping push."
             fi
           fi
 
@@ -227,11 +204,17 @@ jobs:
       - name: Checkout
         uses: actions/checkout@v5
 
-      - name: Check Binhost Status (skip live packages)
+      - name: Check Binhost Status
         id: check_bin
         run: |
           PN=$(basename ${{ matrix.package }})
-          # Extract version from the first ebuild in the directory
+          # Live package detection (filename ends with -9999.ebuild)
+          if ls ${{ matrix.package }}/*-9999.ebuild 2>/dev/null; then
+            echo "skip=false" >> $GITHUB_OUTPUT
+            echo "Live package $PN, always build."
+            exit 0
+          fi
+          # Stable package: read version from ebuild
           VER=$(python3 << PY
           import glob, re
           ebuilds = glob.glob('${{ matrix.package }}/*.ebuild')
@@ -243,16 +226,8 @@ jobs:
               m = re.search(r'^version=(\S+)', content, re.MULTILINE)
               if m:
                   print(m.group(1).strip('"\''))
-              else:
-                  print("")
           PY
           )
-          if [ "$VER" = "9999" ]; then
-            echo "skip=false" >> $GITHUB_OUTPUT
-            echo "Live package $PN, always build."
-            exit 0
-          fi
-
           BINHOST="https://ackerman-00.github.io/gentoo-nexus/Packages"
           if [ -n "$VER" ] && curl -sL "$BINHOST" | grep -q "\<${PN}-${VER}\>"; then
             echo "skip=true" >> $GITHUB_OUTPUT
@@ -261,7 +236,7 @@ jobs:
             echo "skip=false" >> $GITHUB_OUTPUT
           fi
 
-      - name: Build Binary (Gentoo Docker)
+      - name: Build Binary
         if: steps.check_bin.outputs.skip == 'false'
         run: |
           docker run --rm -v ${{ github.workspace }}:/overlay gentoo/stage3 sh -c "
@@ -269,12 +244,12 @@ jobs:
             mkdir -p /var/db/repos/gentoo /etc/portage/repos.conf
             echo 'FEATURES=\"-userfetch -ipc-sandbox -network-sandbox -pid-sandbox\"' >> /etc/portage/make.conf
             emerge-webrsync -q
-            # Install rust if needed (detect from ebuild? Here we just do it for all)
+            # Pre-install Go to break circular dependency for dgop
+            emerge --noreplace dev-lang/go
             emerge --noreplace dev-lang/rust-bin
             echo 'USE=\"wayland vulkan pipewire -X -systemd\"' >> /etc/portage/make.conf
             echo -e '[gentoo-nexus]\nlocation = /overlay\nmasters = gentoo' > /etc/portage/repos.conf/gentoo-nexus.conf
-            emerge --autounmask=y --autounmask-write --buildpkg --quiet ${{ matrix.package }}
-            # Copy built packages and ensure a Packages file exists
+            emerge --autounmask=y --autounmask-write --autounmask-continue --buildpkg --quiet ${{ matrix.package }}
             mkdir -p /overlay/job_out
             cp -r /var/cache/binpkgs/* /overlay/job_out/ 2>/dev/null || true
             cd /var/cache/binpkgs
@@ -307,16 +282,12 @@ jobs:
           path: combined/
           pattern: binpkg-*
           merge-multiple: true
-      - name: Merge Packages files and prepare for deployment
+      - name: Prepare for deployment
         run: |
-          # Combine all Packages files (if any) into one
           find combined -name "Packages" -exec cat {} \; | sort -u > combined/Packages
-          # Ensure .nojekyll is present
           touch combined/.nojekyll
-          # Copy to public_binhost
           mkdir -p public_binhost
           cp -r combined/* public_binhost/
-          # Create a simple index.html for browsing
           cat > public_binhost/index.html << 'HTML'
           <!DOCTYPE html>
           <html><head><title>Gentoo Nexus Binhost</title></head>
