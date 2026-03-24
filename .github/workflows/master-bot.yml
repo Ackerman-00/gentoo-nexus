@@ -5,7 +5,6 @@ on:
     paths:
       - '**/*.ebuild'
   schedule:
-    # Runs automatically every day
     - cron: '0 0 * * *'
   workflow_dispatch:
 
@@ -26,7 +25,6 @@ jobs:
           CURRENT_VER=$(ls app-misc/rootapp-bin/rootapp-bin-*.ebuild | sed -E 's/.*rootapp-bin-(.*)\.ebuild/\1/')
           echo "Current version: $CURRENT_VER"
           
-          # Download and extract just enough to get the version
           curl -sL -o Root.AppImage "https://installer.rootapp.com/installer/Linux/X64/Root.AppImage"
           chmod +x Root.AppImage
           ./Root.AppImage --appimage-extract > /dev/null
@@ -35,11 +33,10 @@ jobs:
           echo "Latest upstream: $LATEST_VER"
           
           if [ -n "$LATEST_VER" ] && [ "$CURRENT_VER" != "$LATEST_VER" ]; then
-            echo "🚨 Update found! Moving $CURRENT_VER -> $LATEST_VER"
+            echo "Update found! Moving $CURRENT_VER -> $LATEST_VER"
             git mv app-misc/rootapp-bin/rootapp-bin-${CURRENT_VER}.ebuild app-misc/rootapp-bin/rootapp-bin-${LATEST_VER}.ebuild
           fi
           
-          # 🛑 CRITICAL FIX: Delete the massive binary files before Git sees them!
           rm -rf Root.AppImage squashfs-root
 
       - name: 2. Generate Manifests (For all packages)
@@ -66,14 +63,12 @@ jobs:
           git config user.name "github-actions[bot]"
           git config user.email "github-actions[bot]@users.noreply.github.com"
           
-          # Pull first to prevent the crash you just experienced
-          git pull --rebase origin main || true
-          
           git add .
           
           if ! git diff --cached --quiet; then
             git commit -m "auto: sync updates and generate manifests"
+            git pull --rebase origin main || true
             git push
           else
-            echo "✅ Everything is perfectly up to date!"
+            echo "Everything is perfectly up to date."
           fi
