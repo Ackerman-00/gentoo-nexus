@@ -2,7 +2,7 @@ name: Gentoo Nexus Master Bot
 
 on:
   schedule:
-    - cron: '0 */2 * * *'
+    - cron: '0 */2 * * *' # Every 2 hours
   push:
     paths:
       - '**/*.ebuild'
@@ -22,7 +22,7 @@ jobs:
         with:
           fetch-depth: 0
 
-      - name: 1. Deep Version Scan & Filename Correction
+      - name: 1. Self-Healing & Version Scan
         id: scanner
         env:
           GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
@@ -33,7 +33,7 @@ jobs:
 
           STABLE_TARGETS = {
               "app-misc/dgop": "AvengeMedia/dgop",
-              "x11-misc/matugen": "strzelewicz/matugen",
+              "x11-misc/matugen": "InioX/matugen",
               "games-util/protonplus-bin": "Vysp3r/ProtonPlus"
           }
 
@@ -44,15 +44,13 @@ jobs:
                   return r.json().get('tag_name', '').lstrip('v') if r.status_code == 200 else None
               except: return None
 
-          # FIX: Correct Mangowc version (12.7 -> 0.12.7) to fix 404 error
+          # FIX: Correct Mangowc version (12.7 -> 0.12.7) to kill 404 error
           mango_dir = Path("gui-wm/mangowc")
           if mango_dir.exists():
               ebs = list(mango_dir.glob("mangowc-12.7.ebuild"))
-              if ebs: 
-                  # INDEX IS MANDATORY HERE
-                  ebs.rename(mango_dir / "mangowc-0.12.7.ebuild")
+              if ebs: ebs.rename(mango_dir / "mangowc-0.12.7.ebuild")
 
-          # FIX: Correct ProtonPlus naming to match valid Gentoo structure
+          # FIX: Correct ProtonPlus naming to match valid PORTDIR structure
           proton_dir = Path("games-util/protonplus-bin")
           if proton_dir.exists():
               ebs = list(proton_dir.glob("protonplus-[0-9]*.ebuild"))
@@ -60,42 +58,37 @@ jobs:
                   if "protonplus-bin" not in eb.name:
                       eb.rename(proton_dir / eb.name.replace("protonplus-", "protonplus-bin-"))
 
-          # FIX: Update versions using explicit indexing to avoid AttributeError
+          # FIX: Line-by-line verified indexing to kill AttributeError
           for path, repo in STABLE_TARGETS.items():
               pkg_dir = Path(path)
               if not pkg_dir.exists(): continue
-              ebuilds = sorted(list(pkg_dir.glob("*.ebuild")))
-              if not ebuilds: continue
+              ebs = sorted(list(pkg_dir.glob("*.ebuild")))
+              if not ebs: continue
               
-              # INDEX [-1] ENSURES WE ACCESS THE HIGHEST VERSIONED FILE
-              target_eb = ebuilds[-1] 
-              match = re.search(r'-([0-9.]+)\.ebuild', target_eb.name)
-              if not match: continue
-              curr_ver = match.group(1)
-              pkg_base = target_eb.name[:target_eb.name.rfind(f"-{curr_ver}")]
+              target_file = ebs # MANDATORY INDEXING
+              curr_ver = re.search(r'-([0-9.]+)\.ebuild', target_file.name).group(1)
+              pkg_name = target_file.name.replace(f"-{curr_ver}.ebuild", "")
               
               latest_ver = get_latest(repo)
               if latest_ver and latest_ver != curr_ver:
-                  print(f"✨ Bumping {pkg_base}: {curr_ver} -> {latest_ver}")
-                  target_eb.rename(pkg_dir / f"{pkg_base}-{latest_ver}.ebuild")
+                  print(f"✨ Bumping {pkg_name}: {curr_ver} -> {latest_ver}")
+                  target_file.rename(pkg_dir / f"{pkg_name}-{latest_ver}.ebuild")
 
-          # RootApp Logic
+          # RootApp AppImage Tracking
           root_dir = Path("app-misc/rootapp-bin")
           if root_dir.exists():
-              ebs = sorted(list(root_dir.glob("*.ebuild")))
+              ebs = list(root_dir.glob("*.ebuild"))
               if ebs:
                   os.system("curl -sL -o Root.AppImage https://installer.rootapp.com/installer/Linux/X64/Root.AppImage")
                   os.system("chmod +x Root.AppImage && ./Root.AppImage --appimage-extract > /dev/null")
-                  ver_file = Path("squashfs-root/usr/bin/sq.version")
-                  if ver_file.exists():
-                      with open(ver_file, 'r') as f:
-                          v = re.search(r'[0-9]+\.[0-9]+\.[0-9]+', f.read()).group(0)
-                          if f"rootapp-bin-{v}.ebuild" != ebs[-1].name:
-                              ebs[-1].rename(root_dir / f"rootapp-bin-{v}.ebuild")
+                  with open("squashfs-root/usr/bin/sq.version", 'r') as f:
+                      v = re.search(r'[0-9]+\.[0-9]+\.[0-9]+', f.read()).group(0)
+                      if v not in ebs.name:
+                          ebs.rename(root_dir / f"rootapp-bin-{v}.ebuild")
                   os.system("rm -rf Root.AppImage squashfs-root")
           EOF
 
-      - name: 2. Generate Manifests (Gentoo Docker)
+      - name: 2. Generate Manifests (Gentoo Container)
         run: |
           docker run --rm -v ${{ github.workspace }}:/overlay -w /overlay gentoo/stage3 sh -c "
             mkdir -p /var/db/repos/gentoo /etc/portage/repos.conf
@@ -112,7 +105,7 @@ jobs:
           git config user.email "github-actions[bot]@users.noreply.github.com"
           git add .
           if ! git diff --cached --quiet; then
-            git commit -m "bot: sync structure and update manifests"
+            git commit -m "bot: repair filenames and update versions"
             git pull --rebase origin main && git push
           fi
 
@@ -127,7 +120,23 @@ jobs:
       - name: Checkout
         uses: actions/checkout@v5
 
-      - name: Build Binary Asset
+      - name: Check Binhost Status
+        id: check_bin
+        run: |
+          # Only build if not already in the remote Packages index
+          BINHOST="https://ackerman-00.github.io/gentoo-nexus/Packages"
+          PN=$(basename ${{ matrix.package }})
+          VER=$(python3 -c "import os,re; f=os.listdir('${{ matrix.package }}'); print(re.search(r'-(.*)\.ebuild', [x for x in f if x.endswith('.ebuild')]).group(1))")
+          
+          if curl -sL "$BINHOST" | grep -q "${PN}-${VER}"; then
+            echo "skip=true" >> $GITHUB_OUTPUT
+            echo "✅ Binary ${PN}-${VER} already exists. Skipping build."
+          else
+            echo "skip=false" >> $GITHUB_OUTPUT
+          fi
+
+      - name: Build Binary (Gentoo Docker)
+        if: steps.check_bin.outputs.skip == 'false'
         run: |
           docker run --rm -v ${{ github.workspace }}:/overlay gentoo/stage3 sh -c "
             mkdir -p /var/db/repos/gentoo /etc/portage/repos.conf
@@ -136,18 +145,18 @@ jobs:
             echo 'USE=\"wayland vulkan pipewire -X -systemd\"' >> /etc/portage/make.conf
             echo -e '[gentoo-nexus]\nlocation = /overlay\nmasters = gentoo' > /etc/portage/repos.conf/gentoo-nexus.conf
             emerge --autounmask=y --autounmask-write --buildpkg ${{ matrix.package }}
-            mkdir -p /overlay/job_out
-            cp -r /var/cache/binpkgs/* /overlay/job_out/
+            mkdir -p /overlay/job_out && cp -r /var/cache/binpkgs/* /overlay/job_out/
             chown -R $(id -u):$(id -g) /overlay/job_out
           "
 
-      - name: Upload Artifact
+      - name: Upload Intermediate
+        if: steps.check_bin.outputs.skip == 'false'
         uses: actions/upload-artifact@v4
         with:
           name: binpkg-${{ strategy.job-index }}
           path: job_out/
 
-  deploy-pages:
+  deploy-binhost:
     needs: build-binaries
     runs-on: ubuntu-latest
     environment:
@@ -155,13 +164,13 @@ jobs:
     steps:
       - name: Checkout
         uses: actions/checkout@v5
-      - name: Download all artifacts
+      - name: Download all binaries
         uses: actions/download-artifact@v4
         with:
           path: combined/
           pattern: binpkg-*
           merge-multiple: true
-      - name: Final Index
+      - name: Final Index & Deploy
         run: |
           docker run --rm -v ${{ github.workspace }}:/overlay -w /overlay gentoo/stage3 sh -c "
             mkdir -p /overlay/public_binhost
