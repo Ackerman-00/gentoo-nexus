@@ -1,6 +1,6 @@
 EAPI=8
 
-inherit desktop unpacker
+inherit desktop
 
 DESCRIPTION="Discord alternative for gaming communities"
 HOMEPAGE="https://github.com/Ackerman-00"
@@ -8,7 +8,7 @@ SRC_URI="https://installer.rootapp.com/installer/Linux/X64/Root.AppImage -> ${P}
 
 LICENSE="custom"
 SLOT="0"
-KEYWORDS="amd64"
+KEYWORDS="~amd64"
 
 RESTRICT="bindist mirror test"
 
@@ -18,13 +18,14 @@ RDEPEND="
     media-libs/alsa-lib
     sys-apps/dbus
 "
+BDEPEND="sys-fs/squashfs-tools"
 
 S="${WORKDIR}"
 
 src_unpack() {
     cp "${DISTDIR}/${P}.AppImage" . || die
-    chmod +x "${P}.AppImage" || die
-    ./"${P}.AppImage" --appimage-extract || die
+    # Rips the AppImage open safely without executing it
+    unsquashfs -d squashfs-root "${P}.AppImage" || die
 }
 
 src_install() {
@@ -32,7 +33,7 @@ src_install() {
     doins -r squashfs-root/*
     
     fperms +x /opt/rootapp/AppRun
-    dosym ../../opt/rootapp/AppRun /usr/bin/rootapp
+    dosym -r /opt/rootapp/AppRun /usr/bin/rootapp
     
     doicon -s 256 squashfs-root/Root.png
     make_desktop_entry "rootapp" "RootApp" "Root" "Network;Chat;"

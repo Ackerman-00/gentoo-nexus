@@ -1,74 +1,113 @@
 name: Gentoo Nexus Master Bot
 
 on:
-  push:
-    paths:
-      - '**/*.ebuild'
   schedule:
-    - cron: '0 0 * * *'
+    - cron: '0 */2 * * *' # Every 2 hours
   workflow_dispatch:
 
-jobs:
-  maintain-repo:
-    runs-on: ubuntu-latest
-    permissions:
-      contents: write
+permissions:
+  contents: write
+  packages: write
 
+jobs:
+  update-repo:
+    runs-on: ubuntu-latest
     steps:
       - name: Checkout Repository
         uses: actions/checkout@v5
         with:
           fetch-depth: 0
 
-      - name: 1. Check for RootApp Updates
+      - name: 1. Deep Version Scan
+        id: scanner
+        env:
+          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
         run: |
-          CURRENT_VER=$(ls app-misc/rootapp-bin/rootapp-bin-*.ebuild | sed -E 's/.*rootapp-bin-(.*)\.ebuild/\1/')
-          echo "Current version: $CURRENT_VER"
-          
-          curl -sL -o Root.AppImage "https://installer.rootapp.com/installer/Linux/X64/Root.AppImage"
-          chmod +x Root.AppImage
-          ./Root.AppImage --appimage-extract > /dev/null
-          
-          LATEST_VER=$(cat squashfs-root/usr/bin/sq.version | grep -Eo '[0-9]+\.[0-9]+\.[0-9]+' | head -1)
-          echo "Latest upstream: $LATEST_VER"
-          
-          if [ -n "$LATEST_VER" ] && [ "$CURRENT_VER" != "$LATEST_VER" ]; then
-            echo "Update found! Moving $CURRENT_VER -> $LATEST_VER"
-            git mv app-misc/rootapp-bin/rootapp-bin-${CURRENT_VER}.ebuild app-misc/rootapp-bin/rootapp-bin-${LATEST_VER}.ebuild
-          fi
-          
-          rm -rf Root.AppImage squashfs-root
+          python3 << 'EOF'
+          import os, re, requests
+          from pathlib import Path
 
-      - name: 2. Generate Manifests (For all packages)
-        run: |
-          docker run --rm \
-            -v ${{ github.workspace }}:/overlay \
-            -w /overlay \
-            gentoo/stage3 sh -c "
-              mkdir -p /var/db/repos/gentoo
-              echo 'FEATURES=\"-userfetch\"' >> /etc/portage/make.conf
-              emerge-webrsync -q
-              mkdir -p /etc/portage/repos.conf
-              echo '[overlay]' > /etc/portage/repos.conf/overlay.conf
-              echo 'location = /overlay' >> /etc/portage/repos.conf/overlay.conf
-              echo 'masters = gentoo' >> /etc/portage/repos.conf/overlay.conf
-              echo 'auto-sync = no' >> /etc/portage/repos.conf/overlay.conf
+          # EXACT PATHS MAPPED FROM SCREENSHOTS
+          TARGETS = {
+              "app-misc/dgop": "AvengeMedia/dgop",
+              "x11-misc/matugen": "strzelewicz/matugen",
+              "games-util/protonplus-bin": "Vysp3r/ProtonPlus"
+          }
+
+          def get_latest(repo):
+              r = requests.get(f"https://api.github.com/repos/{repo}/releases/latest", headers={"Authorization": f"token {os.environ['GITHUB_TOKEN']}"})
+              return r.json().get('tag_name', '').lstrip('v') if r.status_code == 200 else None
+
+          for path, repo in TARGETS.items():
+              pkg_dir = Path(path)
+              if not pkg_dir.exists(): continue
+              ebuilds = list(pkg_dir.glob("*.ebuild"))
+              if not ebuilds: continue
               
-              find . -name '*.ebuild' -exec ebuild {} manifest \;
-              chown -R $(id -u):$(id -g) .
-            "
+              curr_ebuild = ebuilds
+              pkgname = curr_ebuild.name.split('-')
+              curr_ver = re.search(r'-(.*)\.ebuild', curr_ebuild.name).group(1)
+              
+              latest_ver = get_latest(repo)
+              if latest_ver and latest_ver != curr_ver:
+                  os.rename(curr_ebuild, pkg_dir / f"{pkgname}-{latest_ver}.ebuild")
 
-      - name: 3. Commit and Push Safely
+          # RootApp Logic (app-misc/rootapp-bin)
+          rootapp_dir = Path("app-misc/rootapp-bin")
+          if rootapp_dir.exists():
+              ebs = list(rootapp_dir.glob("*.ebuild"))
+              if ebs:
+                  os.system("curl -sL -o Root.AppImage https://installer.rootapp.com/installer/Linux/X64/Root.AppImage")
+                  os.system("chmod +x Root.AppImage && ./Root.AppImage --appimage-extract > /dev/null")
+                  with open("squashfs-root/usr/bin/sq.version", 'r') as f:
+                      v = re.search(r'[0-9]+\.[0-9]+\.[0-9]+', f.read()).group(0)
+                      if v not in ebs.name:
+                          os.rename(ebs, rootapp_dir / f"rootapp-bin-{v}.ebuild")
+          EOF
+
+      - name: 2. Generate Manifests (Gentoo Docker)
+        run: |
+          docker run --rm -v ${{ github.workspace }}:/overlay -w /overlay gentoo/stage3 sh -c "
+            mkdir -p /var/db/repos/gentoo && emerge-webrsync -q
+            echo -e '[overlay]\nlocation = /overlay\nmasters = gentoo' > /etc/portage/repos.conf/overlay.conf
+            # Manifest Mangowc 12.7 specifically
+            ebuild gui-wm/mangowc/mangowc-12.7.ebuild manifest
+            find . -name '*.ebuild' -exec ebuild {} manifest \;
+            chown -R $(id -u):$(id -g) .
+          "
+
+      - name: 3. Commit and Rebase
         run: |
           git config user.name "github-actions[bot]"
           git config user.email "github-actions[bot]@users.noreply.github.com"
-          
           git add .
-          
           if ! git diff --cached --quiet; then
-            git commit -m "auto: sync updates and generate manifests"
-            git pull --rebase origin main || true
-            git push
-          else
-            echo "Everything is perfectly up to date."
+            git commit -m "bot: sync upstream versions and manifests"
+            git pull --rebase origin main && git push
           fi
+
+  compile-and-release:
+    needs: update-repo
+    runs-on: ubuntu-latest
+    strategy:
+      matrix:
+        package: [gui-wm/niri, gui-wm/mangowc, gui-wm/dank-material-shell, x11-base/xwayland-satellite]
+    steps:
+      - name: Build Binary Asset
+        run: |
+          docker run --rm -v ${{ github.workspace }}:/overlay gentoo/stage3 sh -c "
+            emerge-webrsync -q
+            emerge --noreplace dev-lang/rust-bin
+            echo 'USE=\"wayland -X\"' >> /etc/portage/make.conf
+            echo -e '[overlay]\nlocation = /overlay\nmasters = gentoo' > /etc/portage/repos.conf/overlay.conf
+            emerge --autounmask=y --autounmask-write --buildpkg ${{ matrix.package }}
+            mkdir -p /overlay/binaries && cp -r /var/cache/binpkgs/* /overlay/binaries/
+          "
+      - name: Upload Binaries
+        uses: softprops/action-gh-release@v2
+        with:
+          tag_name: binaries-latest
+          files: binaries/**/*
+          prerelease: true
+        env:
+          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
