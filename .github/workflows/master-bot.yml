@@ -10,20 +10,21 @@ on:
 
 permissions:
   contents: write
-  packages: write
+  pages: write
+  id-token: write
 
 jobs:
   update-and-manifest:
     runs-on: ubuntu-latest
     outputs:
-      packages: ${{ steps.scanner.outputs.packages }}
+      updated_packages: ${{ steps.scanner.outputs.updated_packages }}
     steps:
       - name: Checkout Repository
         uses: actions/checkout@v5
         with:
           fetch-depth: 0
 
-      - name: 1. Deep Version Scan
+      - name: 1. Deep Version Scan & Bump
         id: scanner
         env:
           GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
@@ -43,25 +44,28 @@ jobs:
                                headers={"Authorization": f"token {os.environ['GITHUB_TOKEN']}"})
               return r.json().get('tag_name', '').lstrip('v') if r.status_code == 200 else None
 
-          # Correcting the 'list' attribute error found in logs
+          updated = []
+
+          # 1. Update Versioned Ebuilds
           for path, repo in TARGETS.items():
               pkg_dir = Path(path)
               if not pkg_dir.exists(): continue
               ebuilds = list(pkg_dir.glob("*.ebuild"))
               if not ebuilds: continue
               
-              current_ebuild = ebuilds # Fix: Extract the first item from the list
-              match = re.search(r'-(.*)\.ebuild', current_ebuild.name)
+              target_ebs = ebuilds # THE FIX: Access first item
+              match = re.search(r'-(.*)\.ebuild', target_ebs.name)
               if not match: continue
               curr_ver = match.group(1)
-              pkgname = current_ebuild.name.split(f"-{curr_ver}")
+              pkgname = target_ebs.name[:target_ebs.name.rfind(f"-{curr_ver}")]
               
               latest_ver = get_latest(repo)
               if latest_ver and latest_ver != curr_ver:
                   print(f"✨ Bumping {pkgname}: {curr_ver} -> {latest_ver}")
-                  current_ebuild.rename(pkg_dir / f"{pkgname}-{latest_ver}.ebuild")
+                  target_ebs.rename(pkg_dir / f"{pkgname}-{latest_ver}.ebuild")
+                  updated.append(path)
 
-          # RootApp Versioning
+          # 2. RootApp Logic
           root_dir = Path("app-misc/rootapp-bin")
           if root_dir.exists():
               ebs = list(root_dir.glob("*.ebuild"))
@@ -72,9 +76,13 @@ jobs:
                   if ver_file.exists():
                       with open(ver_file, 'r') as f:
                           v = re.search(r'[0-9]+\.[0-9]+\.[0-9]+', f.read()).group(0)
-                          if v not in ebs.name:
+                          if v not in ebs.name: # THE FIX: ebs
                               ebs.rename(root_dir / f"rootapp-bin-{v}.ebuild")
+                              updated.append("app-misc/rootapp-bin")
                   os.system("rm -rf Root.AppImage squashfs-root")
+
+          with open(os.environ['GITHUB_OUTPUT'], 'a') as f:
+              f.write(f"updated_packages={json.dumps(updated)}\n")
           EOF
 
       - name: 2. Generate Manifests (Gentoo Docker)
@@ -82,68 +90,68 @@ jobs:
           docker run --rm -v ${{ github.workspace }}:/overlay -w /overlay gentoo/stage3 sh -c "
             mkdir -p /var/db/repos/gentoo && emerge-webrsync -q
             echo -e '[overlay]\nlocation = /overlay\nmasters = gentoo' > /etc/portage/repos.conf/overlay.conf
-            ebuild gui-wm/mangowc/mangowc-12.7.ebuild manifest
             find . -name '*.ebuild' -exec ebuild {} manifest \;
             chown -R $(id -u):$(id -g) .
           "
 
-      - name: 3. Commit and Rebase
+      - name: 3. Commit and Push Updates
         run: |
           git config user.name "github-actions[bot]"
           git config user.email "github-actions[bot]@users.noreply.github.com"
           git add .
           if ! git diff --cached --quiet; then
-            git commit -m "bot: sync upstream versions and manifests"
+            git commit -m "bot: version bump and manifest refresh"
             git pull --rebase origin main && git push
           fi
 
-  build-binaries:
+  build-and-deploy:
     needs: update-and-manifest
     runs-on: ubuntu-latest
     strategy:
       fail-fast: false
       matrix:
-        package: [gui-wm/niri, gui-wm/mangowc, gui-wm/dank-material-shell, x11-base/xwayland-satellite]
+        package: [gui-wm/niri, gui-wm/mangowc, gui-wm/dank-material-shell, x11-base/xwayland-satellite, app-misc/dgop, x11-misc/matugen]
     steps:
       - name: Checkout
         uses: actions/checkout@v5
 
-      - name: Check if Binary Exists in Release
-        id: check_release
-        env:
-          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+      - name: Check Binhost for Existing Binary
+        id: check_bin
         run: |
-          # Check the Release assets for the current package binary
-          # Filename format expected: category-pkgname-version.gpkg.tar
+          # Check if the binary version already exists in the remote Packages index
+          BINHOST="https://ackerman-00.github.io/gentoo-nexus/Packages"
           PKG_NAME=$(echo "${{ matrix.package }}" | cut -d'/' -f2)
-          EXISTS=$(gh release view binaries-latest --json assets --jq ".assets[].name" | grep "^${PKG_NAME}-" || echo "NOT_FOUND")
+          # We grab the version from the ebuild filename locally
+          LOCAL_VER=$(ls ${{ matrix.package }}/*.ebuild | head -n1 | re.search(r'-(.*)\.ebuild' -o))
           
-          if [[ "$EXISTS" != "NOT_FOUND" ]]; then
+          if curl -sL "$BINHOST" | grep -q "${PKG_NAME}-${LOCAL_VER}"; then
             echo "skip=true" >> $GITHUB_OUTPUT
-            echo "Binary for ${{ matrix.package }} already exists. Skipping build."
           else
             echo "skip=false" >> $GITHUB_OUTPUT
           fi
 
-      - name: Build Binary Asset
-        if: steps.check_release.outputs.skip == 'false'
+      - name: Build & Index (Gentoo Docker)
+        if: steps.check_bin.outputs.skip == 'false'
         run: |
           docker run --rm -v ${{ github.workspace }}:/overlay gentoo/stage3 sh -c "
             emerge-webrsync -q && emerge --noreplace dev-lang/rust-bin
             echo 'USE=\"wayland -X\"' >> /etc/portage/make.conf
             echo -e '[overlay]\nlocation = /overlay\nmasters = gentoo' > /etc/portage/repos.conf/overlay.conf
-            # Build and create .gpkg (Gentoo binary package)
+            
+            # 1. Build package
             emerge --autounmask=y --autounmask-write --buildpkg ${{ matrix.package }}
-            mkdir -p /overlay/binaries
-            cp -r /var/cache/binpkgs/* /overlay/binaries/
+            
+            # 2. Create Binhost Index (The "Packages" file)
+            mkdir -p /overlay/public
+            cp -r /var/cache/binpkgs/* /overlay/public/
+            cd /overlay/public && emaint binhost --fix
+            chown -R $(id -u):$(id -g) /overlay/public
           "
 
-      - name: Upload to Binaries-Latest Release
-        if: steps.check_release.outputs.skip == 'false'
-        uses: softprops/action-gh-release@v2
+      - name: Deploy to GitHub Pages
+        if: steps.check_bin.outputs.skip == 'false'
+        uses: peaceiris/actions-gh-pages@v4
         with:
-          tag_name: binaries-latest
-          files: binaries/**/*
-          prerelease: true
-        env:
-          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+          github_token: ${{ secrets.GITHUB_TOKEN }}
+          publish_dir: ./public
+          keep_files: true # CRITICAL: Keeps your old binaries available
