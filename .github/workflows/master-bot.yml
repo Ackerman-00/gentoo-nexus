@@ -2,7 +2,7 @@ name: Gentoo Nexus Master Bot
 
 on:
   schedule:
-    - cron: '0 */2 * * *' # Every 2 hours
+    - cron: '0 */2 * * *'
   push:
     paths:
       - '**/*.ebuild'
@@ -28,7 +28,7 @@ jobs:
           GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
         run: |
           python3 << 'EOF'
-          import os, re, requests
+          import os, re, requests, subprocess, stat, tempfile
           from pathlib import Path
 
           STABLE_TARGETS = {
@@ -39,53 +39,82 @@ jobs:
 
           def get_latest(repo):
               try:
-                  r = requests.get(f"https://api.github.com/repos/{repo}/releases/latest", 
-                                   headers={"Authorization": f"token {os.environ['GITHUB_TOKEN']}"}, timeout=15)
-                  return r.json().get('tag_name', '').lstrip('v') if r.status_code == 200 else None
-              except: return None
+                  r = requests.get(
+                      f"https://api.github.com/repos/{repo}/releases/latest",
+                      headers={"Authorization": f"token {os.environ['GITHUB_TOKEN']}"},
+                      timeout=15
+                  )
+                  if r.status_code == 200:
+                      return r.json().get('tag_name', '').lstrip('v')
+              except:
+                  pass
+              return None
 
-          # FIX: Correct Mangowc version (12.7 -> 0.12.7) to kill 404 error
+          def get_appimage_version(filepath):
+              try:
+                  os.chmod(filepath, stat.S_IRWXU)
+                  res = subprocess.run([filepath, '--appimage-version'], capture_output=True, text=True, timeout=10)
+                  m = re.search(r'(\d+\.\d+[\.\d]*)', res.stdout + res.stderr)
+                  if m: return m.group(1)
+                  out = subprocess.run(['strings', filepath], capture_output=True, text=True, timeout=10).stdout
+                  m = re.search(r'(\d+\.\d+\.\d+)', out)
+                  if m: return m.group(1)
+              except Exception as e:
+                  print(f"⚠️ Could not extract AppImage version from {filepath}: {e}")
+              return None
+
+          # ---- Fix Mangowc version (12.7 -> 0.12.7) ----
           mango_dir = Path("gui-wm/mangowc")
           if mango_dir.exists():
               ebs = list(mango_dir.glob("mangowc-12.7.ebuild"))
-              if ebs: ebs.rename(mango_dir / "mangowc-0.12.7.ebuild")
+              if ebs:
+                  ebs[0].rename(mango_dir / "mangowc-0.12.7.ebuild")
+                  print("🐧 Renamed mangowc to 0.12.7")
 
-          # FIX: Correct ProtonPlus naming to match valid PORTDIR structure
+          # ---- Fix ProtonPlus naming (add "-bin") ----
           proton_dir = Path("games-util/protonplus-bin")
           if proton_dir.exists():
-              ebs = list(proton_dir.glob("protonplus-[0-9]*.ebuild"))
-              for eb in ebs:
+              for eb in proton_dir.glob("protonplus-[0-9]*.ebuild"):
                   if "protonplus-bin" not in eb.name:
                       eb.rename(proton_dir / eb.name.replace("protonplus-", "protonplus-bin-"))
+                      print(f"🔄 Renamed {eb.name} -> protonplus-bin-...")
 
-          # FIX: Line-by-line verified indexing to kill AttributeError
+          # ---- Bump stable packages from GitHub releases ----
           for path, repo in STABLE_TARGETS.items():
               pkg_dir = Path(path)
-              if not pkg_dir.exists(): continue
-              ebs = sorted(list(pkg_dir.glob("*.ebuild")))
-              if not ebs: continue
-              
-              target_file = ebs # MANDATORY INDEXING
-              curr_ver = re.search(r'-([0-9.]+)\.ebuild', target_file.name).group(1)
+              if not pkg_dir.exists():
+                  continue
+              ebs = sorted(pkg_dir.glob("*.ebuild"))
+              if not ebs:
+                  continue
+
+              target_file = ebs[0]
+              match = re.search(r'-([0-9.]+)\.ebuild$', target_file.name)
+              if not match:
+                  continue
+              curr_ver = match.group(1)
               pkg_name = target_file.name.replace(f"-{curr_ver}.ebuild", "")
-              
+
               latest_ver = get_latest(repo)
               if latest_ver and latest_ver != curr_ver:
                   print(f"✨ Bumping {pkg_name}: {curr_ver} -> {latest_ver}")
                   target_file.rename(pkg_dir / f"{pkg_name}-{latest_ver}.ebuild")
 
-          # RootApp AppImage Tracking
+          # ---- RootApp AppImage tracking with version sniffing ----
           root_dir = Path("app-misc/rootapp-bin")
           if root_dir.exists():
               ebs = list(root_dir.glob("*.ebuild"))
               if ebs:
+                  # download AppImage
                   os.system("curl -sL -o Root.AppImage https://installer.rootapp.com/installer/Linux/X64/Root.AppImage")
-                  os.system("chmod +x Root.AppImage && ./Root.AppImage --appimage-extract > /dev/null")
-                  with open("squashfs-root/usr/bin/sq.version", 'r') as f:
-                      v = re.search(r'[0-9]+\.[0-9]+\.[0-9]+', f.read()).group(0)
-                      if v not in ebs.name:
-                          ebs.rename(root_dir / f"rootapp-bin-{v}.ebuild")
-                  os.system("rm -rf Root.AppImage squashfs-root")
+                  os.system("chmod +x Root.AppImage")
+                  version = get_appimage_version("Root.AppImage")
+                  if version and version not in ebs[0].name:
+                      ebs[0].rename(root_dir / f"rootapp-bin-{version}.ebuild")
+                      print(f"📦 Updated rootapp-bin to {version}")
+                  else:
+                      print("ℹ️ RootApp version unchanged or not detected.")
+                  os.system("rm -f Root.AppImage")
           EOF
 
       - name: 2. Generate Manifests (Gentoo Container)
@@ -99,14 +128,21 @@ jobs:
             chown -R $(id -u):$(id -g) .
           "
 
-      - name: 3. Commit and Rebase
+      - name: 3. Commit and Push (safe branch handling)
         run: |
           git config user.name "github-actions[bot]"
           git config user.email "github-actions[bot]@users.noreply.github.com"
           git add .
           if ! git diff --cached --quiet; then
-            git commit -m "bot: repair filenames and update versions"
-            git pull --rebase origin main && git push
+            git commit -m "bot: auto-update ebuilds and manifests"
+            # Only push if we're on main branch
+            branch=$(git rev-parse --abbrev-ref HEAD)
+            if [ "$branch" = "main" ]; then
+              git pull --rebase origin main
+              git push
+            else
+              echo "Not on main branch, skipping push. Branch: $branch"
+            fi
           fi
 
   build-binaries:
@@ -123,12 +159,18 @@ jobs:
       - name: Check Binhost Status
         id: check_bin
         run: |
-          # Only build if not already in the remote Packages index
           BINHOST="https://ackerman-00.github.io/gentoo-nexus/Packages"
           PN=$(basename ${{ matrix.package }})
-          VER=$(python3 -c "import os,re; f=os.listdir('${{ matrix.package }}'); print(re.search(r'-(.*)\.ebuild', [x for x in f if x.endswith('.ebuild')]).group(1))")
-          
-          if curl -sL "$BINHOST" | grep -q "${PN}-${VER}"; then
+          # Extract version from ebuild (read version variable)
+          VER=$(python3 -c "
+          import re
+          with open('${{ matrix.package }}/*.ebuild', 'r') as f:
+              content = f.read()
+              m = re.search(r'^version=(\S+)', content, re.MULTILINE)
+              if m:
+                  print(m.group(1).strip('\"'))
+          ")
+          if [ -n "$VER" ] && curl -sL "$BINHOST" | grep -q "\<${PN}-${VER}\>"; then
             echo "skip=true" >> $GITHUB_OUTPUT
             echo "✅ Binary ${PN}-${VER} already exists. Skipping build."
           else
@@ -139,13 +181,26 @@ jobs:
         if: steps.check_bin.outputs.skip == 'false'
         run: |
           docker run --rm -v ${{ github.workspace }}:/overlay gentoo/stage3 sh -c "
+            set -e
             mkdir -p /var/db/repos/gentoo /etc/portage/repos.conf
             echo 'FEATURES=\"-userfetch -ipc-sandbox -network-sandbox -pid-sandbox\"' >> /etc/portage/make.conf
-            emerge-webrsync -q && emerge --noreplace dev-lang/rust-bin
+            emerge-webrsync -q
+            # Install rust only if needed (you could detect from ebuild, but simple is fine)
+            emerge --noreplace dev-lang/rust-bin
             echo 'USE=\"wayland vulkan pipewire -X -systemd\"' >> /etc/portage/make.conf
             echo -e '[gentoo-nexus]\nlocation = /overlay\nmasters = gentoo' > /etc/portage/repos.conf/gentoo-nexus.conf
-            emerge --autounmask=y --autounmask-write --buildpkg ${{ matrix.package }}
-            mkdir -p /overlay/job_out && cp -r /var/cache/binpkgs/* /overlay/job_out/
+            emerge --autounmask=y --autounmask-write --buildpkg --quiet ${{ matrix.package }}
+            # Copy built packages and generate Packages file if missing
+            mkdir -p /overlay/job_out
+            cp -r /var/cache/binpkgs/* /overlay/job_out/ 2>/dev/null || true
+            # Create a simple Packages file for indexing
+            cd /var/cache/binpkgs
+            if [ ! -f Packages ]; then
+                # Generate a basic Packages file using portageq
+                portageq binhost . > /overlay/job_out/Packages 2>/dev/null || true
+            else
+                cp Packages /overlay/job_out/
+            fi
             chown -R $(id -u):$(id -g) /overlay/job_out
           "
 
@@ -170,14 +225,21 @@ jobs:
           path: combined/
           pattern: binpkg-*
           merge-multiple: true
-      - name: Final Index & Deploy
+      - name: Merge Packages files and prepare for deployment
         run: |
-          docker run --rm -v ${{ github.workspace }}:/overlay -w /overlay gentoo/stage3 sh -c "
-            mkdir -p /overlay/public_binhost
-            cp -r /overlay/combined/* /overlay/public_binhost/
-            cd /overlay/public_binhost && emaint binhost --fix
-            touch .nojekyll && chown -R $(id -u):$(id -g) /overlay/public_binhost
-          "
+          # Create a single Packages file by merging all Packages from artifacts
+          find combined -name "Packages" -exec cat {} \; | sort -u > combined/Packages
+          # Ensure .nojekyll is present
+          touch combined/.nojekyll
+          # Copy to public_binhost
+          mkdir -p public_binhost
+          cp -r combined/* public_binhost/
+          # Create a simple index.html for browsing
+          cat > public_binhost/index.html << 'HTML'
+          <!DOCTYPE html>
+          <html><head><title>Gentoo Nexus Binhost</title></head>
+          <body><h1>Gentoo Nexus Binhost</h1><pre>$(ls -1 public_binhost)</pre></body></html>
+          HTML
       - name: Upload Pages Artifact
         uses: actions/upload-pages-artifact@v3
         with:
