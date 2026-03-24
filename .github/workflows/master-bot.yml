@@ -208,13 +208,11 @@ jobs:
         id: check_bin
         run: |
           PN=$(basename ${{ matrix.package }})
-          # Live package detection (filename ends with -9999.ebuild)
           if ls ${{ matrix.package }}/*-9999.ebuild 2>/dev/null; then
             echo "skip=false" >> $GITHUB_OUTPUT
             echo "Live package $PN, always build."
             exit 0
           fi
-          # Stable package: read version from ebuild
           VER=$(python3 << PY
           import glob, re
           ebuilds = glob.glob('${{ matrix.package }}/*.ebuild')
@@ -244,12 +242,20 @@ jobs:
             mkdir -p /var/db/repos/gentoo /etc/portage/repos.conf
             echo 'FEATURES=\"-userfetch -ipc-sandbox -network-sandbox -pid-sandbox\"' >> /etc/portage/make.conf
             emerge-webrsync -q
-            # Pre-install Go to break circular dependency for dgop
             emerge --noreplace dev-lang/go
             emerge --noreplace dev-lang/rust-bin
+
+            # Enable GURU overlay
+            emerge --noreplace app-eselect/eselect-repository dev-vcs/git
+            eselect repository enable guru
+            emaint sync -r guru
+
             echo 'USE=\"wayland vulkan pipewire -X -systemd\"' >> /etc/portage/make.conf
             echo -e '[gentoo-nexus]\nlocation = /overlay\nmasters = gentoo' > /etc/portage/repos.conf/gentoo-nexus.conf
+            echo -e '[guru]\nlocation = /var/db/repos/guru\nmasters = gentoo' >> /etc/portage/repos.conf/guru.conf
+
             emerge --autounmask=y --autounmask-write --autounmask-continue --buildpkg --quiet ${{ matrix.package }}
+
             mkdir -p /overlay/job_out
             cp -r /var/cache/binpkgs/* /overlay/job_out/ 2>/dev/null || true
             cd /var/cache/binpkgs
