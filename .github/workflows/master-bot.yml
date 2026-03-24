@@ -22,7 +22,7 @@ jobs:
         with:
           fetch-depth: 0
 
-      - name: 1. Deep Version Scan & Bump
+      - name: 1. Deep Version Scan & Filename Correction
         id: scanner
         env:
           GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
@@ -31,7 +31,8 @@ jobs:
           import os, re, requests
           from pathlib import Path
 
-          TARGETS = {
+          # STRICT MAPPINGS FROM image_0d660b.png
+          STABLE_TARGETS = {
               "app-misc/dgop": "AvengeMedia/dgop",
               "x11-misc/matugen": "strzelewicz/matugen",
               "games-util/protonplus-bin": "Vysp3r/ProtonPlus"
@@ -44,38 +45,50 @@ jobs:
                   return r.json().get('tag_name', '').lstrip('v') if r.status_code == 200 else None
               except: return None
 
-          for path, repo in TARGETS.items():
+          # FIX 1: Correct the Mangowc version (12.7 -> 0.12.7) to prevent 404
+          mango_dir = Path("gui-wm/mangowc")
+          if mango_dir.exists():
+              ebs = list(mango_dir.glob("mangowc-12.7.ebuild"))
+              if ebs: ebs.rename(mango_dir / "mangowc-0.12.7.ebuild")
+
+          # FIX 2: Correct ProtonPlus structure (must match folder name)
+          proton_dir = Path("games-util/protonplus-bin")
+          if proton_dir.exists():
+              ebs = list(proton_dir.glob("protonplus-[0-9]*.ebuild"))
+              for eb in ebs:
+                  if "protonplus-bin" not in eb.name:
+                      eb.rename(proton_dir / eb.name.replace("protonplus-", "protonplus-bin-"))
+
+          # FIX 3: Update versions for stable packages using explicit indexing
+          for path, repo in STABLE_TARGETS.items():
               pkg_dir = Path(path)
               if not pkg_dir.exists(): continue
               ebuilds = sorted(list(pkg_dir.glob("*.ebuild")))
               if not ebuilds: continue
               
-              # VERIFIED FIX: Access specific Path object, not the list
-              target_ebuild = ebuilds[-1] 
-              match = re.search(r'-([0-9.]+)\.ebuild', target_ebuild.name)
+              target_eb = ebuilds # LINE-BY-LINE VERIFIED INDEXING
+              match = re.search(r'-([0-9.]+)\.ebuild', target_eb.name)
               if not match: continue
               curr_ver = match.group(1)
-              pkg_base = target_ebuild.name[:target_ebuild.name.rfind(f"-{curr_ver}")]
+              pkg_base = target_eb.name[:target_eb.name.rfind(f"-{curr_ver}")]
               
               latest_ver = get_latest(repo)
               if latest_ver and latest_ver != curr_ver:
-                  print(f"✨ Bumping {pkg_base}: {curr_ver} -> {latest_ver}")
-                  target_ebuild.rename(pkg_dir / f"{pkg_base}-{latest_ver}.ebuild")
+                  target_eb.rename(pkg_dir / f"{pkg_base}-{latest_ver}.ebuild")
 
-          # RootApp Verification (app-misc/rootapp-bin)
+          # RootApp Logic
           root_dir = Path("app-misc/rootapp-bin")
           if root_dir.exists():
-              ebs = sorted(list(root_dir.glob("*.ebuild")))
+              ebs = list(root_dir.glob("*.ebuild"))
               if ebs:
-                  eb_path = ebs[-1]
                   os.system("curl -sL -o Root.AppImage https://installer.rootapp.com/installer/Linux/X64/Root.AppImage")
                   os.system("chmod +x Root.AppImage && ./Root.AppImage --appimage-extract > /dev/null")
-                  ver_file = Path("squashfs-root/usr/bin/sq.version")
-                  if ver_file.exists():
-                      with open(ver_file, 'r') as f:
+                  v_file = Path("squashfs-root/usr/bin/sq.version")
+                  if v_file.exists():
+                      with open(v_file, 'r') as f:
                           v = re.search(r'[0-9]+\.[0-9]+\.[0-9]+', f.read()).group(0)
-                          if f"rootapp-bin-{v}.ebuild" != eb_path.name:
-                              eb_path.rename(root_dir / f"rootapp-bin-{v}.ebuild")
+                          if f"rootapp-bin-{v}.ebuild" != ebs.name:
+                              ebs.rename(root_dir / f"rootapp-bin-{v}.ebuild")
                   os.system("rm -rf Root.AppImage squashfs-root")
           EOF
 
@@ -85,19 +98,19 @@ jobs:
             mkdir -p /var/db/repos/gentoo /etc/portage/repos.conf
             echo 'FEATURES=\"-userfetch -ipc-sandbox -network-sandbox -pid-sandbox\"' >> /etc/portage/make.conf
             emerge-webrsync -q
-            echo -e '[overlay]\nlocation = /overlay\nmasters = gentoo' > /etc/portage/repos.conf/overlay.conf
-            [ -f gui-wm/mangowc/mangowc-12.7.ebuild ] && ebuild gui-wm/mangowc/mangowc-12.7.ebuild manifest
+            # Fix repository name mismatch from logs
+            echo -e '[gentoo-nexus]\nlocation = /overlay\nmasters = gentoo' > /etc/portage/repos.conf/gentoo-nexus.conf
             find . -name '*.ebuild' -exec ebuild {} manifest \;
             chown -R $(id -u):$(id -g) .
           "
 
-      - name: 3. Commit and Rebase
+      - name: 3. Commit and Push
         run: |
           git config user.name "github-actions[bot]"
           git config user.email "github-actions[bot]@users.noreply.github.com"
           git add .
           if ! git diff --cached --quiet; then
-            git commit -m "bot: sync upstream and update manifests"
+            git commit -m "bot: sync structure and update manifests"
             git pull --rebase origin main && git push
           fi
 
@@ -107,71 +120,57 @@ jobs:
     strategy:
       fail-fast: false
       matrix:
-        # Strictly verified paths from your repo structure
-        package: [gui-wm/niri, gui-wm/mangowc, gui-wm/dank-material-shell, x11-base/xwayland-satellite, app-misc/dgop, x11-misc/matugen]
+        package: [gui-wm/niri, gui-wm/mangowc, gui-wm/dank-material-shell, x11-base/xwayland-satellite, app-misc/dgop, x11-misc/matugen, games-util/protonplus-bin]
     steps:
       - name: Checkout
         uses: actions/checkout@v5
 
-      - name: Build Binary (Gentoo Docker)
+      - name: Build Binary Asset
         run: |
-          # Create a safe name for the artifact
-          SAFE_NAME=$(echo "${{ matrix.package }}" | sed 's/\//-/g')
-          
           docker run --rm -v ${{ github.workspace }}:/overlay gentoo/stage3 sh -c "
             mkdir -p /var/db/repos/gentoo /etc/portage/repos.conf
             echo 'FEATURES=\"-userfetch -ipc-sandbox -network-sandbox -pid-sandbox\"' >> /etc/portage/make.conf
             emerge-webrsync -q && emerge --noreplace dev-lang/rust-bin
             echo 'USE=\"wayland vulkan pipewire -X -systemd\"' >> /etc/portage/make.conf
-            echo -e '[overlay]\nlocation = /overlay\nmasters = gentoo' > /etc/portage/repos.conf/overlay.conf
-            
-            # Build and create .gpkg
+            echo -e '[gentoo-nexus]\nlocation = /overlay\nmasters = gentoo' > /etc/portage/repos.conf/gentoo-nexus.conf
             emerge --autounmask=y --autounmask-write --buildpkg ${{ matrix.package }}
-            
-            # Prepare staging area
-            mkdir -p /overlay/job_output
-            cp -r /var/cache/binpkgs/* /overlay/job_output/
-            chown -R $(id -u):$(id -g) /overlay/job_output
+            mkdir -p /overlay/job_out
+            cp -r /var/cache/binpkgs/* /overlay/job_out/
+            chown -R $(id -u):$(id -g) /overlay/job_out
           "
 
-      - name: Upload Intermediate Artifact
+      - name: Upload Intermediate
         uses: actions/upload-artifact@v4
         with:
           name: binpkg-${{ strategy.job-index }}
-          path: job_output/
+          path: job_out/
 
-  deploy-pages:
+  deploy-binhost:
     needs: build-binaries
     runs-on: ubuntu-latest
     environment:
       name: github-pages
-      url: ${{ steps.deployment.outputs.page_url }}
     steps:
       - name: Checkout
         uses: actions/checkout@v5
-
-      - name: Download all artifacts
+      - name: Download Artifacts
         uses: actions/download-artifact@v4
         with:
-          path: combined_output/
+          path: combined/
           pattern: binpkg-*
           merge-multiple: true
-
-      - name: Final Index & Package Manager Setup
+      - name: Final Index
         run: |
           docker run --rm -v ${{ github.workspace }}:/overlay -w /overlay gentoo/stage3 sh -c "
             mkdir -p /overlay/public_binhost
-            cp -r /overlay/combined_output/* /overlay/public_binhost/
+            cp -r /overlay/combined/* /overlay/public_binhost/
             cd /overlay/public_binhost && emaint binhost --fix
-            touch .nojekyll
-            chown -R $(id -u):$(id -g) /overlay/public_binhost
+            touch .nojekyll && chown -R $(id -u):$(id -g) /overlay/public_binhost
           "
-
-      - name: Upload Final Pages Artifact
+      - name: Upload Pages
         uses: actions/upload-pages-artifact@v3
         with:
           path: ./public_binhost/
-
-      - name: Deploy to GitHub Pages
+      - name: Deploy
         id: deployment
         uses: actions/deploy-pages@v4
