@@ -1,0 +1,67 @@
+name: Gentoo Manifest Auto-Generator
+
+on:
+  push:
+    paths:
+      - '**/*.ebuild'
+  workflow_dispatch:
+
+jobs:
+  generate-manifests:
+    runs-on: ubuntu-latest
+    permissions:
+      contents: write
+      
+    steps:
+      - name: Checkout Repository
+        uses: actions/checkout@v5
+        with:
+          fetch-depth: 0
+
+      - name: Run Manifest Generation in Gentoo Docker
+        run: |
+          docker run --rm \
+            -v ${{ github.workspace }}:/overlay \
+            -w /overlay \
+            gentoo/stage3 sh -c "
+              # 1. Disable user privilege dropping so Docker can write files
+              echo 'FEATURES=\"-userfetch\"' >> /etc/portage/make.conf
+              
+              # 2. Download the official Gentoo tree (required for eclasses)
+              echo 'Fetching Gentoo tree (this takes ~1 minute)...'
+              emerge-webrsync -q
+              
+              # 3. Register your overlay locally
+              mkdir -p /etc/portage/repos.conf
+              cat << 'EOF' > /etc/portage/repos.conf/overlay.conf
+              [overlay]
+              location = /overlay
+              masters = gentoo
+              auto-sync = no
+              EOF
+              
+              # 4. Find every ebuild and generate its Manifest hash
+              echo 'Generating Manifests...'
+              for f in \$(find . -name '*.ebuild'); do
+                ebuild \"\$f\" manifest
+              done
+              
+              # 5. Fix permissions so GitHub Actions can commit the files
+              chown -R $(id -u):$(id -g) .
+            "
+
+      - name: Commit and Push Manifests
+        run: |
+          git config user.name "github-actions[bot]"
+          git config user.email "github-actions[bot]@users.noreply.github.com"
+          
+          # Only add Manifest files to avoid committing junk
+          git add */*/Manifest
+          
+          # If there are changes, commit and push them
+          if ! git diff --cached --quiet; then
+            git commit -m "auto: generate Manifest hashes"
+            git push
+          else
+            echo "Manifests are already up to date."
+          fi
