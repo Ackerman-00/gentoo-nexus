@@ -39,7 +39,7 @@ jobs:
           restore-keys: |
             gentoo-tree-${{ runner.os }}-
 
-      - name: Build Binary Asset
+      - name: Build Binary Asset (Zero-Compile Active)
         run: |
           mkdir -p job_out
           mkdir -p "${{ github.workspace }}/cache/gentoo-tree"
@@ -48,21 +48,29 @@ jobs:
           cat > build_script.sh << 'EOF'
           #!/bin/bash
           set -euo pipefail
-          mkdir -p /etc/portage/repos.conf /overlay/distfiles /overlay/job_out
+          mkdir -p /etc/portage/repos.conf /etc/portage/binrepos.conf /overlay/distfiles /overlay/job_out
           
           mkdir -p /etc/portage/package.accept_keywords
           mkdir -p /etc/portage/package.license
           mkdir -p /etc/portage/package.use
 
-          # FIXED: Added 'alsa' to USE flags to satisfy libcanberra dependency
+          # Link the Official Gentoo Binhost
+          cat > /etc/portage/binrepos.conf/gentoo.conf << 'REPOCONF'
+          [gentoo]
+          priority = 1
+          sync-uri = https://gentoo.osuosl.org/releases/amd64/binpackages/23.0/x86-64/
+          REPOCONF
+
+          # Added getbinpkg features and forced defaults
           cat >> /etc/portage/make.conf << 'MAKECONF'
-          FEATURES="-userfetch -userpriv -usersandbox -ipc-sandbox -network-sandbox -pid-sandbox"
+          FEATURES="-userfetch -userpriv -usersandbox -ipc-sandbox -network-sandbox -pid-sandbox getbinpkg binpkg-request-signature"
           DISTDIR="/overlay/distfiles"
           PKGDIR="/overlay/job_out"
           USE="wayland vulkan pipewire egl gles2 dbus udev elogind harfbuzz opengl X alsa -systemd"
           EGIT_CLONE_TYPE="single"
           ACCEPT_KEYWORDS="~amd64 amd64"
           ACCEPT_LICENSE="*"
+          EMERGE_DEFAULT_OPTS="--getbinpkg --binpkg-respect-use=n --binpkg-changed-deps=y"
           MAKECONF
 
           if [ ! -f /var/db/repos/gentoo/profiles/eapi ]; then
@@ -89,17 +97,18 @@ jobs:
           echo "*/*::guru **" >> /etc/portage/package.accept_keywords/guru
           echo "*/* *" >> /etc/portage/package.license/all
 
-          emerge --autounmask=y --autounmask-write --quiet '${{ github.event.inputs.atom }}' 2>&1 || true
+          # Added --getbinpkg and --binpkg-respect-use=n
+          emerge --autounmask=y --autounmask-write --getbinpkg --binpkg-respect-use=n --quiet '${{ github.event.inputs.atom }}' 2>&1 || true
           if [ -f /etc/portage/package.use ] || ls /etc/portage/package.use/* 1> /dev/null 2>&1; then
             etc-update --automode -3 2>/dev/null || true
           fi
           
-          emerge --autounmask=y --autounmask-write --quiet '${{ github.event.inputs.atom }}' 2>&1 || true
+          emerge --autounmask=y --autounmask-write --getbinpkg --binpkg-respect-use=n --quiet '${{ github.event.inputs.atom }}' 2>&1 || true
           if [ -f /etc/portage/package.use ] || ls /etc/portage/package.use/* 1> /dev/null 2>&1; then
             etc-update --automode -3 2>/dev/null || true
           fi
 
-          emerge --buildpkg --quiet '${{ github.event.inputs.atom }}'
+          emerge --buildpkg --getbinpkg --binpkg-respect-use=n --quiet '${{ github.event.inputs.atom }}'
           EOF
           chmod +x build_script.sh
 
