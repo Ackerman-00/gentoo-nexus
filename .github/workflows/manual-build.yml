@@ -46,6 +46,7 @@ jobs:
           mkdir -p "${{ github.workspace }}/cache/distfiles"
 
           cat > build_script.sh << 'EOF'
+          #!/bin/bash
           set -euo pipefail
           mkdir -p /etc/portage/repos.conf /overlay/distfiles /overlay/job_out
 
@@ -126,7 +127,7 @@ jobs:
             -v "${{ github.workspace }}:/overlay" \
             -v "${{ github.workspace }}/cache/gentoo-tree:/var/db/repos/gentoo" \
             -v "${{ github.workspace }}/cache/distfiles:/var/cache/distfiles" \
-            gentoo/stage3 /overlay/build_script.sh
+            gentoo/stage3 bash /overlay/build_script.sh
 
           FILE_LIST=$(ls -1 public_binhost/*.gpkg.tar public_binhost/*.tbz2 2>/dev/null | xargs -I{} basename {} | sort || echo "(no packages yet)")
           cat > public_binhost/index.html << HTML
