@@ -168,6 +168,7 @@ jobs:
           mkdir -p "${{ github.workspace }}/cache/distfiles"
 
           cat > manifest_script.sh << 'EOF'
+          #!/bin/bash
           set -euo pipefail
           mkdir -p /etc/portage/repos.conf /overlay/distfiles
 
@@ -197,7 +198,7 @@ jobs:
             -v "${{ github.workspace }}:/overlay" \
             -v "${{ github.workspace }}/cache/gentoo-tree:/var/db/repos/gentoo" \
             -v "${{ github.workspace }}/cache/distfiles:/var/cache/distfiles" \
-            -w /overlay gentoo/stage3 /overlay/manifest_script.sh
+            -w /overlay gentoo/stage3 bash /overlay/manifest_script.sh
 
       - name: 3. Commit and Push
         run: |
@@ -217,6 +218,7 @@ jobs:
               if git pull --rebase origin main; then
                 git push
               else
+                echo "ERROR: Rebase conflict with remote commits. Aborting."
                 git rebase --abort 2>/dev/null || true
                 exit 1
               fi
@@ -287,6 +289,7 @@ jobs:
           mkdir -p "${{ github.workspace }}/cache/distfiles"
 
           cat > build_script.sh << 'EOF'
+          #!/bin/bash
           set -euo pipefail
           mkdir -p /etc/portage/repos.conf /overlay/distfiles /overlay/job_out
 
@@ -330,7 +333,7 @@ jobs:
             -v "${{ github.workspace }}:/overlay" \
             -v "${{ github.workspace }}/cache/gentoo-tree:/var/db/repos/gentoo" \
             -v "${{ github.workspace }}/cache/distfiles:/var/cache/distfiles" \
-            gentoo/stage3 /overlay/build_script.sh
+            gentoo/stage3 bash /overlay/build_script.sh
 
       - name: Upload Intermediate Artifact
         if: steps.check_bin.outputs.skip == 'false'
@@ -361,6 +364,7 @@ jobs:
         run: |
           mkdir -p public_binhost
           cat > deploy_script.sh << 'EOF'
+          #!/bin/bash
           set -euo pipefail
           mkdir -p /overlay/public_binhost
           cd /overlay/public_binhost
@@ -401,7 +405,7 @@ jobs:
           EOF
           chmod +x deploy_script.sh
 
-          docker run --rm -v "${{ github.workspace }}:/overlay" -w /overlay gentoo/stage3 /overlay/deploy_script.sh
+          docker run --rm -v "${{ github.workspace }}:/overlay" -w /overlay gentoo/stage3 bash /overlay/deploy_script.sh
 
           FILE_LIST=$(ls -1 public_binhost/*.gpkg.tar public_binhost/*.tbz2 2>/dev/null | xargs -I{} basename {} | sort || echo "(no packages yet)")
           cat > public_binhost/index.html << HTML
