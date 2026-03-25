@@ -92,11 +92,15 @@ jobs:
                   print(f"WARNING: get_latest_commit({repo_url}) failed: {e}")
               return None
 
+          # FIXED: Mango changed their GitHub URL from mango to mangowc
           mango_dir = Path("gui-wm/mangowc")
           if mango_dir.exists():
-              for eb in mango_dir.glob("mangowc-12.7.ebuild"):
-                  target = mango_dir / "mangowc-0.12.7.ebuild"
-                  if not target.exists(): eb.rename(target)
+              for eb in mango_dir.glob("*.ebuild"):
+                  with open(eb) as f: content = f.read()
+                  new_content = re.sub(r'mangowm/mango/archive', r'mangowm/mangowc/archive', content)
+                  if new_content != content:
+                      with open(eb, "w") as f: f.write(new_content)
+                      print(f"Updated Mango URL in {eb.name}")
 
           proton_dir = Path("games-util/protonplus-bin")
           if proton_dir.exists():
@@ -198,8 +202,7 @@ jobs:
             -v "${{ github.workspace }}:/overlay" \
             -v "${{ github.workspace }}/cache/gentoo-tree:/var/db/repos/gentoo" \
             -v "${{ github.workspace }}/cache/distfiles:/var/cache/distfiles" \
-            -w /overlay \
-            gentoo/stage3 bash /overlay/manifest_script.sh
+            -w /overlay gentoo/stage3 bash /overlay/manifest_script.sh
 
       - name: 3. Commit and Push
         run: |
@@ -219,6 +222,7 @@ jobs:
               if git pull --rebase origin main; then
                 git push
               else
+                echo "ERROR: Rebase conflict with remote commits. Aborting."
                 git rebase --abort 2>/dev/null || true
                 exit 1
               fi
@@ -293,12 +297,14 @@ jobs:
           set -euo pipefail
           mkdir -p /etc/portage/repos.conf /overlay/distfiles /overlay/job_out
 
+          # FIXED: Added 'harfbuzz opengl' to USE flags and 'ACCEPT_KEYWORDS="~amd64"' for Matugen/Dank
           cat >> /etc/portage/make.conf << 'MAKECONF'
           FEATURES="-userfetch -userpriv -usersandbox -ipc-sandbox -network-sandbox -pid-sandbox"
           DISTDIR="/overlay/distfiles"
           PKGDIR="/overlay/job_out"
-          USE="wayland vulkan pipewire egl gles2 dbus udev elogind -X -xorg -systemd"
+          USE="wayland vulkan pipewire egl gles2 dbus udev elogind harfbuzz opengl -X -xorg -systemd"
           EGIT_CLONE_TYPE="single"
+          ACCEPT_KEYWORDS="~amd64 amd64"
           MAKECONF
 
           if [ ! -f /var/db/repos/gentoo/profiles/eapi ]; then
@@ -306,9 +312,7 @@ jobs:
           fi
 
           emerge --noreplace dev-lang/go dev-lang/rust-bin app-eselect/eselect-repository dev-vcs/git
-          
-          # FIXED: Removed the illegal -q flag from emaint sync
-          eselect repository enable guru && emaint sync -r guru
+          eselect repository enable guru && emaint sync -r guru -q
 
           cat > /etc/portage/repos.conf/gentoo-nexus.conf << 'REPOCONF'
           [gentoo-nexus]
@@ -327,6 +331,13 @@ jobs:
           if [ -f /etc/portage/package.accept_keywords ] || [ -f /etc/portage/package.use ]; then
             etc-update --automode -3 2>/dev/null || true
           fi
+          
+          # Run twice to resolve deep cyclical dependencies (like Qt -> OpenGL)
+          emerge --autounmask=y --autounmask-write --quiet '${{ matrix.package }}' 2>&1 || true
+          if [ -f /etc/portage/package.accept_keywords ] || [ -f /etc/portage/package.use ]; then
+            etc-update --automode -3 2>/dev/null || true
+          fi
+
           emerge --buildpkg --quiet '${{ matrix.package }}'
           EOF
           chmod +x build_script.sh
