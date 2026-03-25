@@ -313,9 +313,9 @@ jobs:
           sync-uri = https://gentoo.osuosl.org/releases/amd64/binpackages/23.0/x86-64/
           REPOCONF
 
-          # 3. FIX: Disable binpkg-request-signature (with a minus) and amputate KDE/GNOME globally
+          # 3. FIX: Disable BOTH signature checks completely
           cat >> /etc/portage/make.conf << 'MAKECONF'
-          FEATURES="-userfetch -userpriv -usersandbox -ipc-sandbox -network-sandbox -pid-sandbox getbinpkg -binpkg-request-signature"
+          FEATURES="-userfetch -userpriv -usersandbox -ipc-sandbox -network-sandbox -pid-sandbox getbinpkg -binpkg-request-signature -binpkg-sig-verify"
           DISTDIR="/overlay/distfiles"
           PKGDIR="/overlay/job_out"
           USE="wayland vulkan pipewire egl gles2 dbus udev elogind harfbuzz opengl X alsa -systemd -kde -gnome"
@@ -328,6 +328,9 @@ jobs:
           if [ ! -f /var/db/repos/gentoo/profiles/eapi ]; then
             emerge-webrsync -q
           fi
+          
+          # Initialize Gentoo's security keys just in case
+          getuto || true
 
           emerge --noreplace dev-lang/go dev-lang/rust-bin app-eselect/eselect-repository dev-vcs/git
           eselect repository enable guru && emaint sync -r guru
