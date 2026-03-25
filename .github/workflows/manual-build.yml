@@ -6,6 +6,12 @@ on:
       atom:
         description: 'Package atom (e.g. gui-wm/niri)'
         required: true
+        type: string
+
+# Prevent duplicate manual builds for the same atom running simultaneously
+concurrency:
+  group: manual-build-${{ github.event.inputs.atom }}
+  cancel-in-progress: false
 
 permissions:
   contents: write
@@ -15,53 +21,164 @@ permissions:
 jobs:
   manual:
     runs-on: ubuntu-latest
+    timeout-minutes: 240
     environment:
       name: github-pages
     steps:
       - name: Checkout
-        uses: actions/checkout@v5
+        uses: actions/checkout@v4
+
+      - name: Get week number for cache key
+        id: week
+        run: echo "key=$(date +%Y-%U)" >> "$GITHUB_OUTPUT"
+
+      - name: Cache Gentoo portage tree
+        uses: actions/cache@v4
+        with:
+          path: ${{ github.workspace }}/cache/gentoo-tree
+          key: gentoo-tree-${{ runner.os }}-${{ steps.week.outputs.key }}
+          restore-keys: |
+            gentoo-tree-${{ runner.os }}-
 
       - name: Build Binary Asset
         run: |
-          docker run --rm -v ${{ github.workspace }}:/overlay gentoo/stage3 sh -c "
-            set -e
-            mkdir -p /var/db/repos/gentoo /etc/portage/repos.conf
-            
-            # 1. Strict Sandboxing & Permission Overrides
-            echo 'FEATURES=\"-userfetch -userpriv -usersandbox -ipc-sandbox -network-sandbox -pid-sandbox\"' >> /etc/portage/make.conf
-            echo 'DISTDIR=\"/overlay/distfiles\"' >> /etc/portage/make.conf
-            mkdir -p /overlay/distfiles
+          mkdir -p job_out
+          mkdir -p "${{ github.workspace }}/cache/gentoo-tree"
+          mkdir -p "${{ github.workspace }}/cache/distfiles"
 
-            emerge-webrsync -q
+          docker run --rm \
+            -v "${{ github.workspace }}:/overlay" \
+            -v "${{ github.workspace }}/cache/gentoo-tree:/var/db/repos/gentoo" \
+            -v "${{ github.workspace }}/cache/distfiles:/var/cache/distfiles" \
+            gentoo/stage3 sh -c "
+              set -euo pipefail
 
-            # 2. Pre-install heavy toolchains to prevent Actions timeouts
-            emerge --noreplace dev-lang/go dev-lang/rust-bin
+              mkdir -p /etc/portage/repos.conf /overlay/distfiles /overlay/job_out
 
-            # 3. Enable GURU for dependencies
-            emerge --noreplace app-eselect/eselect-repository dev-vcs/git
-            eselect repository enable guru
-            emaint sync -r guru
+              cat >> /etc/portage/make.conf << 'MAKECONF'
+          FEATURES=\"-userfetch -userpriv -usersandbox -ipc-sandbox -network-sandbox -pid-sandbox\"
+          DISTDIR=\"/overlay/distfiles\"
+          PKGDIR=\"/overlay/job_out\"
+          USE=\"wayland vulkan pipewire -X -systemd\"
+          EGIT_CLONE_TYPE=\"single\"
+          MAKECONF
 
-            # 4. Configure Overlay & Global USE flags
-            echo 'USE=\"wayland vulkan pipewire -X -systemd\"' >> /etc/portage/make.conf
-            echo -e '[gentoo-nexus]\nlocation = /overlay\nmasters = gentoo\npriority = 9999' > /etc/portage/repos.conf/gentoo-nexus.conf
-            echo -e '[guru]\nlocation = /var/db/repos/guru\nmasters = gentoo' >> /etc/portage/repos.conf/guru.conf
+              if [ ! -f /var/db/repos/gentoo/profiles/eapi ]; then
+                echo 'No cached tree, running emerge-webrsync...'
+                emerge-webrsync -q
+              else
+                echo 'Using cached portage tree.'
+              fi
 
-            # 5. Build the requested package
-            emerge --autounmask=y --autounmask-write --autounmask-continue --buildpkg --quiet ${{ github.event.inputs.atom }}
+              emerge --noreplace dev-lang/go dev-lang/rust-bin
 
-            # 6. Setup Binhost Index (Checking for modern .gpkg.tar format)
-            mkdir -p /overlay/public_binhost
-            cp -r /var/cache/binpkgs/* /overlay/public_binhost/ 2>/dev/null || true
-            cd /overlay/public_binhost
-            
-            if ls *.gpkg.tar 1>/dev/null 2>&1; then
+              emerge --noreplace app-eselect/eselect-repository dev-vcs/git
+              eselect repository enable guru
+              emaint sync -r guru -q
+
+              cat > /etc/portage/repos.conf/gentoo-nexus.conf << 'REPOCONF'
+          [gentoo-nexus]
+          location = /overlay
+          masters = gentoo
+          priority = 9999
+          REPOCONF
+
+              cat > /etc/portage/repos.conf/guru.conf << 'REPOCONF'
+          [guru]
+          location = /var/db/repos/guru
+          masters = gentoo
+          REPOCONF
+
+              emerge --autounmask=y --autounmask-write --quiet \
+                '${{ github.event.inputs.atom }}' 2>&1 || true
+
+              if [ -f /etc/portage/package.accept_keywords ] || \
+                 [ -f /etc/portage/package.use ]; then
+                etc-update --automode -3 2>/dev/null || true
+              fi
+
+              emerge --buildpkg --quiet '${{ github.event.inputs.atom }}'
+
+              mkdir -p /overlay/public_binhost
+              cd /overlay/public_binhost
+
+              echo 'Fetching existing packages from live binhost...'
+              wget -q -r -nd -np -e robots=off \
+                -A '*.gpkg.tar,*.tbz2' \
+                https://ackerman-00.github.io/gentoo-nexus/ 2>/dev/null || true
+
+              cp -r /overlay/job_out/* /overlay/public_binhost/ 2>/dev/null || true
+
+              python3 << 'PYEOF'
+          import portage.versions
+          from pathlib import Path
+          from collections import defaultdict
+          from functools import cmp_to_key
+
+          pkg_dir = Path('/overlay/public_binhost')
+          groups = defaultdict(list)
+
+          for f in list(pkg_dir.glob('*.gpkg.tar')) + list(pkg_dir.glob('*.tbz2')):
+              basename = f.name.replace('.gpkg.tar', '').replace('.tbz2', '')
+              parts = portage.versions.pkgsplit(basename)
+              if parts:
+                  pkg_name = parts
+                  ver      = parts
+                  rev      = parts
+                  ver_str  = ver + ('-' + rev if rev != 'r0' else '')
+                  groups[pkg_name].append((ver_str, f))
+              else:
+                  print(f'WARNING: pkgsplit could not parse {f.name}, skipping cleanup.')
+
+          def ver_cmp(a, b):
+              return portage.versions.vercmp(a, b)
+
+          for pkg_name, items in groups.items():
+              if len(items) > 1:
+                  items.sort(key=cmp_to_key(ver_cmp))
+                  for old_ver, old_file in items[:-1]:
+                      print(f'Removing old: {old_file.name}')
+                      old_file.unlink()
+          print('Old version cleanup done via native Portage vercmp.')
+          PYEOF
+
+              if ls *.gpkg.tar 1>/dev/null 2>&1 || ls *.tbz2 1>/dev/null 2>&1; then
+                echo 'PKGDIR=\"/overlay/public_binhost\"' >> /etc/portage/make.conf
                 emaint binhost --fix
-            fi
-            
-            touch .nojekyll
-            chown -R $(id -u):$(id -g) /overlay/public_binhost
-          "
+                echo 'Packages index regenerated.'
+              else
+                echo 'WARNING: No binary packages found in binhost.'
+              fi
+
+              touch .nojekyll
+            "
+
+          FILE_LIST=$(ls -1 public_binhost/*.gpkg.tar public_binhost/*.tbz2 2>/dev/null \
+            | xargs -I{} basename {} | sort || echo "(no packages yet)")
+
+          cat > public_binhost/index.html << HTML
+          <!DOCTYPE html>
+          <html>
+          <head>
+            <meta charset="utf-8">
+            <title>Gentoo Nexus Binhost</title>
+            <style>
+              body { font-family: monospace; background: #1a1a1a; color: #e0e0e0; padding: 2em; }
+              h1   { color: #a6e22e; }
+              a    { color: #66d9ef; }
+              pre  { background: #2a2a2a; padding: 1em; border-radius: 4px; }
+            </style>
+          </head>
+          <body>
+            <h1>Gentoo Nexus Binhost</h1>
+            <p>Last manual build: <strong>${{ github.event.inputs.atom }}</strong></p>
+            <p>Binary packages for the
+               <a href="https://github.com/ackerman-00/gentoo-nexus">gentoo-nexus</a> overlay.
+            </p>
+            <pre>${FILE_LIST}</pre>
+          </body>
+          </html>
+          HTML
 
       - name: Upload Pages Artifact
         uses: actions/upload-pages-artifact@v3
