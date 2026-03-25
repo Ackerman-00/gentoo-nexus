@@ -23,7 +23,6 @@ src_install() {
     dobin dgop
     
     insinto /etc/dgop
-    # FIXED: Safely check if the sample file exists before trying to install it
     if [ -f config.sample.toml ]; then
         newins config.sample.toml config.toml
     fi
