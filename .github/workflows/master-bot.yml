@@ -296,6 +296,15 @@ jobs:
           mkdir -p /etc/portage/package.accept_keywords
           mkdir -p /etc/portage/package.license
           mkdir -p /etc/portage/package.use
+          mkdir -p /etc/portage/package.mask
+
+          # 1. Break the tiff/webp circular dependency loop
+          echo "media-libs/tiff -webp" > /etc/portage/package.use/circular
+
+          # 2. Lock LLVM to version 21 to prevent Mesa conflicts
+          echo ">=llvm-core/llvm-22" > /etc/portage/package.mask/llvm
+          echo ">=llvm-core/libclc-22" >> /etc/portage/package.mask/llvm
+          echo ">=llvm-core/clang-22" >> /etc/portage/package.mask/llvm
 
           # Link the Official Gentoo Binhost for brutal stealing
           cat > /etc/portage/binrepos.conf/gentoo.conf << 'REPOCONF'
@@ -304,12 +313,12 @@ jobs:
           sync-uri = https://gentoo.osuosl.org/releases/amd64/binpackages/23.0/x86-64/
           REPOCONF
 
-          # Added getbinpkg features and forced defaults
+          # 3. FIX: Disable binpkg-request-signature (with a minus) and amputate KDE/GNOME globally
           cat >> /etc/portage/make.conf << 'MAKECONF'
-          FEATURES="-userfetch -userpriv -usersandbox -ipc-sandbox -network-sandbox -pid-sandbox getbinpkg binpkg-request-signature"
+          FEATURES="-userfetch -userpriv -usersandbox -ipc-sandbox -network-sandbox -pid-sandbox getbinpkg -binpkg-request-signature"
           DISTDIR="/overlay/distfiles"
           PKGDIR="/overlay/job_out"
-          USE="wayland vulkan pipewire egl gles2 dbus udev elogind harfbuzz opengl X alsa -systemd"
+          USE="wayland vulkan pipewire egl gles2 dbus udev elogind harfbuzz opengl X alsa -systemd -kde -gnome"
           EGIT_CLONE_TYPE="single"
           ACCEPT_KEYWORDS="~amd64 amd64"
           ACCEPT_LICENSE="*"
@@ -340,7 +349,14 @@ jobs:
           echo "*/*::guru **" >> /etc/portage/package.accept_keywords/guru
           echo "*/* *" >> /etc/portage/package.license/all
 
-          # Added --getbinpkg and --binpkg-respect-use=n directly to the commands to be completely bulletproof
+          # 4. Pre-install mate-polkit so the build doesn't try to guess an agent
+          emerge --autounmask=y --autounmask-write --getbinpkg --binpkg-respect-use=n --quiet mate-extra/mate-polkit 2>&1 || true
+          if [ -f /etc/portage/package.use ] || ls /etc/portage/package.use/* 1> /dev/null 2>&1; then
+            etc-update --automode -3 2>/dev/null || true
+          fi
+          emerge --getbinpkg --binpkg-respect-use=n --quiet mate-extra/mate-polkit
+
+          # Build target
           emerge --autounmask=y --autounmask-write --getbinpkg --binpkg-respect-use=n --quiet '${{ matrix.package }}' 2>&1 || true
           if [ -f /etc/portage/package.use ] || ls /etc/portage/package.use/* 1> /dev/null 2>&1; then
             etc-update --automode -3 2>/dev/null || true
