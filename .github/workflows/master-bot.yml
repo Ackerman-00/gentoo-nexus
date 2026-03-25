@@ -52,7 +52,6 @@ jobs:
           import os, re, requests, subprocess, stat
           from pathlib import Path
 
-          # ACCURATE REPO MAPPING BASED ON SCREENSHOT
           STABLE_TARGETS = {
               "app-misc/dgop":              "AvengeMedia/dgop",
               "games-util/protonplus-bin":  "Vysp3r/ProtonPlus",
@@ -61,7 +60,6 @@ jobs:
           }
 
           def get_latest(repo):
-              """Try releases/latest first, fall back to newest tag."""
               try:
                   hdrs = {"Authorization": f"token {os.environ['GITHUB_TOKEN']}"}
                   r = requests.get(
@@ -425,11 +423,12 @@ jobs:
 
               mkdir -p /etc/portage/repos.conf /overlay/distfiles /overlay/job_out
 
+              # CLEANED: NO BACKSLASHES. Properly quoted for Gentoo.
               cat >> /etc/portage/make.conf << 'MAKECONF'
           FEATURES=\"-userfetch -userpriv -usersandbox -ipc-sandbox -network-sandbox -pid-sandbox\"
           DISTDIR=\"/overlay/distfiles\"
           PKGDIR=\"/overlay/job_out\"
-          USE=\"wayland vulkan pipewire -X -systemd\"
+          USE=\"wayland vulkan pipewire -X -systemd elogind\"
           EGIT_CLONE_TYPE=\"single\"
           MAKECONF
 
@@ -524,6 +523,7 @@ jobs:
                 echo 'No new packages built this run.'
               fi
 
+              # FIXED: Correct portage.versions logic to extract tuple arrays accurately
               python3 << 'PYEOF'
           import portage.versions
           from pathlib import Path

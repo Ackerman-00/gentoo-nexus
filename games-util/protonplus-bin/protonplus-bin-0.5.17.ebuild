@@ -23,7 +23,7 @@ RDEPEND="${DEPEND}"
 BDEPEND="
 	$(vala_depend)
 	dev-build/meson
-	dev-util/appstream-glib
+	dev-libs/appstream-glib
 	dev-util/desktop-file-utils
 	sys-devel/gettext
 	virtual/pkgconfig
