@@ -218,6 +218,7 @@ jobs:
               if git pull --rebase origin main; then
                 git push
               else
+                echo "ERROR: Rebase conflict with remote commits. Aborting."
                 git rebase --abort 2>/dev/null || true
                 exit 1
               fi
@@ -292,17 +293,19 @@ jobs:
           set -euo pipefail
           mkdir -p /etc/portage/repos.conf /overlay/distfiles /overlay/job_out
           
-          # FIXED: Create config directories explicitly
           mkdir -p /etc/portage/package.accept_keywords
           mkdir -p /etc/portage/package.license
           mkdir -p /etc/portage/package.use
 
+          # FIXED: Restored 'X' to USE flags and added absolute ACCEPT_LICENSE
           cat >> /etc/portage/make.conf << 'MAKECONF'
           FEATURES="-userfetch -userpriv -usersandbox -ipc-sandbox -network-sandbox -pid-sandbox"
           DISTDIR="/overlay/distfiles"
           PKGDIR="/overlay/job_out"
-          USE="wayland vulkan pipewire egl gles2 dbus udev elogind harfbuzz opengl -X -xorg -systemd"
+          USE="wayland vulkan pipewire egl gles2 dbus udev elogind harfbuzz opengl X -systemd"
           EGIT_CLONE_TYPE="single"
+          ACCEPT_KEYWORDS="~amd64 amd64"
+          ACCEPT_LICENSE="*"
           MAKECONF
 
           if [ ! -f /var/db/repos/gentoo/profiles/eapi ]; then
@@ -325,13 +328,14 @@ jobs:
           masters = gentoo
           REPOCONF
 
-          # FIXED: Absolute Master Override. Forces Portage to accept ALL live/testing packages from our repos.
-          echo "*/*::gentoo-nexus **" >> /etc/portage/package.accept_keywords/nexus
-          echo "*/*::guru **" >> /etc/portage/package.accept_keywords/guru
-          
-          # FIXED: Automatically accept all custom and GPL licenses
-          echo "*/* *" >> /etc/portage/package.license/all
+          # FIXED: The Nuclear Option. Accepts absolutely ALL experimental packages unconditionally.
+          echo "*/* **" > /etc/portage/package.accept_keywords/10-unmask-all
 
+          emerge --autounmask=y --autounmask-write --quiet '${{ matrix.package }}' 2>&1 || true
+          if [ -f /etc/portage/package.use ] || ls /etc/portage/package.use/* 1> /dev/null 2>&1; then
+            etc-update --automode -3 2>/dev/null || true
+          fi
+          
           emerge --autounmask=y --autounmask-write --quiet '${{ matrix.package }}' 2>&1 || true
           if [ -f /etc/portage/package.use ] || ls /etc/portage/package.use/* 1> /dev/null 2>&1; then
             etc-update --automode -3 2>/dev/null || true
