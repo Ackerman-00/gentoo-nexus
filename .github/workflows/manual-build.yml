@@ -63,7 +63,9 @@ jobs:
           fi
 
           emerge --noreplace dev-lang/go dev-lang/rust-bin app-eselect/eselect-repository dev-vcs/git
-          eselect repository enable guru && emaint sync -r guru -q
+          
+          # FIXED: Removed the illegal -q flag from emaint sync
+          eselect repository enable guru && emaint sync -r guru
 
           cat > /etc/portage/repos.conf/gentoo-nexus.conf << 'REPOCONF'
           [gentoo-nexus]
