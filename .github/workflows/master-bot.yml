@@ -92,15 +92,11 @@ jobs:
                   print(f"WARNING: get_latest_commit({repo_url}) failed: {e}")
               return None
 
-          # FIXED: Mango changed their GitHub URL from mango to mangowc
           mango_dir = Path("gui-wm/mangowc")
           if mango_dir.exists():
-              for eb in mango_dir.glob("*.ebuild"):
-                  with open(eb) as f: content = f.read()
-                  new_content = re.sub(r'mangowm/mango/archive', r'mangowm/mangowc/archive', content)
-                  if new_content != content:
-                      with open(eb, "w") as f: f.write(new_content)
-                      print(f"Updated Mango URL in {eb.name}")
+              for eb in mango_dir.glob("mangowc-12.7.ebuild"):
+                  target = mango_dir / "mangowc-0.12.7.ebuild"
+                  if not target.exists(): eb.rename(target)
 
           proton_dir = Path("games-util/protonplus-bin")
           if proton_dir.exists():
@@ -295,24 +291,28 @@ jobs:
           cat > build_script.sh << 'EOF'
           #!/bin/bash
           set -euo pipefail
-          mkdir -p /etc/portage/repos.conf /overlay/distfiles /overlay/job_out
+          mkdir -p /etc/portage/repos.conf /etc/portage/package.accept_keywords /etc/portage/package.license /overlay/distfiles /overlay/job_out
 
-          # FIXED: Added 'harfbuzz opengl' to USE flags and 'ACCEPT_KEYWORDS="~amd64"' for Matugen/Dank
+          # 1. THE MASK BYPASS: Globally unmask all testing, live, and licensed packages
+          echo "*/* ~amd64" > /etc/portage/package.accept_keywords/10-testing
+          echo "*/* **" > /etc/portage/package.accept_keywords/20-live
+          echo "*/* *" > /etc/portage/package.license/10-all
+
           cat >> /etc/portage/make.conf << 'MAKECONF'
           FEATURES="-userfetch -userpriv -usersandbox -ipc-sandbox -network-sandbox -pid-sandbox"
           DISTDIR="/overlay/distfiles"
           PKGDIR="/overlay/job_out"
           USE="wayland vulkan pipewire egl gles2 dbus udev elogind harfbuzz opengl -X -xorg -systemd"
           EGIT_CLONE_TYPE="single"
-          ACCEPT_KEYWORDS="~amd64 amd64"
           MAKECONF
 
           if [ ! -f /var/db/repos/gentoo/profiles/eapi ]; then
             emerge-webrsync -q
           fi
 
+          # 2. THE SYNC FIX: Replaced emaint sync with the bulletproof emerge --sync
           emerge --noreplace dev-lang/go dev-lang/rust-bin app-eselect/eselect-repository dev-vcs/git
-          eselect repository enable guru && emaint sync -r guru -q
+          eselect repository enable guru && emerge --sync guru
 
           cat > /etc/portage/repos.conf/gentoo-nexus.conf << 'REPOCONF'
           [gentoo-nexus]
@@ -327,16 +327,12 @@ jobs:
           masters = gentoo
           REPOCONF
 
+          # 3. Two-pass autounmask to resolve cyclical dependencies (like Qt -> OpenGL)
           emerge --autounmask=y --autounmask-write --quiet '${{ matrix.package }}' 2>&1 || true
-          if [ -f /etc/portage/package.accept_keywords ] || [ -f /etc/portage/package.use ]; then
-            etc-update --automode -3 2>/dev/null || true
-          fi
+          etc-update --automode -3 2>/dev/null || true
           
-          # Run twice to resolve deep cyclical dependencies (like Qt -> OpenGL)
           emerge --autounmask=y --autounmask-write --quiet '${{ matrix.package }}' 2>&1 || true
-          if [ -f /etc/portage/package.accept_keywords ] || [ -f /etc/portage/package.use ]; then
-            etc-update --automode -3 2>/dev/null || true
-          fi
+          etc-update --automode -3 2>/dev/null || true
 
           emerge --buildpkg --quiet '${{ matrix.package }}'
           EOF
