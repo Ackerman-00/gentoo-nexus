@@ -8,7 +8,6 @@ on:
         required: true
         type: string
 
-# Prevent duplicate manual builds for the same atom running simultaneously
 concurrency:
   group: manual-build-${{ github.event.inputs.atom }}
   cancel-in-progress: false
@@ -46,72 +45,51 @@ jobs:
           mkdir -p "${{ github.workspace }}/cache/gentoo-tree"
           mkdir -p "${{ github.workspace }}/cache/distfiles"
 
-          docker run --rm \
-            -v "${{ github.workspace }}:/overlay" \
-            -v "${{ github.workspace }}/cache/gentoo-tree:/var/db/repos/gentoo" \
-            -v "${{ github.workspace }}/cache/distfiles:/var/cache/distfiles" \
-            gentoo/stage3 sh -c "
-              set -euo pipefail
+          cat > build_script.sh << 'EOF'
+          set -euo pipefail
+          mkdir -p /etc/portage/repos.conf /overlay/distfiles /overlay/job_out
 
-              mkdir -p /etc/portage/repos.conf /overlay/distfiles /overlay/job_out
-
-              # FIXED: No backslashes. Added elogind.
-              cat >> /etc/portage/make.conf << 'MAKECONF'
+          cat >> /etc/portage/make.conf << 'MAKECONF'
           FEATURES="-userfetch -userpriv -usersandbox -ipc-sandbox -network-sandbox -pid-sandbox"
           DISTDIR="/overlay/distfiles"
           PKGDIR="/overlay/job_out"
-          USE="wayland vulkan pipewire -X -systemd elogind"
+          USE="wayland vulkan pipewire egl gles2 dbus udev elogind -X -xorg -systemd"
           EGIT_CLONE_TYPE="single"
           MAKECONF
 
-              if [ ! -f /var/db/repos/gentoo/profiles/eapi ]; then
-                echo 'No cached tree, running emerge-webrsync...'
-                emerge-webrsync -q
-              else
-                echo 'Using cached portage tree.'
-              fi
+          if [ ! -f /var/db/repos/gentoo/profiles/eapi ]; then
+            emerge-webrsync -q
+          fi
 
-              emerge --noreplace dev-lang/go dev-lang/rust-bin
+          emerge --noreplace dev-lang/go dev-lang/rust-bin app-eselect/eselect-repository dev-vcs/git
+          eselect repository enable guru && emaint sync -r guru -q
 
-              emerge --noreplace app-eselect/eselect-repository dev-vcs/git
-              eselect repository enable guru
-              emaint sync -r guru -q
-
-              cat > /etc/portage/repos.conf/gentoo-nexus.conf << 'REPOCONF'
+          cat > /etc/portage/repos.conf/gentoo-nexus.conf << 'REPOCONF'
           [gentoo-nexus]
           location = /overlay
           masters = gentoo
           priority = 9999
           REPOCONF
 
-              cat > /etc/portage/repos.conf/guru.conf << 'REPOCONF'
+          cat > /etc/portage/repos.conf/guru.conf << 'REPOCONF'
           [guru]
           location = /var/db/repos/guru
           masters = gentoo
           REPOCONF
 
-              emerge --autounmask=y --autounmask-write --quiet \
-                '${{ github.event.inputs.atom }}' 2>&1 || true
+          emerge --autounmask=y --autounmask-write --quiet '${{ github.event.inputs.atom }}' 2>&1 || true
+          if [ -f /etc/portage/package.accept_keywords ] || [ -f /etc/portage/package.use ]; then
+            etc-update --automode -3 2>/dev/null || true
+          fi
+          emerge --buildpkg --quiet '${{ github.event.inputs.atom }}'
 
-              if [ -f /etc/portage/package.accept_keywords ] || \
-                 [ -f /etc/portage/package.use ]; then
-                etc-update --automode -3 2>/dev/null || true
-              fi
+          mkdir -p /overlay/public_binhost
+          cd /overlay/public_binhost
 
-              emerge --buildpkg --quiet '${{ github.event.inputs.atom }}'
+          wget -q -r -nd -np -e robots=off -A '*.gpkg.tar,*.tbz2' https://ackerman-00.github.io/gentoo-nexus/ 2>/dev/null || true
+          cp -r /overlay/job_out/* /overlay/public_binhost/ 2>/dev/null || true
 
-              mkdir -p /overlay/public_binhost
-              cd /overlay/public_binhost
-
-              echo 'Fetching existing packages from live binhost...'
-              wget -q -r -nd -np -e robots=off \
-                -A '*.gpkg.tar,*.tbz2' \
-                https://ackerman-00.github.io/gentoo-nexus/ 2>/dev/null || true
-
-              cp -r /overlay/job_out/* /overlay/public_binhost/ 2>/dev/null || true
-
-              # FIXED: Correct tuple assignments and ver_cmp logic
-              python3 << 'PYEOF'
+          python3 << 'PYEOF'
           import portage.versions
           from pathlib import Path
           from collections import defaultdict
@@ -124,63 +102,35 @@ jobs:
               basename = f.name.replace('.gpkg.tar', '').replace('.tbz2', '')
               parts = portage.versions.pkgsplit(basename)
               if parts:
-                  pkg_name = parts
-                  ver      = parts
-                  rev      = parts
-                  ver_str  = ver + ('-' + rev if rev != 'r0' else '')
+                  pkg_name, ver, rev = parts, parts, parts
+                  ver_str = ver + ('-' + rev if rev != 'r0' else '')
                   groups[pkg_name].append((ver_str, f))
-              else:
-                  print(f'WARNING: pkgsplit could not parse {f.name}, skipping cleanup.')
 
-          def ver_cmp(a, b):
-              return portage.versions.vercmp(a, b)
+          def ver_cmp(a, b): return portage.versions.vercmp(a, b)
 
           for pkg_name, items in groups.items():
               if len(items) > 1:
                   items.sort(key=cmp_to_key(ver_cmp))
-                  for old_ver, old_file in items[:-1]:
-                      print(f'Removing old: {old_file.name}')
-                      old_file.unlink()
-          print('Old version cleanup done via native Portage vercmp.')
+                  for old_ver, old_file in items[:-1]: old_file.unlink()
           PYEOF
 
-              if ls *.gpkg.tar 1>/dev/null 2>&1 || ls *.tbz2 1>/dev/null 2>&1; then
-                # FIXED: No backslashes in make.conf writes
-                echo 'PKGDIR="/overlay/public_binhost"' >> /etc/portage/make.conf
-                emaint binhost --fix
-                echo 'Packages index regenerated.'
-              else
-                echo 'WARNING: No binary packages found in binhost.'
-              fi
+          if ls *.gpkg.tar 1>/dev/null 2>&1 || ls *.tbz2 1>/dev/null 2>&1; then
+            echo 'PKGDIR="/overlay/public_binhost"' >> /etc/portage/make.conf
+            emaint binhost --fix
+          fi
+          touch .nojekyll
+          EOF
+          chmod +x build_script.sh
 
-              touch .nojekyll
-            "
+          docker run --rm \
+            -v "${{ github.workspace }}:/overlay" \
+            -v "${{ github.workspace }}/cache/gentoo-tree:/var/db/repos/gentoo" \
+            -v "${{ github.workspace }}/cache/distfiles:/var/cache/distfiles" \
+            gentoo/stage3 /overlay/build_script.sh
 
-          FILE_LIST=$(ls -1 public_binhost/*.gpkg.tar public_binhost/*.tbz2 2>/dev/null \
-            | xargs -I{} basename {} | sort || echo "(no packages yet)")
-
+          FILE_LIST=$(ls -1 public_binhost/*.gpkg.tar public_binhost/*.tbz2 2>/dev/null | xargs -I{} basename {} | sort || echo "(no packages yet)")
           cat > public_binhost/index.html << HTML
-          <!DOCTYPE html>
-          <html>
-          <head>
-            <meta charset="utf-8">
-            <title>Gentoo Nexus Binhost</title>
-            <style>
-              body { font-family: monospace; background: #1a1a1a; color: #e0e0e0; padding: 2em; }
-              h1   { color: #a6e22e; }
-              a    { color: #66d9ef; }
-              pre  { background: #2a2a2a; padding: 1em; border-radius: 4px; }
-            </style>
-          </head>
-          <body>
-            <h1>Gentoo Nexus Binhost</h1>
-            <p>Last manual build: <strong>${{ github.event.inputs.atom }}</strong></p>
-            <p>Binary packages for the
-               <a href="https://github.com/ackerman-00/gentoo-nexus">gentoo-nexus</a> overlay.
-            </p>
-            <pre>${FILE_LIST}</pre>
-          </body>
-          </html>
+          <!DOCTYPE html><html><head><title>Gentoo Nexus Binhost</title><style>body { font-family: monospace; background: #1a1a1a; color: #e0e0e0; padding: 2em; } a { color: #66d9ef; }</style></head><body><h1>Gentoo Nexus Binhost</h1><pre>${FILE_LIST}</pre></body></html>
           HTML
 
       - name: Upload Pages Artifact
