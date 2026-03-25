@@ -49,15 +49,17 @@ jobs:
           #!/bin/bash
           set -euo pipefail
           mkdir -p /etc/portage/repos.conf /overlay/distfiles /overlay/job_out
+          
+          mkdir -p /etc/portage/package.accept_keywords
+          mkdir -p /etc/portage/package.license
+          mkdir -p /etc/portage/package.use
 
-          # FIXED: Added 'harfbuzz opengl' to USE flags and 'ACCEPT_KEYWORDS="~amd64"'
           cat >> /etc/portage/make.conf << 'MAKECONF'
           FEATURES="-userfetch -userpriv -usersandbox -ipc-sandbox -network-sandbox -pid-sandbox"
           DISTDIR="/overlay/distfiles"
           PKGDIR="/overlay/job_out"
           USE="wayland vulkan pipewire egl gles2 dbus udev elogind harfbuzz opengl -X -xorg -systemd"
           EGIT_CLONE_TYPE="single"
-          ACCEPT_KEYWORDS="~amd64 amd64"
           MAKECONF
 
           if [ ! -f /var/db/repos/gentoo/profiles/eapi ]; then
@@ -65,7 +67,7 @@ jobs:
           fi
 
           emerge --noreplace dev-lang/go dev-lang/rust-bin app-eselect/eselect-repository dev-vcs/git
-          eselect repository enable guru && emaint sync -r guru -q
+          eselect repository enable guru && emaint sync -r guru
 
           cat > /etc/portage/repos.conf/gentoo-nexus.conf << 'REPOCONF'
           [gentoo-nexus]
@@ -80,14 +82,17 @@ jobs:
           masters = gentoo
           REPOCONF
 
+          echo "*/*::gentoo-nexus **" >> /etc/portage/package.accept_keywords/nexus
+          echo "*/*::guru **" >> /etc/portage/package.accept_keywords/guru
+          echo "*/* *" >> /etc/portage/package.license/all
+
           emerge --autounmask=y --autounmask-write --quiet '${{ github.event.inputs.atom }}' 2>&1 || true
-          if [ -f /etc/portage/package.accept_keywords ] || [ -f /etc/portage/package.use ]; then
+          if [ -f /etc/portage/package.use ] || ls /etc/portage/package.use/* 1> /dev/null 2>&1; then
             etc-update --automode -3 2>/dev/null || true
           fi
           
-          # Run twice for deep cyclical dependencies
           emerge --autounmask=y --autounmask-write --quiet '${{ github.event.inputs.atom }}' 2>&1 || true
-          if [ -f /etc/portage/package.accept_keywords ] || [ -f /etc/portage/package.use ]; then
+          if [ -f /etc/portage/package.use ] || ls /etc/portage/package.use/* 1> /dev/null 2>&1; then
             etc-update --automode -3 2>/dev/null || true
           fi
 
