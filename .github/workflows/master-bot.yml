@@ -281,7 +281,7 @@ jobs:
             echo "skip=true" >> "$GITHUB_OUTPUT"
           fi
 
-      - name: Build Binary
+      - name: Build Binary (Zero-Compile Active)
         if: steps.check_bin.outputs.skip == 'false'
         run: |
           mkdir -p job_out
@@ -291,21 +291,29 @@ jobs:
           cat > build_script.sh << 'EOF'
           #!/bin/bash
           set -euo pipefail
-          mkdir -p /etc/portage/repos.conf /overlay/distfiles /overlay/job_out
+          mkdir -p /etc/portage/repos.conf /etc/portage/binrepos.conf /overlay/distfiles /overlay/job_out
           
           mkdir -p /etc/portage/package.accept_keywords
           mkdir -p /etc/portage/package.license
           mkdir -p /etc/portage/package.use
 
-          # FIXED: Added 'alsa' to USE flags to satisfy libcanberra dependency
+          # Link the Official Gentoo Binhost for brutal stealing
+          cat > /etc/portage/binrepos.conf/gentoo.conf << 'REPOCONF'
+          [gentoo]
+          priority = 1
+          sync-uri = https://gentoo.osuosl.org/releases/amd64/binpackages/23.0/x86-64/
+          REPOCONF
+
+          # Added getbinpkg features and forced defaults
           cat >> /etc/portage/make.conf << 'MAKECONF'
-          FEATURES="-userfetch -userpriv -usersandbox -ipc-sandbox -network-sandbox -pid-sandbox"
+          FEATURES="-userfetch -userpriv -usersandbox -ipc-sandbox -network-sandbox -pid-sandbox getbinpkg binpkg-request-signature"
           DISTDIR="/overlay/distfiles"
           PKGDIR="/overlay/job_out"
           USE="wayland vulkan pipewire egl gles2 dbus udev elogind harfbuzz opengl X alsa -systemd"
           EGIT_CLONE_TYPE="single"
           ACCEPT_KEYWORDS="~amd64 amd64"
           ACCEPT_LICENSE="*"
+          EMERGE_DEFAULT_OPTS="--getbinpkg --binpkg-respect-use=n --binpkg-changed-deps=y"
           MAKECONF
 
           if [ ! -f /var/db/repos/gentoo/profiles/eapi ]; then
@@ -332,17 +340,18 @@ jobs:
           echo "*/*::guru **" >> /etc/portage/package.accept_keywords/guru
           echo "*/* *" >> /etc/portage/package.license/all
 
-          emerge --autounmask=y --autounmask-write --quiet '${{ matrix.package }}' 2>&1 || true
+          # Added --getbinpkg and --binpkg-respect-use=n directly to the commands to be completely bulletproof
+          emerge --autounmask=y --autounmask-write --getbinpkg --binpkg-respect-use=n --quiet '${{ matrix.package }}' 2>&1 || true
           if [ -f /etc/portage/package.use ] || ls /etc/portage/package.use/* 1> /dev/null 2>&1; then
             etc-update --automode -3 2>/dev/null || true
           fi
           
-          emerge --autounmask=y --autounmask-write --quiet '${{ matrix.package }}' 2>&1 || true
+          emerge --autounmask=y --autounmask-write --getbinpkg --binpkg-respect-use=n --quiet '${{ matrix.package }}' 2>&1 || true
           if [ -f /etc/portage/package.use ] || ls /etc/portage/package.use/* 1> /dev/null 2>&1; then
             etc-update --automode -3 2>/dev/null || true
           fi
 
-          emerge --buildpkg --quiet '${{ matrix.package }}'
+          emerge --buildpkg --getbinpkg --binpkg-respect-use=n --quiet '${{ matrix.package }}'
           EOF
           chmod +x build_script.sh
 
