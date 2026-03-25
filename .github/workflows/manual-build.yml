@@ -54,12 +54,12 @@ jobs:
           mkdir -p /etc/portage/package.license
           mkdir -p /etc/portage/package.use
 
-          # FIXED: Restored 'X' to USE flags and added absolute ACCEPT_LICENSE
+          # FIXED: Added 'alsa' to USE flags to satisfy libcanberra dependency
           cat >> /etc/portage/make.conf << 'MAKECONF'
           FEATURES="-userfetch -userpriv -usersandbox -ipc-sandbox -network-sandbox -pid-sandbox"
           DISTDIR="/overlay/distfiles"
           PKGDIR="/overlay/job_out"
-          USE="wayland vulkan pipewire egl gles2 dbus udev elogind harfbuzz opengl X -systemd"
+          USE="wayland vulkan pipewire egl gles2 dbus udev elogind harfbuzz opengl X alsa -systemd"
           EGIT_CLONE_TYPE="single"
           ACCEPT_KEYWORDS="~amd64 amd64"
           ACCEPT_LICENSE="*"
@@ -85,8 +85,9 @@ jobs:
           masters = gentoo
           REPOCONF
 
-          # FIXED: The Nuclear Option. Accepts absolutely ALL experimental packages unconditionally.
-          echo "*/* **" > /etc/portage/package.accept_keywords/10-unmask-all
+          echo "*/*::gentoo-nexus **" >> /etc/portage/package.accept_keywords/nexus
+          echo "*/*::guru **" >> /etc/portage/package.accept_keywords/guru
+          echo "*/* *" >> /etc/portage/package.license/all
 
           emerge --autounmask=y --autounmask-write --quiet '${{ github.event.inputs.atom }}' 2>&1 || true
           if [ -f /etc/portage/package.use ] || ls /etc/portage/package.use/* 1> /dev/null 2>&1; then
