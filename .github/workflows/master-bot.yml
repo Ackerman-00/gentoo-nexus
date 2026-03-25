@@ -198,7 +198,8 @@ jobs:
             -v "${{ github.workspace }}:/overlay" \
             -v "${{ github.workspace }}/cache/gentoo-tree:/var/db/repos/gentoo" \
             -v "${{ github.workspace }}/cache/distfiles:/var/cache/distfiles" \
-            -w /overlay gentoo/stage3 bash /overlay/manifest_script.sh
+            -w /overlay \
+            gentoo/stage3 bash /overlay/manifest_script.sh
 
       - name: 3. Commit and Push
         run: |
@@ -218,7 +219,6 @@ jobs:
               if git pull --rebase origin main; then
                 git push
               else
-                echo "ERROR: Rebase conflict with remote commits. Aborting."
                 git rebase --abort 2>/dev/null || true
                 exit 1
               fi
@@ -306,7 +306,9 @@ jobs:
           fi
 
           emerge --noreplace dev-lang/go dev-lang/rust-bin app-eselect/eselect-repository dev-vcs/git
-          eselect repository enable guru && emaint sync -r guru -q
+          
+          # FIXED: Removed the illegal -q flag from emaint sync
+          eselect repository enable guru && emaint sync -r guru
 
           cat > /etc/portage/repos.conf/gentoo-nexus.conf << 'REPOCONF'
           [gentoo-nexus]
