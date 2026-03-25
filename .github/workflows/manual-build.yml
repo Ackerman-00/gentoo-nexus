@@ -50,12 +50,14 @@ jobs:
           set -euo pipefail
           mkdir -p /etc/portage/repos.conf /overlay/distfiles /overlay/job_out
 
+          # FIXED: Added 'harfbuzz opengl' to USE flags and 'ACCEPT_KEYWORDS="~amd64"'
           cat >> /etc/portage/make.conf << 'MAKECONF'
           FEATURES="-userfetch -userpriv -usersandbox -ipc-sandbox -network-sandbox -pid-sandbox"
           DISTDIR="/overlay/distfiles"
           PKGDIR="/overlay/job_out"
-          USE="wayland vulkan pipewire egl gles2 dbus udev elogind -X -xorg -systemd"
+          USE="wayland vulkan pipewire egl gles2 dbus udev elogind harfbuzz opengl -X -xorg -systemd"
           EGIT_CLONE_TYPE="single"
+          ACCEPT_KEYWORDS="~amd64 amd64"
           MAKECONF
 
           if [ ! -f /var/db/repos/gentoo/profiles/eapi ]; then
@@ -63,9 +65,7 @@ jobs:
           fi
 
           emerge --noreplace dev-lang/go dev-lang/rust-bin app-eselect/eselect-repository dev-vcs/git
-          
-          # FIXED: Removed the illegal -q flag from emaint sync
-          eselect repository enable guru && emaint sync -r guru
+          eselect repository enable guru && emaint sync -r guru -q
 
           cat > /etc/portage/repos.conf/gentoo-nexus.conf << 'REPOCONF'
           [gentoo-nexus]
@@ -84,13 +84,58 @@ jobs:
           if [ -f /etc/portage/package.accept_keywords ] || [ -f /etc/portage/package.use ]; then
             etc-update --automode -3 2>/dev/null || true
           fi
-          emerge --buildpkg --quiet '${{ github.event.inputs.atom }}'
+          
+          # Run twice for deep cyclical dependencies
+          emerge --autounmask=y --autounmask-write --quiet '${{ github.event.inputs.atom }}' 2>&1 || true
+          if [ -f /etc/portage/package.accept_keywords ] || [ -f /etc/portage/package.use ]; then
+            etc-update --automode -3 2>/dev/null || true
+          fi
 
+          emerge --buildpkg --quiet '${{ github.event.inputs.atom }}'
+          EOF
+          chmod +x build_script.sh
+
+          docker run --rm \
+            -v "${{ github.workspace }}:/overlay" \
+            -v "${{ github.workspace }}/cache/gentoo-tree:/var/db/repos/gentoo" \
+            -v "${{ github.workspace }}/cache/distfiles:/var/cache/distfiles" \
+            gentoo/stage3 bash /overlay/build_script.sh
+
+      - name: Upload Intermediate Artifact
+        uses: actions/upload-artifact@v4
+        with:
+          name: binpkg-manual-build
+          path: job_out/
+          if-no-files-found: warn
+
+  deploy-binhost:
+    needs: manual
+    runs-on: ubuntu-latest
+    timeout-minutes: 30
+    environment:
+      name: github-pages
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Download all binary artifacts
+        uses: actions/download-artifact@v4
+        with:
+          path: combined/
+          pattern: binpkg-*
+          merge-multiple: true
+
+      - name: Build binhost index and remove old versions
+        run: |
+          mkdir -p public_binhost
+          cat > deploy_script.sh << 'EOF'
+          #!/bin/bash
+          set -euo pipefail
           mkdir -p /overlay/public_binhost
           cd /overlay/public_binhost
 
           wget -q -r -nd -np -e robots=off -A '*.gpkg.tar,*.tbz2' https://ackerman-00.github.io/gentoo-nexus/ 2>/dev/null || true
-          cp -r /overlay/job_out/* /overlay/public_binhost/ 2>/dev/null || true
+          if [ -d /overlay/combined ]; then cp -r /overlay/combined/* /overlay/public_binhost/ 2>/dev/null || true; fi
 
           python3 << 'PYEOF'
           import portage.versions
@@ -123,17 +168,13 @@ jobs:
           fi
           touch .nojekyll
           EOF
-          chmod +x build_script.sh
+          chmod +x deploy_script.sh
 
-          docker run --rm \
-            -v "${{ github.workspace }}:/overlay" \
-            -v "${{ github.workspace }}/cache/gentoo-tree:/var/db/repos/gentoo" \
-            -v "${{ github.workspace }}/cache/distfiles:/var/cache/distfiles" \
-            gentoo/stage3 bash /overlay/build_script.sh
+          docker run --rm -v "${{ github.workspace }}:/overlay" -w /overlay gentoo/stage3 bash /overlay/deploy_script.sh
 
           FILE_LIST=$(ls -1 public_binhost/*.gpkg.tar public_binhost/*.tbz2 2>/dev/null | xargs -I{} basename {} | sort || echo "(no packages yet)")
           cat > public_binhost/index.html << HTML
-          <!DOCTYPE html><html><head><title>Gentoo Nexus Binhost</title><style>body { font-family: monospace; background: #1a1a1a; color: #e0e0e0; padding: 2em; } a { color: #66d9ef; }</style></head><body><h1>Gentoo Nexus Binhost</h1><pre>${FILE_LIST}</pre></body></html>
+          <!DOCTYPE html><html><head><title>Gentoo Nexus Binhost</title><style>body { font-family: monospace; background: #1a1a1a; color: #e0e0e0; padding: 2em; } a { color: #66d9ef; }</style></head><body><h1>Gentoo Nexus Binhost</h1><p>Last manual build: <strong>${{ github.event.inputs.atom }}</strong></p><pre>${FILE_LIST}</pre></body></html>
           HTML
 
       - name: Upload Pages Artifact
