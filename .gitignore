@@ -9,3 +9,7 @@ distfiles/
 cache/
 job_out/
 *.sh
+distfiles/
+cache/
+job_out/
+*.sh
