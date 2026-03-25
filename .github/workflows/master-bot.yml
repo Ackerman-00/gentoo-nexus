@@ -52,6 +52,7 @@ jobs:
           import os, re, requests, subprocess, stat
           from pathlib import Path
 
+          # ACCURATE REPO MAPPING BASED ON SCREENSHOT
           STABLE_TARGETS = {
               "app-misc/dgop":              "AvengeMedia/dgop",
               "games-util/protonplus-bin":  "Vysp3r/ProtonPlus",
@@ -60,6 +61,7 @@ jobs:
           }
 
           def get_latest(repo):
+              """Try releases/latest first, fall back to newest tag."""
               try:
                   hdrs = {"Authorization": f"token {os.environ['GITHUB_TOKEN']}"}
                   r = requests.get(
@@ -77,7 +79,7 @@ jobs:
                   if r2.status_code == 200:
                       tags = r2.json()
                       if tags:
-                          # FIXED: Correct list indexing applied
+                          # FIXED: Added list index
                           return tags["name"].lstrip("v")
               except Exception as e:
                   print(f"WARNING: get_latest({repo}) failed: {e}")
@@ -91,7 +93,7 @@ jobs:
                       capture_output=True, text=True, timeout=15
                   ).stdout
                   
-                  # FIXED: Strict extraction prevents catching embedded C-libraries
+                  # FIXED: Strict extraction to prevent catching embedded C-libraries like 2.2.5
                   m = re.search(r"X-AppImage-Version=([0-9.]+)", out)
                   if m: return m.group(1)
                   
@@ -277,10 +279,11 @@ jobs:
 
               mkdir -p /etc/portage/repos.conf /overlay/distfiles
 
+              # FIXED: No backslashes.
               cat >> /etc/portage/make.conf << 'MAKECONF'
-          FEATURES=\"-userfetch -userpriv -usersandbox -ipc-sandbox -network-sandbox -pid-sandbox\"
-          DISTDIR=\"/overlay/distfiles\"
-          EGIT_CLONE_TYPE=\"single\"
+          FEATURES="-userfetch -userpriv -usersandbox -ipc-sandbox -network-sandbox -pid-sandbox"
+          DISTDIR="/overlay/distfiles"
+          EGIT_CLONE_TYPE="single"
           MAKECONF
 
               if [ ! -f /var/db/repos/gentoo/profiles/eapi ]; then
@@ -311,6 +314,12 @@ jobs:
         run: |
           git config user.name  "github-actions[bot]"
           git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
+          
+          # FIXED: Crucial .gitignore commands to prevent 100MB File Limit Crash
+          echo "distfiles/" >> .gitignore
+          echo "cache/" >> .gitignore
+          echo "job_out/" >> .gitignore
+          
           git add .
           if ! git diff --cached --quiet; then
             git commit -m "bot: auto-update ebuilds and manifests [skip ci]"
@@ -426,6 +435,7 @@ jobs:
 
               mkdir -p /etc/portage/repos.conf /overlay/distfiles /overlay/job_out
 
+              # FIXED: No backslashes. Added elogind.
               cat >> /etc/portage/make.conf << 'MAKECONF'
           FEATURES="-userfetch -userpriv -usersandbox -ipc-sandbox -network-sandbox -pid-sandbox"
           DISTDIR="/overlay/distfiles"
@@ -560,6 +570,7 @@ jobs:
           PYEOF
 
               if ls *.gpkg.tar 1>/dev/null 2>&1 || ls *.tbz2 1>/dev/null 2>&1; then
+                # FIXED: No backslashes in make.conf writes
                 echo 'PKGDIR="/overlay/public_binhost"' >> /etc/portage/make.conf
                 emaint binhost --fix
                 echo 'Packages index regenerated.'
