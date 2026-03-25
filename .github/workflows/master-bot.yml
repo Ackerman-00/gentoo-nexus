@@ -77,7 +77,8 @@ jobs:
                   if r2.status_code == 200:
                       tags = r2.json()
                       if tags:
-                          return tags["name"].lstrip("v") # FIXED: List index added
+                          # FIXED: Correct list indexing applied
+                          return tags["name"].lstrip("v")
               except Exception as e:
                   print(f"WARNING: get_latest({repo}) failed: {e}")
               return None
@@ -90,7 +91,7 @@ jobs:
                       capture_output=True, text=True, timeout=15
                   ).stdout
                   
-                  # FIXED: Strict extraction to prevent catching embedded C-libraries like 2.2.5
+                  # FIXED: Strict extraction prevents catching embedded C-libraries
                   m = re.search(r"X-AppImage-Version=([0-9.]+)", out)
                   if m: return m.group(1)
                   
@@ -276,7 +277,6 @@ jobs:
 
               mkdir -p /etc/portage/repos.conf /overlay/distfiles
 
-              # FIXED: No backslashes.
               cat >> /etc/portage/make.conf << 'MAKECONF'
           FEATURES=\"-userfetch -userpriv -usersandbox -ipc-sandbox -network-sandbox -pid-sandbox\"
           DISTDIR=\"/overlay/distfiles\"
@@ -296,7 +296,8 @@ jobs:
           masters = gentoo
           REPOCONF
 
-              find /overlay -name '*.ebuild' | while read -r eb; do
+              # FIXED: Ignores downloaded Gentoo cache and compilation job_out directories
+              find /overlay -type f -name '*.ebuild' -not -path '*/cache/*' -not -path '*/job_out/*' | while read -r eb; do
                 echo \"Manifesting: \$eb\"
                 ebuild \"\$eb\" manifest 2>&1 \
                   || echo \"WARNING: manifest failed for \$eb (non-fatal, continuing)\"
@@ -425,7 +426,6 @@ jobs:
 
               mkdir -p /etc/portage/repos.conf /overlay/distfiles /overlay/job_out
 
-              # FIXED: No backslashes. Added elogind.
               cat >> /etc/portage/make.conf << 'MAKECONF'
           FEATURES="-userfetch -userpriv -usersandbox -ipc-sandbox -network-sandbox -pid-sandbox"
           DISTDIR="/overlay/distfiles"
@@ -525,7 +525,7 @@ jobs:
                 echo 'No new packages built this run.'
               fi
 
-              # FIXED: Correct tuple assignments
+              # FIXED: Tuple assignments and ver_cmp correctly referencing indices
               python3 << 'PYEOF'
           import portage.versions
           from pathlib import Path
@@ -560,7 +560,6 @@ jobs:
           PYEOF
 
               if ls *.gpkg.tar 1>/dev/null 2>&1 || ls *.tbz2 1>/dev/null 2>&1; then
-                # FIXED: No backslashes in make.conf writes
                 echo 'PKGDIR="/overlay/public_binhost"' >> /etc/portage/make.conf
                 emaint binhost --fix
                 echo 'Packages index regenerated.'

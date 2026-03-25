@@ -55,7 +55,6 @@ jobs:
 
               mkdir -p /etc/portage/repos.conf /overlay/distfiles /overlay/job_out
 
-              # FIXED: No backslashes. Added elogind.
               cat >> /etc/portage/make.conf << 'MAKECONF'
           FEATURES="-userfetch -userpriv -usersandbox -ipc-sandbox -network-sandbox -pid-sandbox"
           DISTDIR="/overlay/distfiles"
@@ -110,7 +109,7 @@ jobs:
 
               cp -r /overlay/job_out/* /overlay/public_binhost/ 2>/dev/null || true
 
-              # FIXED: Correct tuple assignments
+              # FIXED: Correct tuple assignments and ver_cmp logic
               python3 << 'PYEOF'
           import portage.versions
           from pathlib import Path
@@ -145,7 +144,6 @@ jobs:
           PYEOF
 
               if ls *.gpkg.tar 1>/dev/null 2>&1 || ls *.tbz2 1>/dev/null 2>&1; then
-                # FIXED: No backslashes in make.conf writes
                 echo 'PKGDIR="/overlay/public_binhost"' >> /etc/portage/make.conf
                 emaint binhost --fix
                 echo 'Packages index regenerated.'
