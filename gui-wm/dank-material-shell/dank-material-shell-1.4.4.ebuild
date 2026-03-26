@@ -10,6 +10,7 @@ LICENSE="GPL-3.0-or-later"
 SLOT="0"
 KEYWORDS=""
 
+# Required to allow go modules to download during src_compile
 RESTRICT="network-sandbox"
 
 DEPEND="
@@ -25,13 +26,14 @@ RDEPEND="${DEPEND}"
 BDEPEND=">=dev-lang/go-1.21"
 
 src_compile() {
-    cd core || die
+    cd core || die "Failed to enter core directory"
     export GOPROXY="https://proxy.golang.org,direct"
-    go build -o dms ./cmd/dms || die
+    go build -o dms ./cmd/dms || die "Go build failed"
 }
 
 src_install() {
     dobin core/dms
+    
     insinto /usr/share/quickshell/dms
     doins -r quickshell/*
 }
