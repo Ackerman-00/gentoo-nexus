@@ -39,25 +39,24 @@ jobs:
         run: |
           mkdir -p job_out
           mkdir -p "${{ github.workspace }}/cache/gentoo-tree"
-          # 🚀 THE FIX: Correctly targeting the github.workspace!
           mkdir -p "${{ github.workspace }}/cache/distfiles"
 
           cat > build_script.sh << 'EOF'
           #!/bin/bash
           set -euo pipefail
           
-          # 🚀 1. MUST SYNC PORTAGE TREE FIRST BEFORE SETTING PROFILE!
           if [ ! -f /var/db/repos/gentoo/profiles/eapi ]; then
             emerge-webrsync -q
           fi
           
           getuto || true
 
-          # 🚀 2. NOW WE CAN SAFELY SET THE DESKTOP PROFILE
           eselect profile set default/linux/amd64/23.0/desktop
           
           # 🚀 FIX: Upgrade Niri to support LLVM 22 natively locally
           find /overlay -type f -name '*.ebuild' -exec sed -i 's/LLVM_COMPAT=( {18..21} )/LLVM_COMPAT=( {18..22} )/g' {} +
+          # 🚀 FIX: Auto-heal Niri dependency typo locally
+          find /overlay -type f -name '*.ebuild' -exec sed -i 's/gui-libs\/display-info/media-libs\/libdisplay-info/g' {} +
 
           mkdir -p /etc/portage/repos.conf /etc/portage/binrepos.conf /overlay/distfiles /overlay/job_out
           mkdir -p /etc/portage/package.accept_keywords
@@ -73,7 +72,6 @@ jobs:
           echo "sys-auth/elogind pam policykit" > /etc/portage/package.use/elogind
           echo "media-libs/tiff -webp" > /etc/portage/package.use/circular
 
-          # 🚀 THE DUAL-BINHOST SCAVENGER CONFIGURATION 🚀
           cat > /etc/portage/binrepos.conf/nexus.conf << 'REPOCONF'
           [gentoo-nexus-sf]
           priority = 9999
@@ -84,7 +82,6 @@ jobs:
           sync-uri = https://ackerman-00.github.io/gentoo-nexus/
           REPOCONF
 
-          # 🚀 MESA 26 ENABLED: VIDEO_CARDS restriction removed to match binhost!
           cat > /etc/portage/make.conf << 'MAKECONF'
           FEATURES="-userfetch -userpriv -usersandbox -ipc-sandbox -network-sandbox -pid-sandbox getbinpkg buildpkg -binpkg-request-signature -binpkg-sig-verify"
           EMERGE_DEFAULT_OPTS="--getbinpkg --usepkg --binpkg-respect-use=y --binpkg-changed-deps=y"
@@ -116,7 +113,12 @@ jobs:
           echo "*/*::gentoo-nexus **" >> /etc/portage/package.accept_keywords/nexus
           echo "*/*::guru **" >> /etc/portage/package.accept_keywords/guru
           echo "*/* *" >> /etc/portage/package.license/all
-          
+
+          # 🚀 FIX: Break the Circular Dependency Loop for Harfbuzz
+          echo "media-libs/harfbuzz -glib" > /etc/portage/package.use/harfbuzz
+          emerge --oneshot --quiet media-libs/harfbuzz
+          rm /etc/portage/package.use/harfbuzz
+
           # Force manifest update since we potentially modified ebuilds
           find /overlay -type f -name '*.ebuild' -exec ebuild {} manifest \; 2>/dev/null || true
 
