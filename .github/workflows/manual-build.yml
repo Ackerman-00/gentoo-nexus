@@ -60,7 +60,9 @@ jobs:
           
           echo "media-libs/tiff -webp" > /etc/portage/package.use/circular
 
-          cat > /etc/portage/package.mask/llvm << 'LLVMMASK'
+          # 🚀 THE TITANIUM BEHEMOTH LOCKS 🚀
+          # Explicitly ban LLVM 22 and Mesa 25+ so live ebuilds cannot force source compiles
+          cat > /etc/portage/package.mask/behemoths << 'BEHEMOTHS'
           >=llvm-core/llvm-22
           >=llvm-core/libclc-22
           >=llvm-core/clang-22
@@ -68,7 +70,11 @@ jobs:
           >=llvm-core/lld-22
           >=llvm-core/llvm-common-22
           >=llvm-core/clang-common-22
-          LLVMMASK
+          >=media-libs/mesa-25
+          BEHEMOTHS
+
+          # Force every package to tightly bind to LLVM 21
+          echo "*/* llvm_slot_21 -llvm_slot_22" > /etc/portage/package.use/llvm_slots
 
           # 🚀 THE DUAL-BINHOST SCAVENGER CONFIGURATION 🚀
           cat > /etc/portage/binrepos.conf/gentoo.conf << 'REPOCONF'
