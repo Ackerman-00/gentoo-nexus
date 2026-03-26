@@ -70,17 +70,21 @@ jobs:
           >=llvm-core/clang-common-22
           LLVMMASK
 
+          # 🚀 THE DUAL-BINHOST SCAVENGER CONFIGURATION 🚀
           cat > /etc/portage/binrepos.conf/gentoo.conf << 'REPOCONF'
-          [gentoo-nexus-binhost]
+          [gentoo-nexus-sf]
           priority = 9999
           sync-uri = https://gentoo-nexus.sourceforge.io/
+
+          [gentoo-nexus-gh]
+          priority = 9998
+          sync-uri = https://ackerman-00.github.io/gentoo-nexus/
 
           [gentoo]
           priority = 1
           sync-uri = https://gentoo.osuosl.org/releases/amd64/binpackages/23.0/x86-64/
           REPOCONF
 
-          # 🚀 FIX: RESPECT-USE=Y forces Portage to reject systemd binaries
           cat > /etc/portage/make.conf << 'MAKECONF'
           FEATURES="-userfetch -userpriv -usersandbox -ipc-sandbox -network-sandbox -pid-sandbox getbinpkg buildpkg -binpkg-request-signature -binpkg-sig-verify"
           EMERGE_DEFAULT_OPTS="--getbinpkg --usepkg --binpkg-respect-use=y --binpkg-changed-deps=y"
