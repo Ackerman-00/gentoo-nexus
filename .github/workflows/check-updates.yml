@@ -263,21 +263,32 @@ jobs:
         id: check_bin
         run: |
           PKG="${{ matrix.package }}"
-          PN=$(basename "$PKG")
-          # 🚀 Pointed directly to SourceForge now
           BINHOST="https://gentoo-nexus.sourceforge.io/Packages"
 
+          # Always build -9999 (live git versions)
           if ls "${PKG}"/*-9999.ebuild 1>/dev/null 2>&1; then
             echo "skip=false" >> "$GITHUB_OUTPUT"
             exit 0
           fi
 
-          VER=$(python3 -c "import glob, re, sys; e=sorted(glob.glob('${PKG}/*.ebuild')); sys.exit(0) if not e else print(re.search(r'-([0-9][0-9.]*)\.ebuild$', e[-1]).group(1) if re.search(r'-([0-9][0-9.]*)\.ebuild$', e[-1]) else '')")
-          
-          if [ -z "$VER" ] || ! curl --fail -sL "$BINHOST" 2>/dev/null | grep -qF "${PN}-${VER}"; then
+          # Bulletproof extraction: Gets exactly what Gentoo parses (e.g., 0.1.2-r1)
+          EBUILD_FILE=$(ls -1 "${PKG}"/*.ebuild 2>/dev/null | sort -V | tail -n 1)
+          if [ -z "$EBUILD_FILE" ]; then
             echo "skip=false" >> "$GITHUB_OUTPUT"
-          else
+            exit 0
+          fi
+          
+          PN=$(basename "${PKG}")
+          VER=$(basename "${EBUILD_FILE}" | sed -E "s/^${PN}-//; s/\.ebuild$//")
+          
+          echo "Checking SourceForge for CPV: ${PKG}-${VER}"
+          
+          if curl --fail -sL "$BINHOST" 2>/dev/null | grep -q "^CPV: ${PKG}-${VER}$"; then
+            echo "✅ Package exists on SourceForge. Skipping build."
             echo "skip=true" >> "$GITHUB_OUTPUT"
+          else
+            echo "🚀 Package not found on SourceForge. Building!"
+            echo "skip=false" >> "$GITHUB_OUTPUT"
           fi
 
       - name: Build Binary (Zero-Compile Active)
@@ -316,7 +327,6 @@ jobs:
           >=llvm-core/clang-common-22
           LLVMMASK
 
-          # 🚀 SOURCEFORGE BINHOST UNLOCKED 🚀
           cat > /etc/portage/binrepos.conf/gentoo.conf << 'REPOCONF'
           [gentoo-nexus-binhost]
           priority = 9999
@@ -327,9 +337,10 @@ jobs:
           sync-uri = https://gentoo.osuosl.org/releases/amd64/binpackages/23.0/x86-64/
           REPOCONF
 
+          # 🚀 FIX: RESPECT-USE=Y forces Portage to reject systemd binaries
           cat > /etc/portage/make.conf << 'MAKECONF'
           FEATURES="-userfetch -userpriv -usersandbox -ipc-sandbox -network-sandbox -pid-sandbox getbinpkg buildpkg -binpkg-request-signature -binpkg-sig-verify"
-          EMERGE_DEFAULT_OPTS="--getbinpkg --usepkg --binpkg-respect-use=n --binpkg-changed-deps=y"
+          EMERGE_DEFAULT_OPTS="--getbinpkg --usepkg --binpkg-respect-use=y --binpkg-changed-deps=y"
           DISTDIR="/overlay/distfiles"
           PKGDIR="/overlay/job_out"
           USE="wayland vulkan pipewire egl gles2 dbus udev elogind harfbuzz opengl X alsa pam -systemd -kde -gnome -test"
