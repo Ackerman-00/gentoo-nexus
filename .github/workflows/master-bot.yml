@@ -305,16 +305,23 @@ jobs:
           sync-uri = https://gentoo.osuosl.org/releases/amd64/binpackages/23.0/x86-64/
           REPOCONF
 
-          # FIX: Disable BOTH signature checks completely
-          cat >> /etc/portage/make.conf << 'MAKECONF'
-          FEATURES="-userfetch -userpriv -usersandbox -ipc-sandbox -network-sandbox -pid-sandbox getbinpkg -binpkg-request-signature -binpkg-sig-verify"
+          # 1. Break the tiff/webp circular dependency loop
+          echo "media-libs/tiff -webp" > /etc/portage/package.use/circular
+
+          # 2. Lock LLVM to version 21 to prevent Mesa conflicts
+          echo ">=llvm-core/llvm-22" > /etc/portage/package.mask/llvm
+          echo ">=llvm-core/libclc-22" >> /etc/portage/package.mask/llvm
+          echo ">=llvm-core/clang-22" >> /etc/portage/package.mask/llvm
+
+          # PHASE 1: NO BINARY HOSTS. Force compilation of circular dependencies
+          cat > /etc/portage/make.conf << 'MAKECONF'
+          FEATURES="-userfetch -userpriv -usersandbox -ipc-sandbox -network-sandbox -pid-sandbox"
           DISTDIR="/overlay/distfiles"
           PKGDIR="/overlay/job_out"
           USE="wayland vulkan pipewire egl gles2 dbus udev elogind harfbuzz opengl X alsa -systemd -kde -gnome"
           EGIT_CLONE_TYPE="single"
           ACCEPT_KEYWORDS="~amd64 amd64"
           ACCEPT_LICENSE="*"
-          EMERGE_DEFAULT_OPTS="--getbinpkg --binpkg-respect-use=n --binpkg-changed-deps=y"
           MAKECONF
 
           if [ ! -f /var/db/repos/gentoo/profiles/eapi ]; then
@@ -344,15 +351,14 @@ jobs:
           echo "*/*::guru **" >> /etc/portage/package.accept_keywords/guru
           echo "*/* *" >> /etc/portage/package.license/all
 
-          # 1. Break the tiff/webp circular dependency loop
-          echo "media-libs/tiff -webp" > /etc/portage/package.use/circular
           # Force source compilation just for these two to break the loop
           emerge --oneshot --quiet media-libs/tiff media-libs/libwebp
 
-          # 2. Lock LLVM to version 21 to prevent Mesa conflicts
-          echo ">=llvm-core/llvm-22" > /etc/portage/package.mask/llvm
-          echo ">=llvm-core/libclc-22" >> /etc/portage/package.mask/llvm
-          echo ">=llvm-core/clang-22" >> /etc/portage/package.mask/llvm
+          # PHASE 2: BINARY HOSTS ACTIVE. Now we can turn on the sledgehammer
+          cat >> /etc/portage/make.conf << 'MAKECONF'
+          FEATURES="-userfetch -userpriv -usersandbox -ipc-sandbox -network-sandbox -pid-sandbox getbinpkg -binpkg-request-signature -binpkg-sig-verify"
+          EMERGE_DEFAULT_OPTS="--getbinpkg --binpkg-respect-use=n --binpkg-changed-deps=y"
+          MAKECONF
 
           # 4. Pre-install mate-polkit so the build doesn't try to guess an agent
           emerge --autounmask=y --autounmask-write --getbinpkg --binpkg-respect-use=n --quiet mate-extra/mate-polkit 2>&1 || true
