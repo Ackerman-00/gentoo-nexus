@@ -20,7 +20,7 @@ permissions:
 jobs:
   manual:
     runs-on: ubuntu-latest
-    timeout-minutes: 240
+    timeout-minutes: 360
     environment:
       name: github-pages
     steps:
@@ -125,7 +125,7 @@ jobs:
           REPOCONF
 
           cat >> /etc/portage/make.conf << 'MAKECONF'
-          FEATURES="-userfetch -userpriv -usersandbox -ipc-sandbox -network-sandbox -pid-sandbox getbinpkg -binpkg-request-signature -binpkg-sig-verify"
+          FEATURES="-userfetch -userpriv -usersandbox -ipc-sandbox -network-sandbox -pid-sandbox getbinpkg buildpkg -binpkg-request-signature -binpkg-sig-verify"
           EMERGE_DEFAULT_OPTS="--getbinpkg --binpkg-respect-use=n --binpkg-changed-deps=y"
           MAKECONF
 
