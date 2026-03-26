@@ -1,4 +1,4 @@
-name: Gentoo Nexus Master Bot
+name: Gentoo Nexus Check Updates
 
 on:
   schedule:
@@ -14,8 +14,6 @@ concurrency:
 
 permissions:
   contents: write
-  pages: write
-  id-token: write
 
 jobs:
   update-and-manifest:
@@ -261,12 +259,13 @@ jobs:
         id: artname
         run: echo "name=binpkg-$(echo '${{ matrix.package }}' | tr '/' '-')" >> "$GITHUB_OUTPUT"
 
-      - name: Check Binhost Status
+      - name: Check SourceForge Binhost Status
         id: check_bin
         run: |
           PKG="${{ matrix.package }}"
           PN=$(basename "$PKG")
-          BINHOST="https://ackerman-00.github.io/gentoo-nexus/Packages"
+          # 🚀 Pointed directly to SourceForge now
+          BINHOST="https://gentoo-nexus.sourceforge.io/Packages"
 
           if ls "${PKG}"/*-9999.ebuild 1>/dev/null 2>&1; then
             echo "skip=false" >> "$GITHUB_OUTPUT"
@@ -298,19 +297,15 @@ jobs:
           mkdir -p /etc/portage/package.use
           mkdir -p /etc/portage/package.mask
 
-          # Banish systemd & KDE dependencies completely
           echo "sys-apps/systemd" >> /etc/portage/package.mask/systemd
           echo "sys-apps/gentoo-systemd-integration" >> /etc/portage/package.mask/systemd
           echo "kde-plasma/polkit-kde-agent" >> /etc/portage/package.mask/systemd
           
-          # Force Polkit to use elogind
           echo "sys-auth/polkit -systemd elogind" > /etc/portage/package.use/polkit
           echo "sys-auth/elogind pam policykit" > /etc/portage/package.use/elogind
           
-          # Break the tiff/webp circular dependency loop
           echo "media-libs/tiff -webp" > /etc/portage/package.use/circular
 
-          # Lock down ALL of LLVM 22 to prevent Mesa/llvmgold masking chain conflicts
           cat > /etc/portage/package.mask/llvm << 'LLVMMASK'
           >=llvm-core/llvm-22
           >=llvm-core/libclc-22
@@ -321,18 +316,17 @@ jobs:
           >=llvm-core/clang-common-22
           LLVMMASK
 
-          # 🚀 UNLOCK BINHOSTS IMMEDIATELY 
+          # 🚀 SOURCEFORGE BINHOST UNLOCKED 🚀
           cat > /etc/portage/binrepos.conf/gentoo.conf << 'REPOCONF'
           [gentoo-nexus-binhost]
           priority = 9999
-          sync-uri = https://ackerman-00.github.io/gentoo-nexus/
+          sync-uri = https://gentoo-nexus.sourceforge.io/
 
           [gentoo]
           priority = 1
           sync-uri = https://gentoo.osuosl.org/releases/amd64/binpackages/23.0/x86-64/
           REPOCONF
 
-          # Configure global make.conf with getbinpkg AND usepkg explicitly 
           cat > /etc/portage/make.conf << 'MAKECONF'
           FEATURES="-userfetch -userpriv -usersandbox -ipc-sandbox -network-sandbox -pid-sandbox getbinpkg buildpkg -binpkg-request-signature -binpkg-sig-verify"
           EMERGE_DEFAULT_OPTS="--getbinpkg --usepkg --binpkg-respect-use=n --binpkg-changed-deps=y"
@@ -350,7 +344,6 @@ jobs:
           
           getuto || true
 
-          # Fetch basic tools as pre-compiled binaries instantly
           emerge --noreplace --quiet dev-lang/go dev-lang/rust-bin app-eselect/eselect-repository dev-vcs/git
           eselect repository enable guru && emaint sync -r guru
 
@@ -371,12 +364,9 @@ jobs:
           echo "*/*::guru **" >> /etc/portage/package.accept_keywords/guru
           echo "*/* *" >> /etc/portage/package.license/all
 
-          # 🚀 THE ULTIMATE LOOP BREAKER 🚀
-          # Isolate tiff and libwebp, explicitly nullify default opts, and emerge sequentially
           EMERGE_DEFAULT_OPTS="" emerge --oneshot --quiet --usepkg=n --getbinpkg=n media-libs/tiff
           EMERGE_DEFAULT_OPTS="" emerge --oneshot --quiet --usepkg=n --getbinpkg=n media-libs/libwebp
 
-          # Build Target
           emerge --autounmask=y --autounmask-write --quiet '${{ matrix.package }}' 2>&1 || true
           if ls /etc/portage/package.use/* 1> /dev/null 2>&1 || [ -f /etc/portage/package.use ]; then
             etc-update --automode -3 2>/dev/null || true
@@ -409,31 +399,39 @@ jobs:
     needs: build-binaries
     runs-on: ubuntu-latest
     timeout-minutes: 30
-    environment:
-      name: github-pages
     steps:
       - name: Checkout
         uses: actions/checkout@v4
 
-      - name: Download all binary artifacts
+      - name: Setup SSH for SourceForge
+        env:
+          SF_SSH_KEY: ${{ secrets.SF_SSH_KEY }}
+        run: |
+          mkdir -p ~/.ssh && chmod 700 ~/.ssh
+          echo "$SF_SSH_KEY" > ~/.ssh/id_ed25519
+          chmod 600 ~/.ssh/id_ed25519
+          ssh-keyscan -t rsa,ecdsa,ed25519 web.sourceforge.net >> ~/.ssh/known_hosts && chmod 644 ~/.ssh/known_hosts
+
+      - name: Download all new binary artifacts
         uses: actions/download-artifact@v4
         with:
           path: combined/
           pattern: binpkg-*
           merge-multiple: true
 
-      - name: Build binhost index and remove old versions
+      - name: Fetch current SourceForge state
+        env:
+          SF_USERNAME: ${{ secrets.SF_USERNAME }}
         run: |
           mkdir -p public_binhost
+          rsync -avz -e "ssh" $SF_USERNAME@web.sourceforge.net:/home/project-web/gentoo-nexus/htdocs/ public_binhost/ || true
+          if [ -d combined ]; then cp -r combined/* public_binhost/ 2>/dev/null || true; fi
+
+      - name: Build binhost index and remove old versions
+        run: |
           cat > deploy_script.sh << 'EOF'
           #!/bin/bash
           set -euo pipefail
-          mkdir -p /overlay/public_binhost
-          cd /overlay/public_binhost
-
-          wget -q -r -nd -np -e robots=off -A '*.gpkg.tar,*.tbz2' https://ackerman-00.github.io/gentoo-nexus/ 2>/dev/null || true
-          if [ -d /overlay/combined ]; then cp -r /overlay/combined/* /overlay/public_binhost/ 2>/dev/null || true; fi
-
           python3 << 'PYEOF'
           import portage.versions
           from pathlib import Path
@@ -459,25 +457,21 @@ jobs:
                   for old_ver, old_file in items[:-1]: old_file.unlink()
           PYEOF
 
-          if ls *.gpkg.tar 1>/dev/null 2>&1 || ls *.tbz2 1>/dev/null 2>&1; then
+          if ls /overlay/public_binhost/*.gpkg.tar 1>/dev/null 2>&1 || ls /overlay/public_binhost/*.tbz2 1>/dev/null 2>&1; then
             echo 'PKGDIR="/overlay/public_binhost"' >> /etc/portage/make.conf
             emaint binhost --fix
           fi
-          touch .nojekyll
           EOF
           chmod +x deploy_script.sh
-
           docker run --rm -v "${{ github.workspace }}:/overlay" -w /overlay gentoo/stage3 bash /overlay/deploy_script.sh
 
           FILE_LIST=$(ls -1 public_binhost/*.gpkg.tar public_binhost/*.tbz2 2>/dev/null | xargs -I{} basename {} | sort || echo "(no packages yet)")
           cat > public_binhost/index.html << HTML
-          <!DOCTYPE html><html><head><title>Gentoo Nexus Binhost</title><style>body { font-family: monospace; background: #1a1a1a; color: #e0e0e0; padding: 2em; } a { color: #66d9ef; }</style></head><body><h1>Gentoo Nexus Binhost</h1><pre>${FILE_LIST}</pre></body></html>
+          <!DOCTYPE html><html><head><title>Gentoo Nexus Binhost</title><style>body { font-family: monospace; background: #1a1a1a; color: #e0e0e0; padding: 2em; } a { color: #66d9ef; }</style></head><body><h1>Gentoo Nexus Binhost</h1><p>Last updated by automated checks.</p><pre>${FILE_LIST}</pre></body></html>
           HTML
 
-      - name: Upload Pages Artifact
-        uses: actions/upload-pages-artifact@v3
-        with:
-          path: ./public_binhost/
-
-      - name: Deploy to GitHub Pages
-        uses: actions/deploy-pages@v4
+      - name: Deploy to SourceForge
+        env:
+          SF_USERNAME: ${{ secrets.SF_USERNAME }}
+        run: |
+          rsync -avz --delete -e "ssh" public_binhost/ $SF_USERNAME@web.sourceforge.net:/home/project-web/gentoo-nexus/htdocs/
