@@ -335,12 +335,13 @@ jobs:
           sync-uri = https://ackerman-00.github.io/gentoo-nexus/
           REPOCONF
 
+          # 🚀 FIX: respect-use=n bypasses all source-compile dependency loops!
           cat > /etc/portage/make.conf << 'MAKECONF'
           FEATURES="-userfetch -userpriv -usersandbox -ipc-sandbox -network-sandbox -pid-sandbox getbinpkg buildpkg -binpkg-request-signature -binpkg-sig-verify"
-          EMERGE_DEFAULT_OPTS="--getbinpkg --usepkg --binpkg-respect-use=y --binpkg-changed-deps=y"
+          EMERGE_DEFAULT_OPTS="--getbinpkg --usepkg --binpkg-respect-use=n --binpkg-changed-deps=y"
           DISTDIR="/overlay/distfiles"
           PKGDIR="/overlay/job_out"
-          USE="pipewire egl gles2 vulkan pam -systemd -kde -gnome -test"
+          USE="pipewire egl gles2 vulkan pam -systemd -test"
           VIDEO_CARDS="amdgpu radeonsi nouveau virgl"
           EGIT_CLONE_TYPE="single"
           ACCEPT_KEYWORDS="~amd64 amd64"
@@ -366,11 +367,6 @@ jobs:
           echo "*/*::gentoo-nexus **" >> /etc/portage/package.accept_keywords/nexus
           echo "*/*::guru **" >> /etc/portage/package.accept_keywords/guru
           echo "*/* *" >> /etc/portage/package.license/all
-
-          # 🚀 THE FINAL FIX: Break the Circular Dependency Loop for Harfbuzz (Both flags disabled)
-          echo "media-libs/harfbuzz -glib -introspection" > /etc/portage/package.use/harfbuzz
-          emerge --oneshot --quiet media-libs/harfbuzz
-          rm /etc/portage/package.use/harfbuzz
 
           EMERGE_DEFAULT_OPTS="" emerge --oneshot --quiet --usepkg=n --getbinpkg=n media-libs/tiff media-libs/libwebp
 
