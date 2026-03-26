@@ -41,10 +41,8 @@ jobs:
         env:
           GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
         run: |
-          # 🚀 FIX: Upgrade Niri to support LLVM 22 natively
+          # 🚀 FIX: Upgrade Niri to support LLVM 22 natively to match Mesa 26!
           find . -type f -name '*.ebuild' -exec sed -i 's/LLVM_COMPAT=( {18..21} )/LLVM_COMPAT=( {18..22} )/g' {} +
-          # 🚀 FIX: Auto-heal Niri dependency typo
-          find . -type f -name '*.ebuild' -exec sed -i 's/gui-libs\/display-info/media-libs\/libdisplay-info/g' {} +
 
           python3 << 'EOF'
           import os, re, requests, subprocess, stat
@@ -369,8 +367,8 @@ jobs:
           echo "*/*::guru **" >> /etc/portage/package.accept_keywords/guru
           echo "*/* *" >> /etc/portage/package.license/all
 
-          # 🚀 FIX: Break the Circular Dependency Loop for Harfbuzz
-          echo "media-libs/harfbuzz -glib" > /etc/portage/package.use/harfbuzz
+          # 🚀 THE FINAL FIX: Break the Circular Dependency Loop for Harfbuzz (Both flags disabled)
+          echo "media-libs/harfbuzz -glib -introspection" > /etc/portage/package.use/harfbuzz
           emerge --oneshot --quiet media-libs/harfbuzz
           rm /etc/portage/package.use/harfbuzz
 
