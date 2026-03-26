@@ -55,8 +55,6 @@ jobs:
           
           # 🚀 FIX: Upgrade Niri to support LLVM 22 natively locally
           find /overlay -type f -name '*.ebuild' -exec sed -i 's/LLVM_COMPAT=( {18..21} )/LLVM_COMPAT=( {18..22} )/g' {} +
-          # 🚀 FIX: Auto-heal Niri dependency typo locally
-          find /overlay -type f -name '*.ebuild' -exec sed -i 's/gui-libs\/display-info/media-libs\/libdisplay-info/g' {} +
 
           mkdir -p /etc/portage/repos.conf /etc/portage/binrepos.conf /overlay/distfiles /overlay/job_out
           mkdir -p /etc/portage/package.accept_keywords
@@ -114,11 +112,11 @@ jobs:
           echo "*/*::guru **" >> /etc/portage/package.accept_keywords/guru
           echo "*/* *" >> /etc/portage/package.license/all
 
-          # 🚀 FIX: Break the Circular Dependency Loop for Harfbuzz
-          echo "media-libs/harfbuzz -glib" > /etc/portage/package.use/harfbuzz
+          # 🚀 THE FINAL FIX: Break the Circular Dependency Loop for Harfbuzz (Both flags disabled)
+          echo "media-libs/harfbuzz -glib -introspection" > /etc/portage/package.use/harfbuzz
           emerge --oneshot --quiet media-libs/harfbuzz
           rm /etc/portage/package.use/harfbuzz
-
+          
           # Force manifest update since we potentially modified ebuilds
           find /overlay -type f -name '*.ebuild' -exec ebuild {} manifest \; 2>/dev/null || true
 
