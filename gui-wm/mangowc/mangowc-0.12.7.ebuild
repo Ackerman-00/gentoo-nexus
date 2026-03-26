@@ -3,9 +3,8 @@ EAPI=8
 inherit meson
 
 DESCRIPTION="Wayland compositor based on wlroots and scenefx"
-HOMEPAGE="https://github.com/mangowm/mango"
+HOMEPAGE="https://github.com/mangowm/mangowc"
 SRC_URI="https://github.com/mangowm/mangowc/archive/refs/tags/v${PV}.tar.gz -> ${P}.tar.gz"
-S="${WORKDIR}/mango-${PV}"
 
 LICENSE="CC0-1.0 GPL-3+ MIT"
 SLOT="0"
