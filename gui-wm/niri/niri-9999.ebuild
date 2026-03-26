@@ -2,7 +2,7 @@ EAPI=8
 EGIT_COMMIT="b07bde3ee82dd73115e6b949e4f3f63695da35ea"
 _commit="b07bde3ee82dd73115e6b949e4f3f63695da35ea"
 
-LLVM_COMPAT=( {18..21} )
+LLVM_COMPAT=( {18..22} )
 RUST_MIN_VER="1.82.0"
 
 inherit cargo llvm-r2 optfeature shell-completion git-r3

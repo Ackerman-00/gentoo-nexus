@@ -2,7 +2,7 @@ EAPI=8
 EGIT_COMMIT="a879e5e0896a326adc79c474bf457b8b99011027"
 _commit="a879e5e0896a326adc79c474bf457b8b99011027"
 
-LLVM_COMPAT=( {18..21} )
+LLVM_COMPAT=( {18..22} )
 
 inherit cargo llvm-r2 git-r3
 
