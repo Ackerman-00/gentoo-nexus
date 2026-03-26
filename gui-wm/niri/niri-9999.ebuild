@@ -21,7 +21,7 @@ DEPEND="
     dev-libs/glib:2
     dev-libs/libinput:=
     dev-libs/wayland
-    gui-libs/display-info:=
+    media-libs/libdisplay-info:=
     media-libs/mesa[gbm]
     sys-auth/seatd:=
     virtual/libudev:=
