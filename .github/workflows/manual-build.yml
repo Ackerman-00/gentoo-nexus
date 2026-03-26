@@ -67,12 +67,18 @@ jobs:
           # Break the tiff/webp circular dependency loop
           echo "media-libs/tiff -webp" > /etc/portage/package.use/circular
 
-          # Lock LLVM to version 21 to prevent Mesa conflicts
-          echo ">=llvm-core/llvm-22" > /etc/portage/package.mask/llvm
-          echo ">=llvm-core/libclc-22" >> /etc/portage/package.mask/llvm
-          echo ">=llvm-core/clang-22" >> /etc/portage/package.mask/llvm
+          # Lock down ALL of LLVM 22 to prevent Mesa/llvmgold masking chain conflicts
+          cat > /etc/portage/package.mask/llvm << 'LLVMMASK'
+          >=llvm-core/llvm-22
+          >=llvm-core/libclc-22
+          >=llvm-core/clang-22
+          >=llvm-core/llvmgold-22
+          >=llvm-core/lld-22
+          >=llvm-core/llvm-common-22
+          >=llvm-core/clang-common-22
+          LLVMMASK
 
-          # 🚀 THE FIX: UNLOCK BINHOSTS IMMEDIATELY 
+          # 🚀 UNLOCK BINHOSTS IMMEDIATELY 
           cat > /etc/portage/binrepos.conf/gentoo.conf << 'REPOCONF'
           [gentoo-nexus-binhost]
           priority = 9999
@@ -122,8 +128,8 @@ jobs:
           echo "*/*::guru **" >> /etc/portage/package.accept_keywords/guru
           echo "*/* *" >> /etc/portage/package.license/all
 
-          # Break circular dependency (Will fetch binary if available, else build source)
-          emerge --oneshot --quiet media-libs/tiff media-libs/libwebp sys-auth/polkit mate-extra/mate-polkit
+          # Break circular dependency (Force SOURCE build for these two ONLY to apply USE="-webp")
+          emerge --oneshot --quiet --usepkg=n --getbinpkg=n media-libs/tiff media-libs/libwebp
 
           # Build Target
           emerge --autounmask=y --autounmask-write --quiet '${{ github.event.inputs.atom }}' 2>&1 || true
