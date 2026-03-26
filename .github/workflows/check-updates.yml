@@ -41,6 +41,9 @@ jobs:
         env:
           GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
         run: |
+          # 🚀 FIX: Auto-heal Niri dependency typo before scanning
+          find . -type f -name '*.ebuild' -exec sed -i 's/gui-libs\/display-info/media-libs\/libdisplay-info/g' {} +
+
           python3 << 'EOF'
           import os, re, requests, subprocess, stat
           from pathlib import Path
@@ -64,7 +67,7 @@ jobs:
                       tags = r2.json()
                       if tags: return tags["name"].lstrip("v")
               except Exception as e:
-                  print(f"WARNING: get_latest({repo}) failed: {e}")
+                  pass
               return None
 
           def get_appimage_version(filepath):
@@ -78,7 +81,7 @@ jobs:
                   m = re.search(r'RootApp[-_]?([0-9]+\.[0-9]+\.[0-9]+)', out, re.IGNORECASE)
                   if m: return m.group(1)
               except Exception as e:
-                  print(f"WARNING: get_appimage_version failed: {e}")
+                  pass
               return None
 
           def get_latest_commit(repo_url):
@@ -87,7 +90,7 @@ jobs:
                   m = re.search(r"([a-f0-9]{40})", out)
                   if m: return m.group(1)
               except Exception as e:
-                  print(f"WARNING: get_latest_commit({repo_url}) failed: {e}")
+                  pass
               return None
 
           mango_dir = Path("gui-wm/mangowc")
@@ -265,13 +268,11 @@ jobs:
           PKG="${{ matrix.package }}"
           BINHOST="https://gentoo-nexus.sourceforge.io/Packages"
 
-          # Always build -9999 (live git versions)
           if ls "${PKG}"/*-9999.ebuild 1>/dev/null 2>&1; then
             echo "skip=false" >> "$GITHUB_OUTPUT"
             exit 0
           fi
 
-          # Bulletproof extraction: Gets exactly what Gentoo parses (e.g., 0.1.2-r1)
           EBUILD_FILE=$(ls -1 "${PKG}"/*.ebuild 2>/dev/null | sort -V | tail -n 1)
           if [ -z "$EBUILD_FILE" ]; then
             echo "skip=false" >> "$GITHUB_OUTPUT"
@@ -303,6 +304,9 @@ jobs:
           set -euo pipefail
           mkdir -p /etc/portage/repos.conf /etc/portage/binrepos.conf /overlay/distfiles /overlay/job_out
           
+          # 🚀 THE PROFILE FIX: Switch to Desktop profile so our USE flags perfectly match the Binhost!
+          eselect profile set default/linux/amd64/23.0/desktop
+          
           mkdir -p /etc/portage/package.accept_keywords
           mkdir -p /etc/portage/package.license
           mkdir -p /etc/portage/package.use
@@ -314,27 +318,11 @@ jobs:
           
           echo "sys-auth/polkit -systemd elogind" > /etc/portage/package.use/polkit
           echo "sys-auth/elogind pam policykit" > /etc/portage/package.use/elogind
-          
           echo "media-libs/tiff -webp" > /etc/portage/package.use/circular
 
-          # 🚀 THE TITANIUM BEHEMOTH LOCKS 🚀
-          # Explicitly ban LLVM 22 and Mesa 25+ so live ebuilds cannot force source compiles
-          cat > /etc/portage/package.mask/behemoths << 'BEHEMOTHS'
-          >=llvm-core/llvm-22
-          >=llvm-core/libclc-22
-          >=llvm-core/clang-22
-          >=llvm-core/llvmgold-22
-          >=llvm-core/lld-22
-          >=llvm-core/llvm-common-22
-          >=llvm-core/clang-common-22
-          >=media-libs/mesa-25
-          BEHEMOTHS
-
-          # Force every package to tightly bind to LLVM 21
-          echo "*/* llvm_slot_21 -llvm_slot_22" > /etc/portage/package.use/llvm_slots
-
           # 🚀 THE DUAL-BINHOST SCAVENGER CONFIGURATION 🚀
-          cat > /etc/portage/binrepos.conf/gentoo.conf << 'REPOCONF'
+          # We leave [gentoo] unconfigured here so `getuto` automatically points it to the correct Desktop binhost!
+          cat > /etc/portage/binrepos.conf/nexus.conf << 'REPOCONF'
           [gentoo-nexus-sf]
           priority = 9999
           sync-uri = https://gentoo-nexus.sourceforge.io/
@@ -342,10 +330,6 @@ jobs:
           [gentoo-nexus-gh]
           priority = 9998
           sync-uri = https://ackerman-00.github.io/gentoo-nexus/
-
-          [gentoo]
-          priority = 1
-          sync-uri = https://gentoo.osuosl.org/releases/amd64/binpackages/23.0/x86-64/
           REPOCONF
 
           cat > /etc/portage/make.conf << 'MAKECONF'
@@ -353,7 +337,10 @@ jobs:
           EMERGE_DEFAULT_OPTS="--getbinpkg --usepkg --binpkg-respect-use=y --binpkg-changed-deps=y"
           DISTDIR="/overlay/distfiles"
           PKGDIR="/overlay/job_out"
-          USE="wayland vulkan pipewire egl gles2 dbus udev elogind harfbuzz opengl X alsa pam -systemd -kde -gnome -test"
+          # Desktop profile handles X and Wayland. We only add what we explicitly need.
+          USE="pipewire egl gles2 vulkan pam -systemd -kde -gnome -test"
+          # 🚀 THE INTEL TRAP FIX: Disable Intel drivers to skip the missing intel_clc ebuild!
+          VIDEO_CARDS="-* amdgpu radeonsi nouveau virgl"
           EGIT_CLONE_TYPE="single"
           ACCEPT_KEYWORDS="~amd64 amd64"
           ACCEPT_LICENSE="*"
@@ -385,8 +372,7 @@ jobs:
           echo "*/*::guru **" >> /etc/portage/package.accept_keywords/guru
           echo "*/* *" >> /etc/portage/package.license/all
 
-          EMERGE_DEFAULT_OPTS="" emerge --oneshot --quiet --usepkg=n --getbinpkg=n media-libs/tiff
-          EMERGE_DEFAULT_OPTS="" emerge --oneshot --quiet --usepkg=n --getbinpkg=n media-libs/libwebp
+          EMERGE_DEFAULT_OPTS="" emerge --oneshot --quiet --usepkg=n --getbinpkg=n media-libs/tiff media-libs/libwebp
 
           emerge --autounmask=y --autounmask-write --quiet '${{ matrix.package }}' 2>&1 || true
           if ls /etc/portage/package.use/* 1> /dev/null 2>&1 || [ -f /etc/portage/package.use ]; then
