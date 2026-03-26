@@ -128,8 +128,10 @@ jobs:
           echo "*/*::guru **" >> /etc/portage/package.accept_keywords/guru
           echo "*/* *" >> /etc/portage/package.license/all
 
-          # Break circular dependency (Force SOURCE build for these two ONLY to apply USE="-webp")
-          emerge --oneshot --quiet --usepkg=n --getbinpkg=n media-libs/tiff media-libs/libwebp
+          # 🚀 THE ULTIMATE LOOP BREAKER 🚀
+          # Isolate tiff and libwebp, explicitly nullify default opts, and emerge sequentially
+          EMERGE_DEFAULT_OPTS="" emerge --oneshot --quiet --usepkg=n --getbinpkg=n media-libs/tiff
+          EMERGE_DEFAULT_OPTS="" emerge --oneshot --quiet --usepkg=n --getbinpkg=n media-libs/libwebp
 
           # Build Target
           emerge --autounmask=y --autounmask-write --quiet '${{ github.event.inputs.atom }}' 2>&1 || true
