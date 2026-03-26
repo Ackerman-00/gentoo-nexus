@@ -337,10 +337,10 @@ jobs:
 
           cat > /etc/portage/make.conf << 'MAKECONF'
           FEATURES="-userfetch -userpriv -usersandbox -ipc-sandbox -network-sandbox -pid-sandbox getbinpkg buildpkg -binpkg-request-signature -binpkg-sig-verify"
-          EMERGE_DEFAULT_OPTS="--getbinpkg --usepkg --binpkg-respect-use=y --binpkg-changed-deps=y"
+          EMERGE_DEFAULT_OPTS="--getbinpkg --usepkg --binpkg-respect-use=n --binpkg-changed-deps=y"
           DISTDIR="/overlay/distfiles"
           PKGDIR="/overlay/job_out"
-          USE="pipewire egl gles2 vulkan pam -systemd -kde -gnome -test"
+          USE="pipewire egl gles2 vulkan pam -systemd -test"
           VIDEO_CARDS="amdgpu radeonsi nouveau virgl"
           EGIT_CLONE_TYPE="single"
           ACCEPT_KEYWORDS="~amd64 amd64"
@@ -367,15 +367,16 @@ jobs:
           echo "*/*::guru **" >> /etc/portage/package.accept_keywords/guru
           echo "*/* *" >> /etc/portage/package.license/all
 
-          # 🚀 THE FIX: Break the Circular Dependency Loop for Harfbuzz
-          echo "media-libs/harfbuzz -glib -introspection" > /etc/portage/package.use/harfbuzz
+          # 🚀 THE GENTOO LOOP BREAKERS 🚀
+          # Break Harfbuzz <-> Cairo Loop
+          echo "media-libs/harfbuzz -cairo" > /etc/portage/package.use/harfbuzz_break
           emerge --oneshot --quiet media-libs/harfbuzz
-          rm /etc/portage/package.use/harfbuzz
+          rm /etc/portage/package.use/harfbuzz_break
 
-          # 🚀 THE FINAL FIX: Break the Ncurses/GPM Loop
-          echo "sys-libs/ncurses -gpm" > /etc/portage/package.use/ncurses
+          # Break Ncurses <-> GPM Loop
+          echo "sys-libs/ncurses -gpm" > /etc/portage/package.use/ncurses_break
           emerge --oneshot --quiet sys-libs/ncurses
-          rm /etc/portage/package.use/ncurses
+          rm /etc/portage/package.use/ncurses_break
 
           EMERGE_DEFAULT_OPTS="" emerge --oneshot --quiet --usepkg=n --getbinpkg=n media-libs/tiff media-libs/libwebp
 
