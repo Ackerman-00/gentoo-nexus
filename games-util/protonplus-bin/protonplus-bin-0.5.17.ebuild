@@ -10,26 +10,29 @@ LICENSE="GPL-3.0-or-later"
 SLOT="0"
 KEYWORDS="amd64"
 
+# THE FIX: Tell Portage the exact folder name inside the tarball
+S="${WORKDIR}/ProtonPlus-${PV}"
+
 DEPEND="
-	app-arch/libarchive
-	dev-libs/glib:2
-	dev-libs/json-glib
-	dev-libs/libgee:0.8
-	gui-libs/gtk:4
-	gui-libs/libadwaita
-	net-libs/libsoup:3.0
+    app-arch/libarchive
+    dev-libs/glib:2
+    dev-libs/json-glib
+    dev-libs/libgee:0.8
+    gui-libs/gtk:4
+    gui-libs/libadwaita
+    net-libs/libsoup:3.0
 "
 RDEPEND="${DEPEND}"
 BDEPEND="
-	$(vala_depend)
-	dev-build/meson
-	dev-libs/appstream-glib
-	dev-util/desktop-file-utils
-	sys-devel/gettext
-	virtual/pkgconfig
+    $(vala_depend)
+    dev-build/meson
+    dev-libs/appstream-glib
+    dev-util/desktop-file-utils
+    sys-devel/gettext
+    virtual/pkgconfig
 "
 
 src_prepare() {
-	default
-	vala_setup
+    default
+    vala_setup
 }
