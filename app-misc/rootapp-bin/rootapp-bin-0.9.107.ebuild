@@ -18,23 +18,26 @@ RDEPEND="
     media-libs/alsa-lib
     sys-apps/dbus
 "
-BDEPEND="sys-fs/squashfs-tools"
 
-S="${WORKDIR}"
+# Set S to the extracted squashfs directory
+S="${WORKDIR}/squashfs-root"
 
 src_unpack() {
-    cp "${DISTDIR}/${P}.AppImage" . || die
-    # Rips the AppImage open safely without executing it
-    unsquashfs -d squashfs-root "${P}.AppImage" || die
+    cp "${DISTDIR}/${P}.AppImage" "${WORKDIR}/" || die
+    cd "${WORKDIR}" || die
+    
+    # Use the built-in extractor instead of raw unsquashfs
+    chmod +x "${P}.AppImage" || die
+    ./"${P}.AppImage" --appimage-extract || die "Failed to extract AppImage"
 }
 
 src_install() {
     insinto /opt/rootapp
-    doins -r squashfs-root/*
+    doins -r *
     
     fperms +x /opt/rootapp/AppRun
-    dosym -r /opt/rootapp/AppRun /usr/bin/rootapp
+    dosym ../../opt/rootapp/AppRun /usr/bin/rootapp
     
-    doicon -s 256 squashfs-root/Root.png
+    doicon -s 256 Root.png
     make_desktop_entry "rootapp" "RootApp" "Root" "Network;Chat;"
 }
