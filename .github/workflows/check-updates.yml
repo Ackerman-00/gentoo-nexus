@@ -13,6 +13,9 @@ permissions:
   contents: write
   actions: write
 
+env:
+  CACHE_VERSION: v31
+
 jobs:
   check-updates:
     runs-on: ubuntu-latest
@@ -31,18 +34,19 @@ jobs:
       - name: Install dependencies
         run: pip install requests packaging
 
-      - name: 1. Auto-Heal & Dynamic Upstream Scan
+      - name: Auto-Heal & Dynamic Upstream Scan
         id: scan
         env:
           GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
         run: |
-          # 🚀 FIREWALL: Apply ebuild patches safely
           find . -path ./cache -prune -o -type f -name '*.ebuild' -exec sed -i 's/LLVM_COMPAT=( {18..21} )/LLVM_COMPAT=( {18..22} )/g' {} + || true
           find . -path ./cache -prune -o -type f -name '*.ebuild' -exec sed -i 's/gui-libs\/display-info/media-libs\/libdisplay-info/g' {} + || true
           find . -path ./cache -prune -o -type f -name '*.ebuild' -exec sed -i 's/media-libs\/mesa\[gbm\]/media-libs\/mesa/g' {} + || true
           find . -path ./cache -prune -o -type f -name '*.ebuild' -exec sed -i 's/media-libs\/mesa\[gbm(+)\]/media-libs\/mesa/g' {} + || true
           find . -path ./cache -prune -o -type f -name '*.ebuild' -exec sed -i 's/mesa\[gbm\]/mesa/g' {} + || true
           find . -path ./cache -prune -o -type f -name '*.ebuild' -exec sed -i 's/mesa\[gbm(+)\]/mesa/g' {} + || true
+          
+          find gui-wm/mangowc -type f -name '*.ebuild' -exec sed -i 's/mangowm\/mangowc/mangowm\/mango/g' {} + || true
 
           python3 << 'EOF'
           import os, re, requests, subprocess, stat
@@ -96,7 +100,6 @@ jobs:
                   return repo
               return None
 
-          print(">>> Commencing dynamic ebuild scan...")
           for ebuild_path in Path('.').rglob('*.ebuild'):
               if 'cache' in ebuild_path.parts or 'job_out' in ebuild_path.parts: continue
               
@@ -109,7 +112,6 @@ jobs:
 
               is_live = ebuild_path.name.endswith('-9999.ebuild')
               
-              # AppImage Special Handling
               if pkg_dir.name == "rootapp-bin":
                   appimage_path = "/tmp/Root.AppImage"
                   if os.system(f"curl --fail -sL -o {appimage_path} https://installer.rootapp.com/installer/Linux/X64/Root.AppImage") == 0:
@@ -119,7 +121,6 @@ jobs:
                           if current_ver and version != current_ver:
                               new_path = pkg_dir / f"{pkg_dir.name}-{version}.ebuild"
                               if not new_path.exists():
-                                  print(f"✨ Updating {pkg_cat_name}: {current_ver} -> {version}")
                                   ebuild_path.rename(new_path)
                                   updated_atoms.add(pkg_cat_name)
                   if os.path.exists(appimage_path): os.remove(appimage_path)
@@ -137,7 +138,6 @@ jobs:
                       else:
                           new_content = re.sub(r"(^EAPI=.*)", r'\1\nEGIT_COMMIT="' + new_commit + '"', content, count=1, flags=re.MULTILINE)
                       if new_content != content:
-                          print(f"✨ Updating live {pkg_cat_name} to commit {new_commit}")
                           with open(ebuild_path, "w") as f: f.write(new_content)
                           updated_atoms.add(pkg_cat_name)
               else:
@@ -152,7 +152,6 @@ jobs:
                       if pkg_dir.name == "mangowc" and latest_ver.startswith("12."): latest_ver = "0." + latest_ver
                       new_path = pkg_dir / f"{pkg_dir.name}-{latest_ver}.ebuild"
                       if not new_path.exists():
-                          print(f"✨ Updating {pkg_cat_name}: {curr_ver} -> {latest_ver}")
                           ebuild_path.rename(new_path)
                           updated_atoms.add(pkg_cat_name)
                       else:
@@ -162,39 +161,33 @@ jobs:
               Path('changed_packages.txt').write_text('\n'.join(updated_atoms) + '\n')
           EOF
 
-      - name: 2. Dynamic Binhost Audit (Find ALL Missing Binaries)
+      - name: Dynamic Binhost Audit
         run: |
           BINHOST_URL="https://gentoo-nexus.sourceforge.io/Packages"
           curl -sL "$BINHOST_URL" -o sf_packages.txt || touch sf_packages.txt
-
-          echo ">>> Auditing all ebuilds against SourceForge Binhost..."
           
-          # Scan every ebuild in the repo dynamically
           for ebuild in */*/*.ebuild; do
               [ -e "$ebuild" ] || continue
-              
               pkg_dir=$(dirname "$ebuild")
               EBUILD_NAME=$(basename "$ebuild" .ebuild)
               CPV="${pkg_dir}/${EBUILD_NAME}"
               
               if ! grep -q "^CPV: $CPV$" sf_packages.txt; then
-                  echo "🚨 Missing binary for $CPV! Queuing build..."
                   echo "$pkg_dir" >> changed_packages.txt
               fi
           done
 
-          if [ -s changed_packages.txt ]; then
+          if [ -f changed_packages.txt ] && [ -s changed_packages.txt ]; then
               sort -u changed_packages.txt > changed_packages_unique.txt
               mv changed_packages_unique.txt changed_packages.txt
               echo "updates_found=true" >> "$GITHUB_OUTPUT"
-          else
-              echo "✅ All packages are up to date on the binhost!"
           fi
 
-      - name: 3. Generate Manifests for Queued Packages
+      - name: Generate Manifests
         if: steps.scan.outputs.updates_found == 'true' || hashFiles('changed_packages.txt') != ''
         run: |
-          mkdir -p /tmp/distfiles
+          mkdir -p /tmp/gentoo-tree /tmp/distfiles
+          chmod 777 /tmp/distfiles
           
           cat > manifest_script.sh << 'EOF'
           #!/bin/bash
@@ -208,9 +201,13 @@ jobs:
           masters = gentoo
           REPOCONF
 
+          cat >> /etc/portage/make.conf << 'MAKECONF'
+          FEATURES="-sandbox -usersandbox -ipc-sandbox -network-sandbox -pid-sandbox"
+          DISTDIR="/var/cache/distfiles"
+          MAKECONF
+
           while IFS= read -r pkg; do
             [ -z "$pkg" ] && continue
-            echo "Generating manifest for $pkg"
             ebuild $(ls -1v /overlay/$pkg/*.ebuild | tail -n 1) manifest 2>&1 || true
           done < /overlay/changed_packages.txt
           EOF
@@ -218,15 +215,15 @@ jobs:
 
           docker run --rm --privileged \
             -v "${{ github.workspace }}:/overlay" \
+            -v "/tmp/gentoo-tree:/var/db/repos/gentoo" \
             -v "/tmp/distfiles:/var/cache/distfiles" \
             gentoo/stage3:amd64-desktop-openrc bash /overlay/manifest_script.sh
 
-      - name: 4. Commit and push updates
+      - name: Commit Updates
         if: steps.scan.outputs.updates_found == 'true' || hashFiles('changed_packages.txt') != ''
         run: |
           git config user.name "github-actions[bot]"
           git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
-          
           git add .
           if ! git diff --cached --quiet; then
             git commit -m "bot: auto-update ebuilds and manifests"
@@ -234,7 +231,7 @@ jobs:
             git push origin HEAD:"${GITHUB_REF_NAME}"
           fi
 
-      - name: 5. Trigger Sequential Builds
+      - name: Trigger Sequential Builds
         if: hashFiles('changed_packages.txt') != ''
         env:
           GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
@@ -244,28 +241,16 @@ jobs:
           
           while IFS= read -r pkg; do
             [ -z "$pkg" ] && continue
-            echo "=================================================="
-            echo "🚀 Dispatching build for $pkg"
-            echo "=================================================="
             before_ts=$(date -u +%Y-%m-%dT%H:%M:%SZ)
 
-            gh workflow run "${WORKFLOW_NAME}" \
-              --ref "${GITHUB_REF_NAME}" \
-              -f atom="${pkg}"
+            gh workflow run "${WORKFLOW_NAME}" --ref "${GITHUB_REF_NAME}" -f atom="${pkg}"
+            sleep 10
 
-            sleep 8 # Buffer for GitHub to register the run
-
-            # 🚀 FIXED JQ SYNTAX
-            run_id=$(gh run list \
-              --workflow="${WORKFLOW_NAME}" \
-              --json databaseId,createdAt \
-              --jq "[.[] | select(.createdAt >= \"${before_ts}\")] | ..databaseId // empty" || true)
+            run_id=$(gh run list --workflow="${WORKFLOW_NAME}" --json databaseId,createdAt -q ".[] | select(.createdAt >= \"${before_ts}\") | .databaseId" | head -n 1 || true)
 
             if [ -n "${run_id}" ] && [ "${run_id}" != "null" ]; then
-              echo "👀 Watching run ${run_id}..."
-              gh run watch "${run_id}" --exit-status || echo "⚠️ Run $run_id failed, but continuing to next package..."
+              gh run watch "${run_id}" --exit-status || echo "Run $run_id failed, continuing queue."
             else
-              echo "⚠️ Could not grab run ID. Moving to next package in queue."
-              sleep 30
+              sleep 15
             fi
           done < changed_packages.txt
