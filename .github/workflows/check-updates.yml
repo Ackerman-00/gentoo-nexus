@@ -2,6 +2,7 @@ name: Check All Updates
 
 on:
   schedule:
+    # 🚀 Automation: Runs every 6 hours (00:00, 06:00, 12:00, 18:00 UTC)
     - cron: '0 */6 * * *'
   workflow_dispatch:
 
@@ -36,6 +37,7 @@ jobs:
         env:
           GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
         run: |
+          # Maintenance: Auto-patching known EAPI/Dependency shifts
           find . -path ./cache -prune -o -type f -name '*.ebuild' -exec sed -i 's/LLVM_COMPAT=( {18..21} )/LLVM_COMPAT=( {18..22} )/g' {} + || true
           find . -path ./cache -prune -o -type f -name '*.ebuild' -exec sed -i 's/gui-libs\/display-info/media-libs\/libdisplay-info/g' {} + || true
           find . -path ./cache -prune -o -type f -name '*.ebuild' -exec sed -i 's/media-libs\/mesa\[gbm\]/media-libs\/mesa/g' {} + || true
@@ -98,16 +100,12 @@ jobs:
 
           for ebuild_path in Path('.').rglob('*.ebuild'):
               if 'cache' in ebuild_path.parts or 'job_out' in ebuild_path.parts: continue
-              
               pkg_dir = ebuild_path.parent
               if len(pkg_dir.parts) < 2: continue
               pkg_cat_name = f"{pkg_dir.parent.name}/{pkg_dir.name}"
-              
-              with open(ebuild_path, 'r') as f:
-                  content = f.read()
-
+              with open(ebuild_path, 'r') as f: content = f.read()
               is_live = ebuild_path.name.endswith('-9999.ebuild')
-              
+
               if pkg_dir.name == "rootapp-bin":
                   appimage_path = "/tmp/Root.AppImage"
                   if os.system(f"curl --fail -sL -o {appimage_path} https://installer.rootapp.com/installer/Linux/X64/Root.AppImage") == 0:
@@ -124,7 +122,6 @@ jobs:
 
               repo = extract_github_repo(content)
               if not repo: continue
-
               if is_live:
                   repo_url = f"https://github.com/{repo}.git"
                   new_commit = get_latest_commit(repo_url)
@@ -139,10 +136,8 @@ jobs:
               else:
                   curr_ver = extract_version_from_ebuild(ebuild_path)
                   if not curr_ver: continue
-                  
                   all_stable = sorted([e for e in pkg_dir.glob("*.ebuild") if not e.name.endswith("-9999.ebuild")])
                   if all_stable and all_stable[-1] != ebuild_path: continue
-
                   latest_ver = get_latest_github_release(repo)
                   if latest_ver and latest_ver != curr_ver:
                       if pkg_dir.name == "mangowc" and latest_ver.startswith("12."): latest_ver = "0." + latest_ver
@@ -150,19 +145,14 @@ jobs:
                       if not new_path.exists():
                           ebuild_path.rename(new_path)
                           updated_atoms.add(pkg_cat_name)
-                      else:
-                          ebuild_path.unlink()
-
-          if updated_atoms:
-              Path('changed_packages.txt').write_text('\n'.join(updated_atoms) + '\n')
+                      else: ebuild_path.unlink()
+          if updated_atoms: Path('changed_packages.txt').write_text('\n'.join(updated_atoms) + '\n')
           EOF
 
       - name: 2. Strict Binhost Audit
         run: |
           BINHOST_URL="https://gentoo-nexus.sourceforge.io/Packages"
           echo ">>> Auditing ebuilds against SourceForge..."
-          
-          # 🚀 FIX: Strict HTTP Status Check to prevent mass-rebuilds if SF times out
           HTTP_STATUS=$(curl -sL -o sf_packages.txt -w "%{http_code}" --connect-timeout 15 --retry 3 "$BINHOST_URL" || echo "000")
           
           if [ "$HTTP_STATUS" -eq 200 ]; then
@@ -171,7 +161,7 @@ jobs:
               echo "⚠️ Index not found (404). Assuming empty binhost."
               touch sf_packages.txt
           else
-              echo "🚨 FATAL: SourceForge connection failed (HTTP $HTTP_STATUS). Aborting to prevent mass-rebuilds."
+              echo "🚨 FATAL: SourceForge connection failed (HTTP $HTTP_STATUS). Aborting."
               exit 1
           fi
           
@@ -181,9 +171,7 @@ jobs:
               CATEGORY=$(dirname "$pkg_dir")
               EBUILD_NAME=$(basename "$ebuild" .ebuild)
               CPV="${CATEGORY}/${EBUILD_NAME}"
-              
               if ! grep -q "^CPV: $CPV$" sf_packages.txt; then
-                  echo "🚨 Missing binary for $CPV! Queuing build..."
                   echo "$pkg_dir" >> changed_packages.txt
               fi
           done
@@ -204,8 +192,12 @@ jobs:
           #!/bin/bash
           set -euo pipefail
           
+          # Log Hygiene: Fix common warnings before sync
+          mkdir -p /var/db/repos/gentoo
           rm -rf /var/db/repos/gentoo/*
           emerge-webrsync -q
+          eselect news read all >/dev/null 2>&1 || true
+          emerge --unmerge --quiet sys-libs/gpm 2>/dev/null || true
           
           mkdir -p /etc/portage/repos.conf
           cat > /etc/portage/repos.conf/gentoo-nexus.conf << 'REPOCONF'
