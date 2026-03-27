@@ -16,7 +16,7 @@ permissions:
   contents: write
 
 env:
-  CACHE_VERSION: v11
+  CACHE_VERSION: v12
   GENTOO_PROFILE: default/linux/amd64/23.0/desktop
 
 jobs:
@@ -51,7 +51,8 @@ jobs:
           #!/bin/bash
           set -euo pipefail
           
-          # 🚀 Sync portage tree (DO NOT delete cache - just sync)
+          # 🚀 CRITICAL: Force fresh Gentoo tree (delete cache to fix Manifest mismatches)
+          rm -rf /var/db/repos/gentoo
           emerge-webrsync -q
           
           command -v getuto >/dev/null 2>&1 && getuto || true
@@ -60,6 +61,7 @@ jobs:
           mkdir -p /etc/portage/{repos.conf,binrepos.conf,package.{accept_keywords,license,use,mask}}
           mkdir -p /overlay/{distfiles,job_out}
 
+          # 🚀 Mask systemd
           cat > /etc/portage/package.mask/systemd << 'MASK'
           sys-apps/systemd
           sys-apps/systemd-utils
@@ -67,16 +69,19 @@ jobs:
           sys-apps/systemd-initctl
           MASK
 
+          # 🚀 Mask gpm
           cat > /etc/portage/package.mask/gpm << 'MASK'
           sys-libs/gpm
           MASK
 
+          # 🚀 ncurses lockdown
           cat > /etc/portage/package.use/ncurses << 'USE'
           sys-libs/ncurses -gpm -abi_x86_32
           sys-libs/termcap -gpm
           www-client/w3m -gpm
           USE
 
+          # 🚀 elogind configuration
           cat > /etc/portage/package.use/elogind << 'USE'
           */* -systemd elogind -gpm
           sys-auth/polkit -systemd elogind
@@ -95,6 +100,7 @@ jobs:
           media-libs/tiff -webp
           USE
 
+          # 🚀 Binhost configuration
           cat > /etc/portage/binrepos.conf/gentoo.conf << 'REPOCONF'
           [gentoo]
           priority = 10000
@@ -110,6 +116,7 @@ jobs:
           sync-uri = https://ackerman-00.github.io/gentoo-nexus/
           REPOCONF
 
+          # 🚀 make.conf
           cat > /etc/portage/make.conf << 'MAKECONF'
           FEATURES="-userfetch -userpriv -usersandbox -ipc-sandbox -network-sandbox -pid-sandbox getbinpkg buildpkg -binpkg-request-signature"
           DISTDIR="/overlay/distfiles"
@@ -121,6 +128,7 @@ jobs:
           ACCEPT_LICENSE="*"
           MAKECONF
 
+          # Sync guru
           emerge --noreplace --quiet dev-lang/go dev-lang/rust-bin app-eselect/eselect-repository dev-vcs/git
           eselect repository enable guru 2>/dev/null || true
           emaint sync -r guru 2>/dev/null || true
