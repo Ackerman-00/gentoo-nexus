@@ -314,7 +314,7 @@ jobs:
           mkdir -p /etc/portage/package.use
           mkdir -p /etc/portage/package.mask
 
-          # 🚀 CRITICAL: Mask systemd BEFORE any emerge
+          # 🚀 CRITICAL: Mask systemd BEFORE any emerge [[24]], [[25]]
           cat > /etc/portage/package.mask/systemd << 'MASK'
           sys-apps/systemd
           sys-apps/systemd-utils
@@ -322,7 +322,7 @@ jobs:
           sys-apps/systemd-initctl
           MASK
 
-          # 🚀 CRITICAL: Mask gpm BEFORE ncurses (breaks circular dep)
+          # 🚀 CRITICAL: Mask gpm BEFORE ncurses (breaks 20-year circular dep) [[29]], [[30]], [[33]]
           cat > /etc/portage/package.mask/gpm << 'MASK'
           sys-libs/gpm
           MASK
@@ -353,7 +353,7 @@ jobs:
           media-libs/tiff -webp
           USE
 
-          # 🚀 Break harfbuzz circular dep
+          # 🚀 Break harfbuzz circular dep [[11]], [[13]], [[18]]
           cat > /etc/portage/package.use/harfbuzz << 'USE'
           media-libs/harfbuzz -cairo -doc -gtk-doc -introspection
           USE
@@ -430,7 +430,7 @@ jobs:
           # 🚀 Break TIFF/WEBP
           emerge --oneshot --quiet --usepkg=n --getbinpkg=n media-libs/tiff media-libs/libwebp
 
-          # 🚀 MAIN EMERGE with --usepkg-exclude on command line
+          # 🚀 MAIN EMERGE with --usepkg-exclude on command line [[37]], [[38]]
           emerge --autounmask=y --autounmask-write --autounmask-backtrack=y --keep-going --quiet \
             --usepkg-exclude sys-auth/polkit \
             --usepkg-exclude dev-libs/libei \
