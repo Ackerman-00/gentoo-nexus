@@ -17,8 +17,8 @@ permissions:
   contents: write
 
 env:
-  # 🚀 v26 permanently busts the corrupted BLAKE2B cache!
-  CACHE_VERSION: v26
+  # 🚀 v20 forces GitHub to completely delete the corrupted tree and download a fresh one
+  CACHE_VERSION: v20
 
 jobs:
   update-and-manifest:
@@ -60,17 +60,11 @@ jobs:
         env:
           GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
         run: |
-          # 🚀 SURGICAL FIREWALL: Only patch specific overlay directories. Never use 'find .' again!
-          for pkg in gui-wm/niri x11-base/xwayland-satellite; do
-            if [ -d "$pkg" ]; then
-              sed -i 's/LLVM_COMPAT=( {18..21} )/LLVM_COMPAT=( {18..22} )/g' "$pkg"/*.ebuild 2>/dev/null || true
-              sed -i 's/gui-libs\/display-info/media-libs\/libdisplay-info/g' "$pkg"/*.ebuild 2>/dev/null || true
-              sed -i 's/media-libs\/mesa\[gbm\]/media-libs\/mesa/g' "$pkg"/*.ebuild 2>/dev/null || true
-              sed -i 's/media-libs\/mesa\[gbm(+)\]/media-libs\/mesa/g' "$pkg"/*.ebuild 2>/dev/null || true
-              sed -i 's/mesa\[gbm\]/mesa/g' "$pkg"/*.ebuild 2>/dev/null || true
-              sed -i 's/mesa\[gbm(+)\]/mesa/g' "$pkg"/*.ebuild 2>/dev/null || true
-            fi
-          done
+          # 🚀 FIREWALL FIX: Safe sed replacements targeting only local overlay
+          find . -path ./cache -prune -o -type f -name '*.ebuild' -exec sed -i 's/LLVM_COMPAT=( {18..21} )/LLVM_COMPAT=( {18..22} )/g' {} + || true
+          find . -path ./cache -prune -o -type f -name '*.ebuild' -exec sed -i 's/gui-libs\/display-info/media-libs\/libdisplay-info/g' {} + || true
+          find . -path ./cache -prune -o -type f -name '*.ebuild' -exec sed -i 's/media-libs\/mesa\[gbm\]/media-libs\/mesa/g' {} + || true
+          find . -path ./cache -prune -o -type f -name '*.ebuild' -exec sed -i 's/mesa\[gbm\]/mesa/g' {} + || true
 
           python3 << 'EOF'
           import os, re, requests, subprocess, stat, json
@@ -106,8 +100,7 @@ jobs:
                   patterns = [
                       r"X-AppImage-Version=([0-9.]+)",
                       r'"name"\s*:\s*"rootapp".*?"version"\s*:\s*"([0-9.]+)"',
-                      r'RootApp[-_]?([0-9]+\.[0-9]+\.[0-9]+)',
-                      r'"version"\s*:\s*"([0-9]+\.[0-9]+\.[0-9]+)"'
+                      r'RootApp[-_]?([0-9]+\.[0-9]+\.[0-9]+)'
                   ]
                   for pat in patterns:
                       m = re.search(pat, out, re.IGNORECASE | re.DOTALL)
@@ -152,7 +145,6 @@ jobs:
               pkg_dir = Path(path)
               if not pkg_dir.exists(): continue
               ebs = sorted(pkg_dir.glob("*.ebuild"))
-              if not ebs: continue
               stable_ebs = [e for e in ebs if not e.name.endswith("-9999.ebuild")]
               if not stable_ebs: continue
               target_file = stable_ebs[-1]
@@ -213,7 +205,6 @@ jobs:
           cat > manifest_script.sh << 'EOF'
           #!/bin/bash
           set -euo pipefail
-          
           mkdir -p /etc/portage/repos.conf /overlay/distfiles
 
           cat >> /etc/portage/make.conf << 'MAKECONF'
@@ -230,10 +221,9 @@ jobs:
           [gentoo-nexus]
           location = /overlay
           masters = gentoo
-          priority = 9999
           REPOCONF
 
-          find /overlay -mindepth 2 -maxdepth 4 -type f -name '*.ebuild' -not -path '*/cache/*' -not -path '*/job_out/*' -not -path '*/.git/*' | while read -r eb; do
+          find /overlay -type f -name '*.ebuild' -not -path '*/cache/*' -not -path '*/job_out/*' -not -path '*/.git/*' | while read -r eb; do
             ebuild "$eb" manifest 2>&1 || true
           done
           EOF
@@ -243,7 +233,7 @@ jobs:
             -v "${{ github.workspace }}:/overlay" \
             -v "${{ github.workspace }}/cache/gentoo-tree:/var/db/repos/gentoo" \
             -v "${{ github.workspace }}/cache/distfiles:/var/cache/distfiles" \
-            -w /overlay gentoo/stage3:amd64-desktop-openrc bash /overlay/manifest_script.sh
+            -w /overlay gentoo/stage3 bash /overlay/manifest_script.sh
 
       - name: 3. Commit and Push Changes
         run: |
@@ -357,11 +347,29 @@ jobs:
           
           command -v getuto >/dev/null 2>&1 && getuto || true
           
+          # Native Desktop Profile
+          eselect profile set default/linux/amd64/23.0/desktop
+          
           mkdir -p /etc/portage/{repos.conf,binrepos.conf,package.{accept_keywords,license,use,mask}}
           mkdir -p /overlay/{distfiles,job_out}
 
-          # 🚀 PURE GENTOO: Added our custom binhosts. The Desktop Stage3 already natively 
-          # configures the official Gentoo desktop binhost for us perfectly!
+          # 🚀 PURE GENTOO: Mask ONLY systemd (do NOT mask systemd-utils!)
+          cat > /etc/portage/package.mask/systemd << 'MASK'
+          sys-apps/systemd
+          sys-apps/gentoo-systemd-integration
+          MASK
+
+          cat > /etc/portage/package.mask/gpm << 'MASK'
+          sys-libs/gpm
+          MASK
+
+          cat > /etc/portage/binrepos.conf/gentoo.conf << 'REPOCONF'
+          [gentoo]
+          priority = 10000
+          sync-uri = https://distfiles.gentoo.org/releases/amd64/binpackages/23.0/x86-64/
+          verify-signature = true
+          REPOCONF
+
           cat > /etc/portage/binrepos.conf/nexus.conf << 'REPOCONF'
           [gentoo-nexus-sf]
           priority = 9999
@@ -371,12 +379,14 @@ jobs:
           sync-uri = https://ackerman-00.github.io/gentoo-nexus/
           REPOCONF
 
-          # 🚀 PURE GENTOO: We respect the binhost's USE flags to prevent source-compiling loops
-          cat >> /etc/portage/make.conf << 'MAKECONF'
-          FEATURES="${FEATURES} getbinpkg buildpkg -binpkg-request-signature"
+          # 🚀 PURE GENTOO: respect-use=y guarantees Portage won't download Systemd binaries
+          cat > /etc/portage/make.conf << 'MAKECONF'
+          FEATURES="-userfetch -userpriv -usersandbox -ipc-sandbox -network-sandbox -pid-sandbox getbinpkg buildpkg -binpkg-request-signature"
           EMERGE_DEFAULT_OPTS="--getbinpkg --usepkg --binpkg-respect-use=y --binpkg-changed-deps=y"
           DISTDIR="/overlay/distfiles"
           PKGDIR="/overlay/job_out"
+          USE="pipewire egl gles2 vulkan pam -systemd -test -gpm elogind"
+          VIDEO_CARDS="amdgpu radeonsi nouveau virgl"
           EGIT_CLONE_TYPE="single"
           ACCEPT_KEYWORDS="~amd64 amd64"
           ACCEPT_LICENSE="*"
@@ -403,39 +413,28 @@ jobs:
           echo "*/*::guru **" >> /etc/portage/package.accept_keywords/guru
           echo "*/* *" >> /etc/portage/package.license/all
 
-          # 🚀 THE FINAL FIREWALL: Safely patch ONLY the specific overlay packages. 
-          for pkg in gui-wm/niri x11-base/xwayland-satellite; do
-            if [ -d "/overlay/$pkg" ]; then
-              sed -i 's/LLVM_COMPAT=( {18..21} )/LLVM_COMPAT=( {18..22} )/g' "/overlay/$pkg"/*.ebuild 2>/dev/null || true
-              sed -i 's/gui-libs\/display-info/media-libs\/libdisplay-info/g' "/overlay/$pkg"/*.ebuild 2>/dev/null || true
-              sed -i 's/media-libs\/mesa\[gbm\]/media-libs\/mesa/g' "/overlay/$pkg"/*.ebuild 2>/dev/null || true
-              sed -i 's/media-libs\/mesa\[gbm(+)\]/media-libs\/mesa/g' "/overlay/$pkg"/*.ebuild 2>/dev/null || true
-              sed -i 's/mesa\[gbm\]/mesa/g' "/overlay/$pkg"/*.ebuild 2>/dev/null || true
-              sed -i 's/mesa\[gbm(+)\]/mesa/g' "/overlay/$pkg"/*.ebuild 2>/dev/null || true
-              ebuild $(ls /overlay/$pkg/*.ebuild | head -n 1) manifest 2>/dev/null || true
-            fi
-          done
-
-          # Patch Guru dependencies if they get pulled
-          for pkg in gui-libs/wlroots gui-libs/scenefx; do
-            if [ -d "/var/db/repos/guru/$pkg" ]; then
-              sed -i 's/media-libs\/mesa\[gbm\]/media-libs\/mesa/g' "/var/db/repos/guru/$pkg"/*.ebuild 2>/dev/null || true
-              sed -i 's/media-libs\/mesa\[gbm(+)\]/media-libs\/mesa/g' "/var/db/repos/guru/$pkg"/*.ebuild 2>/dev/null || true
-              sed -i 's/mesa\[gbm\]/mesa/g' "/var/db/repos/guru/$pkg"/*.ebuild 2>/dev/null || true
-              sed -i 's/mesa\[gbm(+)\]/mesa/g' "/var/db/repos/guru/$pkg"/*.ebuild 2>/dev/null || true
-              ebuild $(ls /var/db/repos/guru/$pkg/*.ebuild | head -n 1) manifest 2>/dev/null || true
-            fi
-          done
-
-          # 🚀 SHATTER CIRCULAR DEPENDENCIES THE GENTOO WAY
-          # We force Portage to install these culprits from the binary host without running dependency checks
-          echo ">>> Shattering circular dependencies via binary pre-install..."
-          emerge --usepkgonly --oneshot --nodeps --quiet dev-python/docutils media-libs/harfbuzz sys-libs/ncurses sys-libs/gpm dev-libs/glib x11-libs/cairo x11-libs/pango 2>&1 || true
+          # 🚀 CRITICAL FIREWALL: Only patch specific directories
+          find /overlay -maxdepth 4 -type f -name '*.ebuild' -not -path '*/cache/*' -exec sed -i 's/LLVM_COMPAT=( {18..21} )/LLVM_COMPAT=( {18..22} )/g' {} + 2>/dev/null || true
+          find /overlay -maxdepth 4 -type f -name '*.ebuild' -not -path '*/cache/*' -exec sed -i 's/gui-libs\/display-info/media-libs\/libdisplay-info/g' {} + 2>/dev/null || true
+          find /overlay -maxdepth 4 -type f -name '*.ebuild' -not -path '*/cache/*' -exec sed -i 's/media-libs\/mesa\[gbm\]/media-libs\/mesa/g' {} + 2>/dev/null || true
+          find /overlay -maxdepth 4 -type f -name '*.ebuild' -not -path '*/cache/*' -exec sed -i 's/mesa\[gbm\]/mesa/g' {} + 2>/dev/null || true
+          
+          # 🚀 THE BOOTSTRAP: Shatter the Gentoo circular loops permanently
+          mkdir -p /etc/portage/make.conf.d
+          echo 'USE="-introspection -cairo -doc -gtk-doc"' > /etc/portage/make.conf.d/99-bootstrap.conf
+          
+          echo ">>> Bootstrapping Base Libraries..."
+          emerge --oneshot --quiet --nodeps dev-libs/glib dev-libs/gobject-introspection-common dev-util/gdbus-codegen media-libs/harfbuzz dev-python/docutils dev-python/pillow 2>&1 || true
+          emerge --oneshot --quiet --nodeps dev-libs/gobject-introspection 2>&1 || true
+          
+          rm -f /etc/portage/make.conf.d/99-bootstrap.conf
+          
+          echo ">>> Restoring Full Libraries..."
+          emerge --oneshot --quiet dev-libs/glib dev-libs/gobject-introspection-common dev-libs/gobject-introspection dev-util/gdbus-codegen media-libs/harfbuzz 2>&1 || true
 
           TARGET_PKG='${{ matrix.package }}'
-          echo ">>> Main Emerge targeting: $TARGET_PKG"
+          echo ">>> Compiling Main Target: $TARGET_PKG"
 
-          # We run backtracking and aggressive config auto-merging (-5) 
           emerge --autounmask=y --autounmask-write --autounmask-backtrack=y --keep-going --quiet "$TARGET_PKG" 2>&1 || true
           for i in 1 2 3; do etc-update --automode -5 2>/dev/null || break; done
           
@@ -446,7 +445,6 @@ jobs:
           BUILDEOF
           chmod +x build_script.sh
 
-          # 🚀 CRITICAL: Using the dedicated desktop-openrc stage3 container!
           docker run --rm \
             -v "${{ github.workspace }}:/overlay" \
             -v "${{ github.workspace }}/cache/gentoo-tree:/var/db/repos/gentoo" \
@@ -517,9 +515,7 @@ jobs:
               cpv = f"{rel_path.parent}/{f.name.replace('.gpkg.tar', '').replace('.tbz2', '')}"
               parts = portage.versions.pkgsplit(cpv)
               if parts:
-                  pkg_name, ver, rev = parts
-                  ver_str = ver + ('-' + rev if rev != 'r0' else '')
-                  groups[pkg_name].append((ver_str, f))
+                  groups[parts].append((parts + ('-' + parts if parts != 'r0' else ''), f))
 
           def ver_cmp(a, b): return portage.versions.vercmp(a, b)
 
