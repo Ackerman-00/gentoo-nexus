@@ -23,13 +23,28 @@ jobs:
           token: ${{ secrets.GITHUB_TOKEN }}
           fetch-depth: 0
 
-      - name: Scan and update ebuilds
+      - name: Set up Python
+        uses: actions/setup-python@v5
+        with:
+          python-version: '3.11'
+
+      - name: Install dependencies
+        run: pip install requests packaging
+
+      - name: 1. Self-Healing & Upstream Version Scan
         id: scan
         env:
           GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
         run: |
+          # 🚀 PURE GENTOO: Only fix your overlay's ebuild bugs, never the system.
+          find . -path ./cache -prune -o -type f -name '*.ebuild' -exec sed -i 's/LLVM_COMPAT=( {18..21} )/LLVM_COMPAT=( {18..22} )/g' {} + || true
+          find . -path ./cache -prune -o -type f -name '*.ebuild' -exec sed -i 's/gui-libs\/display-info/media-libs\/libdisplay-info/g' {} + || true
+          find . -path ./cache -prune -o -type f -name '*.ebuild' -exec sed -i 's/media-libs\/mesa\[gbm\]/media-libs\/mesa/g' {} + || true
+          find . -path ./cache -prune -o -type f -name '*.ebuild' -exec sed -i 's/mesa\[gbm\]/mesa/g' {} + || true
+
           python3 << 'EOF'
           import os, re, requests, subprocess, stat
+          from packaging import version as pkg_version
           from pathlib import Path
 
           STABLE_TARGETS = {
@@ -64,7 +79,8 @@ jobs:
                   patterns = [
                       r"X-AppImage-Version=([0-9.]+)",
                       r'"name"\s*:\s*"rootapp".*?"version"\s*:\s*"([0-9.]+)"',
-                      r'RootApp[-_]?([0-9]+\.[0-9]+\.[0-9]+)'
+                      r'RootApp[-_]?([0-9]+\.[0-9]+\.[0-9]+)',
+                      r'"version"\s*:\s*"([0-9]+\.[0-9]+\.[0-9]+)"'
                   ]
                   for pat in patterns:
                       m = re.search(pat, out, re.IGNORECASE | re.DOTALL)
@@ -105,7 +121,7 @@ jobs:
                   else: target_file.unlink()
 
           # 2. Check Live Targets
-          live_dirs = ["gui-wm/niri", "gui-wm/mangowc", "x11-base/xwayland-satellite"]
+          live_dirs = ["gui-wm/niri", "gui-wm/mangowc", "x11-base/xwayland-satellite", "gui-apps/quickshell", "gui-libs/scenefx"]
           for live_dir in live_dirs:
               pkg_dir = Path(live_dir)
               if not pkg_dir.exists(): continue
@@ -147,12 +163,44 @@ jobs:
                                   updated_atoms.add("app-misc/rootapp-bin")
                   if os.path.exists(appimage_path): os.remove(appimage_path)
           
-          # Write out changes
           if updated_atoms:
               Path('changed_packages.txt').write_text('\n'.join(updated_atoms) + '\n')
-              with open(os.environ['GITHUB_OUTPUT'], 'a') as f:
-                  f.write("updates_found=true\n")
           EOF
+
+      - name: 2. Binhost Audit (Find Missing Binaries)
+        run: |
+          # 🚀 Fetch SourceForge Packages Index
+          BINHOST_URL="https://gentoo-nexus.sourceforge.io/Packages"
+          curl -sL "$BINHOST_URL" -o sf_packages.txt || touch sf_packages.txt
+
+          TARGET_DIRS="gui-wm/niri gui-wm/mangowc gui-wm/dank-material-shell x11-base/xwayland-satellite app-misc/dgop app-misc/rootapp-bin x11-misc/matugen games-util/protonplus-bin"
+          
+          for pkg_dir in $TARGET_DIRS; do
+              if [ -d "$pkg_dir" ]; then
+                  # Get the highest version ebuild in the folder
+                  LATEST_EBUILD=$(ls -1v "$pkg_dir"/*.ebuild 2>/dev/null | tail -n 1 || true)
+                  if [ -n "$LATEST_EBUILD" ]; then
+                      EBUILD_NAME=$(basename "$LATEST_EBUILD" .ebuild)
+                      CATEGORY=$(dirname "$pkg_dir")
+                      CPV="${CATEGORY}/${EBUILD_NAME}"
+                      
+                      # If this specific version is NOT on SourceForge, queue it up!
+                      if ! grep -q "^CPV: $CPV$" sf_packages.txt; then
+                          echo "🚨 Missing binary for $CPV! Queuing build..."
+                          echo "$pkg_dir" >> changed_packages.txt
+                      fi
+                  fi
+              fi
+          done
+
+          # Clean up duplicates
+          if [ -f changed_packages.txt ]; then
+              sort -u changed_packages.txt > changed_packages_unique.txt
+              mv changed_packages_unique.txt changed_packages.txt
+              if [ -s changed_packages.txt ]; then
+                  echo "updates_found=true" >> "$GITHUB_OUTPUT"
+              fi
+          fi
 
       - name: Generate Manifests for Changed Packages
         if: steps.scan.outputs.updates_found == 'true'
@@ -174,7 +222,7 @@ jobs:
           while IFS= read -r pkg; do
             [ -z "$pkg" ] && continue
             echo "Generating manifest for $pkg"
-            ebuild $(ls /overlay/$pkg/*.ebuild | head -n 1) manifest 2>&1 || true
+            ebuild $(ls /overlay/$pkg/*.ebuild | tail -n 1) manifest 2>&1 || true
           done < /overlay/changed_packages.txt
           EOF
           chmod +x manifest_script.sh
@@ -208,5 +256,5 @@ jobs:
             [ -z "$pkg" ] && continue
             echo "🚀 Dispatching build for $pkg"
             gh workflow run "${WORKFLOW_NAME}" --ref "${GITHUB_REF_NAME}" -f atom="${pkg}"
-            sleep 5 # slight buffer to prevent GitHub API rate limits
+            sleep 5 # buffer to prevent GitHub API rate limits
           done < changed_packages.txt
