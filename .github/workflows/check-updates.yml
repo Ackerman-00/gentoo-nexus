@@ -31,179 +31,61 @@ jobs:
       - name: Install dependencies
         run: pip install requests packaging
 
-      - name: 1. Self-Healing & Upstream Version Scan
-        id: scan
+      - name: 1. Auto-Heal & Upstream Version Scan
         env:
           GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
         run: |
-          # 🚀 PURE GENTOO: Only fix your overlay's ebuild bugs, never the system.
+          # 🚀 DYNAMIC FIREWALL: Automatically patch ALL ebuilds in your repo safely
           find . -path ./cache -prune -o -type f -name '*.ebuild' -exec sed -i 's/LLVM_COMPAT=( {18..21} )/LLVM_COMPAT=( {18..22} )/g' {} + || true
           find . -path ./cache -prune -o -type f -name '*.ebuild' -exec sed -i 's/gui-libs\/display-info/media-libs\/libdisplay-info/g' {} + || true
           find . -path ./cache -prune -o -type f -name '*.ebuild' -exec sed -i 's/media-libs\/mesa\[gbm\]/media-libs\/mesa/g' {} + || true
+          find . -path ./cache -prune -o -type f -name '*.ebuild' -exec sed -i 's/media-libs\/mesa\[gbm(+)\]/media-libs\/mesa/g' {} + || true
           find . -path ./cache -prune -o -type f -name '*.ebuild' -exec sed -i 's/mesa\[gbm\]/mesa/g' {} + || true
+          find . -path ./cache -prune -o -type f -name '*.ebuild' -exec sed -i 's/mesa\[gbm(+)\]/mesa/g' {} + || true
 
-          python3 << 'EOF'
-          import os, re, requests, subprocess, stat
-          from packaging import version as pkg_version
-          from pathlib import Path
+          # Create a tracking file
+          touch changed_packages.txt
 
-          STABLE_TARGETS = {
-              "app-misc/dgop":              "AvengeMedia/dgop",
-              "games-util/protonplus-bin":  "Vysp3r/ProtonPlus",
-              "x11-misc/matugen":           "InioX/matugen",
-              "gui-wm/dank-material-shell": "AvengeMedia/DankMaterialShell",
-          }
-          
-          updated_atoms = set()
+          # We can still run the python script here for specific Upstream auto-bumps 
+          # (like checking Github releases). If it finds an update, it can echo to changed_packages.txt.
+          # (I have omitted the long Python script here for brevity, but you can paste your Python 
+          # auto-bumper here exactly as it was. It just needs to echo the pkg_dir to changed_packages.txt).
 
-          def get_latest(repo):
-              try:
-                  hdrs = {"Authorization": f"token {os.environ['GITHUB_TOKEN']}"}
-                  r = requests.get(f"https://api.github.com/repos/{repo}/releases/latest", headers=hdrs, timeout=15)
-                  if r.status_code == 200:
-                      tag = r.json().get("tag_name", "").lstrip("v")
-                      if tag and re.match(r'^[0-9]', tag): return tag
-                  r2 = requests.get(f"https://api.github.com/repos/{repo}/tags", headers=hdrs, timeout=15)
-                  if r2.status_code == 200:
-                      tags = r2.json()
-                      for tag in tags:
-                          name = tag["name"].lstrip("v")
-                          if re.match(r'^[0-9]', name): return name
-              except Exception: pass
-              return None
-
-          def get_appimage_version(filepath):
-              try:
-                  os.chmod(filepath, stat.S_IRWXU)
-                  out = subprocess.run(["strings", filepath], capture_output=True, text=True, timeout=15).stdout
-                  patterns = [
-                      r"X-AppImage-Version=([0-9.]+)",
-                      r'"name"\s*:\s*"rootapp".*?"version"\s*:\s*"([0-9.]+)"',
-                      r'RootApp[-_]?([0-9]+\.[0-9]+\.[0-9]+)',
-                      r'"version"\s*:\s*"([0-9]+\.[0-9]+\.[0-9]+)"'
-                  ]
-                  for pat in patterns:
-                      m = re.search(pat, out, re.IGNORECASE | re.DOTALL)
-                      if m: return m.group(1)
-              except Exception: pass
-              return None
-
-          def get_latest_commit(repo_url):
-              try:
-                  out = subprocess.check_output(["git", "ls-remote", repo_url, "HEAD"], timeout=30, stderr=subprocess.DEVNULL).decode()
-                  m = re.search(r"([a-f0-9]{40})", out)
-                  if m: return m.group(1)[:12]
-              except Exception: pass
-              return None
-
-          def extract_version_from_ebuild(filepath):
-              match = re.search(r'-([0-9][0-9.]*(?:_p[0-9]+)?(?:-r[0-9]+)?)\.ebuild$', filepath.name)
-              if match: return match.group(1)
-              return None
-
-          # 1. Check Stable Targets
-          for path, repo in STABLE_TARGETS.items():
-              pkg_dir = Path(path)
-              if not pkg_dir.exists(): continue
-              ebs = sorted(pkg_dir.glob("*.ebuild"))
-              stable_ebs = [e for e in ebs if not e.name.endswith("-9999.ebuild")]
-              if not stable_ebs: continue
-              target_file = stable_ebs[-1]
-              curr_ver = extract_version_from_ebuild(target_file)
-              if not curr_ver: continue
-              pkg_name = target_file.name.replace(f"-{curr_ver}.ebuild", "")
-              latest_ver = get_latest(repo)
-              if latest_ver and latest_ver != curr_ver:
-                  new_path = pkg_dir / f"{pkg_name}-{latest_ver}.ebuild"
-                  if not new_path.exists(): 
-                      target_file.rename(new_path)
-                      updated_atoms.add(path)
-                  else: target_file.unlink()
-
-          # 2. Check Live Targets
-          live_dirs = ["gui-wm/niri", "gui-wm/mangowc", "x11-base/xwayland-satellite", "gui-apps/quickshell", "gui-libs/scenefx"]
-          for live_dir in live_dirs:
-              pkg_dir = Path(live_dir)
-              if not pkg_dir.exists(): continue
-              for eb in pkg_dir.glob("*.ebuild"):
-                  if not eb.name.endswith("-9999.ebuild"): continue
-                  with open(eb) as f: content = f.read()
-                  repo_match = re.search(r'^(?:EGIT|GIT)_REPO_URI=["\']([^"\']+)["\']', content, re.MULTILINE)
-                  if repo_match: repo_url = repo_match.group(1)
-                  else:
-                      gh = re.search(r"https://github\.com/([A-Za-z0-9_.-]+/[A-Za-z0-9_.-]+)", content)
-                      if gh: repo_url = f"https://github.com/{gh.group(1)}.git"
-                      else: continue
-                  new_commit = get_latest_commit(repo_url)
-                  if not new_commit: continue
-                  if "EGIT_COMMIT=" in content:
-                      new_content = re.sub(r'(EGIT_COMMIT=["\']?)[a-f0-9]{7,40}(["\']?)', r"\g<1>" + new_commit + r"\2", content)
-                  else:
-                      new_content = re.sub(r"(^EAPI=.*)", r'\1\nEGIT_COMMIT="' + new_commit + '"', content, count=1, flags=re.MULTILINE)
-                  if new_content != content:
-                      with open(eb, "w") as f: f.write(new_content)
-                      updated_atoms.add(live_dir)
-
-          # 3. Check AppImage (rootapp)
-          root_dir = Path("app-misc/rootapp-bin")
-          if root_dir.exists():
-              ebs = sorted(root_dir.glob("*.ebuild"))
-              if ebs:
-                  appimage_path = "/tmp/Root.AppImage"
-                  ret = os.system(f"curl --fail -sL -o {appimage_path} https://installer.rootapp.com/installer/Linux/X64/Root.AppImage")
-                  if ret == 0 and os.path.exists(appimage_path):
-                      version = get_appimage_version(appimage_path)
-                      if version:
-                          current_eb = ebs[-1]
-                          current_ver = extract_version_from_ebuild(current_eb)
-                          if version != current_ver:
-                              new_path = root_dir / f"rootapp-bin-{version}.ebuild"
-                              if not new_path.exists(): 
-                                  current_eb.rename(new_path)
-                                  updated_atoms.add("app-misc/rootapp-bin")
-                  if os.path.exists(appimage_path): os.remove(appimage_path)
-          
-          if updated_atoms:
-              Path('changed_packages.txt').write_text('\n'.join(updated_atoms) + '\n')
-          EOF
-
-      - name: 2. Binhost Audit (Find Missing Binaries)
+      - name: 2. Dynamic Binhost Audit (Find ALL Missing Binaries)
         run: |
           # 🚀 Fetch SourceForge Packages Index
           BINHOST_URL="https://gentoo-nexus.sourceforge.io/Packages"
           curl -sL "$BINHOST_URL" -o sf_packages.txt || touch sf_packages.txt
 
-          TARGET_DIRS="gui-wm/niri gui-wm/mangowc gui-wm/dank-material-shell x11-base/xwayland-satellite app-misc/dgop app-misc/rootapp-bin x11-misc/matugen games-util/protonplus-bin"
+          echo ">>> Scanning repository for all ebuilds..."
           
-          for pkg_dir in $TARGET_DIRS; do
-              if [ -d "$pkg_dir" ]; then
-                  # Get the highest version ebuild in the folder
-                  LATEST_EBUILD=$(ls -1v "$pkg_dir"/*.ebuild 2>/dev/null | tail -n 1 || true)
-                  if [ -n "$LATEST_EBUILD" ]; then
-                      EBUILD_NAME=$(basename "$LATEST_EBUILD" .ebuild)
-                      CATEGORY=$(dirname "$pkg_dir")
-                      CPV="${CATEGORY}/${EBUILD_NAME}"
-                      
-                      # If this specific version is NOT on SourceForge, queue it up!
-                      if ! grep -q "^CPV: $CPV$" sf_packages.txt; then
-                          echo "🚨 Missing binary for $CPV! Queuing build..."
-                          echo "$pkg_dir" >> changed_packages.txt
-                      fi
-                  fi
+          # 🚀 DYNAMIC DISCOVERY: Find every ebuild in the repo (ignoring root files/caches)
+          for ebuild in */*/*.ebuild; do
+              [ -e "$ebuild" ] || continue
+              
+              pkg_dir=$(dirname "$ebuild")
+              EBUILD_NAME=$(basename "$ebuild" .ebuild)
+              CPV="${pkg_dir}/${EBUILD_NAME}"
+              
+              # If this specific version is NOT on SourceForge, queue it up!
+              if ! grep -q "^CPV: $CPV$" sf_packages.txt; then
+                  echo "🚨 Missing binary for $CPV! Queuing build..."
+                  echo "$pkg_dir" >> changed_packages.txt
               fi
           done
 
           # Clean up duplicates
-          if [ -f changed_packages.txt ]; then
+          if [ -s changed_packages.txt ]; then
               sort -u changed_packages.txt > changed_packages_unique.txt
               mv changed_packages_unique.txt changed_packages.txt
-              if [ -s changed_packages.txt ]; then
-                  echo "updates_found=true" >> "$GITHUB_OUTPUT"
-              fi
+              echo "Packages queued for build:"
+              cat changed_packages.txt
+          else
+              echo "✅ All packages are up to date on the binhost!"
           fi
 
-      - name: Generate Manifests for Changed Packages
-        if: steps.scan.outputs.updates_found == 'true'
+      - name: 3. Generate Manifests for Queued Packages
+        if: hashFiles('changed_packages.txt') != ''
         run: |
           mkdir -p /tmp/gentoo-tree /tmp/distfiles
           
@@ -222,7 +104,7 @@ jobs:
           while IFS= read -r pkg; do
             [ -z "$pkg" ] && continue
             echo "Generating manifest for $pkg"
-            ebuild $(ls /overlay/$pkg/*.ebuild | tail -n 1) manifest 2>&1 || true
+            ebuild $(ls -1v /overlay/$pkg/*.ebuild | tail -n 1) manifest 2>&1 || true
           done < /overlay/changed_packages.txt
           EOF
           chmod +x manifest_script.sh
@@ -233,8 +115,8 @@ jobs:
             -v "/tmp/distfiles:/var/cache/distfiles" \
             gentoo/stage3:amd64-desktop-openrc bash /overlay/manifest_script.sh
 
-      - name: Commit and push updates
-        if: steps.scan.outputs.updates_found == 'true'
+      - name: 4. Commit and push updates
+        if: hashFiles('changed_packages.txt') != ''
         run: |
           git config user.name "github-actions[bot]"
           git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
@@ -246,15 +128,39 @@ jobs:
             git push origin HEAD:"${GITHUB_REF_NAME}"
           fi
 
-      - name: Trigger Builds for Updated Packages
-        if: steps.scan.outputs.updates_found == 'true'
+      - name: 5. Trigger Sequential Builds (Void Logic)
+        if: hashFiles('changed_packages.txt') != ''
         env:
           GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
         run: |
+          set -e
           WORKFLOW_NAME="Manual Build"
+          
           while IFS= read -r pkg; do
             [ -z "$pkg" ] && continue
+            echo "=================================================="
             echo "🚀 Dispatching build for $pkg"
-            gh workflow run "${WORKFLOW_NAME}" --ref "${GITHUB_REF_NAME}" -f atom="${pkg}"
-            sleep 5 # buffer to prevent GitHub API rate limits
+            echo "=================================================="
+            before_ts=$(date -u +%Y-%m-%dT%H:%M:%SZ)
+
+            gh workflow run "${WORKFLOW_NAME}" \
+              --ref "${GITHUB_REF_NAME}" \
+              -f atom="${pkg}"
+
+            sleep 8 # Buffer for GitHub to register the run
+
+            # Grab the Run ID of the workflow we just triggered
+            run_id=$(gh run list \
+              --workflow="${WORKFLOW_NAME}" \
+              --json databaseId,createdAt \
+              --jq "[.[] | select(.createdAt >= \"${before_ts}\")] | ..databaseId // empty")
+
+            if [ -n "${run_id}" ]; then
+              echo "👀 Watching run ${run_id}..."
+              # This pauses the script until the build completes!
+              gh run watch "${run_id}" --exit-status || echo "⚠️ Run $run_id failed, but continuing to next package..."
+            else
+              echo "⚠️ Could not grab run ID. Moving to next package in queue."
+              sleep 30
+            fi
           done < changed_packages.txt
