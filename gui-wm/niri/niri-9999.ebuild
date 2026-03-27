@@ -17,6 +17,8 @@ KEYWORDS=""
 IUSE="+dbus +screencast"
 REQUIRED_USE="screencast? ( dbus )"
 
+RESTRICT="network-sandbox"
+
 DEPEND="
     dev-libs/glib:2
     dev-libs/libinput:=
@@ -36,8 +38,8 @@ RDEPEND="
     screencast? ( sys-apps/xdg-desktop-portal-gnome )
 "
 BDEPEND="
-    screencast? ( $(llvm_gen_dep 'llvm-core/clang:${LLVM_SLOT}') )
     virtual/pkgconfig
+    $(llvm_gen_dep 'llvm-core/clang:${LLVM_SLOT}')
 "
 
 QA_FLAGS_IGNORED="usr/bin/niri"
@@ -49,7 +51,6 @@ pkg_setup() {
 
 src_unpack() {
     git-r3_src_unpack
-    cargo_live_src_unpack
 }
 
 src_prepare() {
