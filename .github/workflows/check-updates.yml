@@ -13,9 +13,6 @@ permissions:
   contents: write
   actions: write
 
-env:
-  CACHE_VERSION: v31
-
 jobs:
   check-updates:
     runs-on: ubuntu-latest
@@ -32,7 +29,7 @@ jobs:
           python-version: '3.11'
 
       - name: Install dependencies
-        run: pip install requests packaging
+        run: pip install requests packaging jq
 
       - name: Auto-Heal & Dynamic Upstream Scan
         id: scan
@@ -45,7 +42,6 @@ jobs:
           find . -path ./cache -prune -o -type f -name '*.ebuild' -exec sed -i 's/media-libs\/mesa\[gbm(+)\]/media-libs\/mesa/g' {} + || true
           find . -path ./cache -prune -o -type f -name '*.ebuild' -exec sed -i 's/mesa\[gbm\]/mesa/g' {} + || true
           find . -path ./cache -prune -o -type f -name '*.ebuild' -exec sed -i 's/mesa\[gbm(+)\]/mesa/g' {} + || true
-          
           find gui-wm/mangowc -type f -name '*.ebuild' -exec sed -i 's/mangowm\/mangowc/mangowm\/mango/g' {} + || true
 
           python3 << 'EOF'
@@ -169,8 +165,9 @@ jobs:
           for ebuild in */*/*.ebuild; do
               [ -e "$ebuild" ] || continue
               pkg_dir=$(dirname "$ebuild")
+              CATEGORY=$(dirname "$pkg_dir")
               EBUILD_NAME=$(basename "$ebuild" .ebuild)
-              CPV="${pkg_dir}/${EBUILD_NAME}"
+              CPV="${CATEGORY}/${EBUILD_NAME}"
               
               if ! grep -q "^CPV: $CPV$" sf_packages.txt; then
                   echo "$pkg_dir" >> changed_packages.txt
@@ -192,6 +189,8 @@ jobs:
           cat > manifest_script.sh << 'EOF'
           #!/bin/bash
           set -euo pipefail
+          
+          rm -rf /var/db/repos/gentoo/*
           emerge-webrsync -q
           
           mkdir -p /etc/portage/repos.conf
@@ -246,7 +245,7 @@ jobs:
             gh workflow run "${WORKFLOW_NAME}" --ref "${GITHUB_REF_NAME}" -f atom="${pkg}"
             sleep 10
 
-            run_id=$(gh run list --workflow="${WORKFLOW_NAME}" --json databaseId,createdAt -q ".[] | select(.createdAt >= \"${before_ts}\") | .databaseId" | head -n 1 || true)
+            run_id=$(gh run list --workflow="${WORKFLOW_NAME}" --json databaseId,createdAt | jq -r ".[] | select(.createdAt >= \"${before_ts}\") | .databaseId" | head -n 1 || true)
 
             if [ -n "${run_id}" ] && [ "${run_id}" != "null" ]; then
               gh run watch "${run_id}" --exit-status || echo "Run $run_id failed, continuing queue."
