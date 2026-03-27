@@ -4,11 +4,11 @@ on:
   workflow_dispatch:
     inputs:
       atom:
-        description: 'Package atom to build (e.g. gui-wm/niri)'
+        description: 'Package atom to build'
         required: true
         type: string
       force_rebuild:
-        description: 'Force rebuild even if binary exists on binhost'
+        description: 'Force rebuild'
         required: false
         type: boolean
         default: false
@@ -20,6 +20,9 @@ concurrency:
 permissions:
   contents: write
 
+env:
+  CACHE_VERSION: v31
+
 jobs:
   build-and-deploy:
     runs-on: ubuntu-latest
@@ -28,14 +31,13 @@ jobs:
       - name: Checkout
         uses: actions/checkout@v4
 
-      - name: Check SourceForge Binhost Status
+      - name: Check SourceForge Binhost
         id: check_bin
         run: |
           PKG="${{ github.event.inputs.atom }}"
           BINHOST="https://gentoo-nexus.sourceforge.io/Packages"
 
           if [ "${{ github.event.inputs.force_rebuild }}" = "true" ]; then
-            echo "🚨 Force rebuild requested."
             echo "skip=false" >> "$GITHUB_OUTPUT"
             exit 0
           fi
@@ -50,18 +52,16 @@ jobs:
           VER=$(basename "${EBUILD_FILE}" | sed -E "s/^${PN}-//; s/\.ebuild$//")
           
           if curl --fail -sL "$BINHOST" 2>/dev/null | grep -q "^CPV: ${PKG}-${VER}$"; then
-            echo "✅ Binary for ${PKG}-${VER} already exists. Skipping!"
             echo "skip=true" >> "$GITHUB_OUTPUT"
           else
-            echo "🚀 No binary found. Proceeding to build."
             echo "skip=false" >> "$GITHUB_OUTPUT"
           fi
 
       - name: Build Binary Package
         if: steps.check_bin.outputs.skip == 'false'
         run: |
-          mkdir -p job_out
-          mkdir -p "${{ github.workspace }}/cache/distfiles"
+          mkdir -p job_out /tmp/distfiles
+          chmod 777 /tmp/distfiles
 
           cat > build_script.sh << 'BUILDEOF'
           #!/bin/bash
@@ -89,7 +89,6 @@ jobs:
           sys-libs/ncurses -gpm -abi_x86_32
           sys-libs/termcap -gpm
           www-client/w3m -gpm
-          media-libs/harfbuzz -cairo -glib -introspection -doc -gtk-doc
           USE
 
           cat > /etc/portage/binrepos.conf/gentoo.conf << 'REPOCONF'
@@ -108,7 +107,7 @@ jobs:
           cat > /etc/portage/make.conf << 'MAKECONF'
           FEATURES="-userfetch -userpriv -usersandbox -ipc-sandbox -network-sandbox -pid-sandbox getbinpkg buildpkg"
           EMERGE_DEFAULT_OPTS="--getbinpkg --usepkg --binpkg-respect-use=y --binpkg-changed-deps=y --autounmask=y --autounmask-write --autounmask-backtrack=y --keep-going --quiet"
-          DISTDIR="/overlay/distfiles"
+          DISTDIR="/var/cache/distfiles"
           PKGDIR="/overlay/job_out"
           USE="pipewire egl gles2 vulkan pam -systemd -test -gpm elogind"
           VIDEO_CARDS="amdgpu radeonsi nouveau virgl"
@@ -141,24 +140,34 @@ jobs:
           TARGET_PKG='${{ github.event.inputs.atom }}'
           echo "$TARGET_PKG **" >> /etc/portage/package.accept_keywords/target
 
-          for pkg in gui-wm/niri x11-base/xwayland-satellite; do
-            if [ -d "/overlay/$pkg" ]; then
-              sed -i 's/LLVM_COMPAT=( {18..21} )/LLVM_COMPAT=( {18..22} )/g' "/overlay/$pkg"/*.ebuild 2>/dev/null || true
-              sed -i 's/gui-libs\/display-info/media-libs\/libdisplay-info/g' "/overlay/$pkg"/*.ebuild 2>/dev/null || true
-              sed -i 's/media-libs\/mesa\[gbm\]/media-libs\/mesa/g' "/overlay/$pkg"/*.ebuild 2>/dev/null || true
-              sed -i 's/media-libs\/mesa\[gbm(+)\]/media-libs\/mesa/g' "/overlay/$pkg"/*.ebuild 2>/dev/null || true
-              sed -i 's/mesa\[gbm\]/mesa/g' "/overlay/$pkg"/*.ebuild 2>/dev/null || true
-              sed -i 's/mesa\[gbm(+)\]/mesa/g' "/overlay/$pkg"/*.ebuild 2>/dev/null || true
-              ebuild $(ls -1v /overlay/$pkg/*.ebuild | tail -n 1) manifest 2>/dev/null || true
+          find /overlay -mindepth 2 -maxdepth 4 -type f -name '*.ebuild' -not -path '*/cache/*' -not -path '*/job_out/*' -not -path '*/.git/*' -exec sed -i 's/LLVM_COMPAT=( {18..21} )/LLVM_COMPAT=( {18..22} )/g' {} + || true
+          find /overlay -mindepth 2 -maxdepth 4 -type f -name '*.ebuild' -not -path '*/cache/*' -not -path '*/job_out/*' -not -path '*/.git/*' -exec sed -i 's/gui-libs\/display-info/media-libs\/libdisplay-info/g' {} + || true
+          find /overlay -mindepth 2 -maxdepth 4 -type f -name '*.ebuild' -not -path '*/cache/*' -not -path '*/job_out/*' -not -path '*/.git/*' -exec sed -i 's/media-libs\/mesa\[gbm\]/media-libs\/mesa/g' {} + || true
+          find /overlay -mindepth 2 -maxdepth 4 -type f -name '*.ebuild' -not -path '*/cache/*' -not -path '*/job_out/*' -not -path '*/.git/*' -exec sed -i 's/media-libs\/mesa\[gbm(+)\]/media-libs\/mesa/g' {} + || true
+          find /overlay -mindepth 2 -maxdepth 4 -type f -name '*.ebuild' -not -path '*/cache/*' -not -path '*/job_out/*' -not -path '*/.git/*' -exec sed -i 's/mesa\[gbm\]/mesa/g' {} + || true
+          find /overlay -mindepth 2 -maxdepth 4 -type f -name '*.ebuild' -not -path '*/cache/*' -not -path '*/job_out/*' -not -path '*/.git/*' -exec sed -i 's/mesa\[gbm(+)\]/mesa/g' {} + || true
+
+          for pkg in gui-libs/wlroots gui-libs/scenefx; do
+            if [ -d "/var/db/repos/guru/$pkg" ]; then
+              sed -i 's/media-libs\/mesa\[gbm\]/media-libs\/mesa/g' "/var/db/repos/guru/$pkg"/*.ebuild 2>/dev/null || true
+              sed -i 's/media-libs\/mesa\[gbm(+)\]/media-libs\/mesa/g' "/var/db/repos/guru/$pkg"/*.ebuild 2>/dev/null || true
+              sed -i 's/mesa\[gbm\]/mesa/g' "/var/db/repos/guru/$pkg"/*.ebuild 2>/dev/null || true
+              sed -i 's/mesa\[gbm(+)\]/mesa/g' "/var/db/repos/guru/$pkg"/*.ebuild 2>/dev/null || true
             fi
           done
 
-          echo ">>> Bootstrapping Base Libraries to shatter circular loops..."
-          emerge --oneshot --quiet --nodeps dev-libs/glib dev-libs/gobject-introspection-common dev-util/gdbus-codegen 2>&1 || true
+          USE="-introspection" emerge --oneshot --quiet --nodeps dev-libs/glib dev-libs/gobject-introspection-common dev-util/gdbus-codegen 2>&1 || true
           emerge --oneshot --quiet --nodeps dev-libs/gobject-introspection 2>&1 || true
-          emerge --oneshot --quiet --nodeps media-libs/harfbuzz sys-libs/ncurses 2>&1 || true
+          USE="-cairo -glib -introspection -doc -gtk-doc" emerge --oneshot --quiet --nodeps media-libs/harfbuzz 2>&1 || true
+          emerge --oneshot --quiet dev-libs/glib dev-libs/gobject-introspection-common dev-libs/gobject-introspection dev-util/gdbus-codegen media-libs/harfbuzz sys-libs/ncurses 2>&1 || true
 
-          echo ">>> Compiling Main Target: $TARGET_PKG"
+          LOCAL_BUILD_PKGS="sys-auth/elogind sys-auth/polkit dev-libs/libei media-video/wireplumber media-libs/libpulse sys-apps/accountsservice"
+          
+          for pkg in $LOCAL_BUILD_PKGS; do
+            emerge --oneshot --quiet --usepkg=n --getbinpkg=n --autounmask=y --autounmask-write --autounmask-backtrack=y "$pkg" 2>&1 || true
+          done
+          for i in 1 2 3; do etc-update --automode -5 2>/dev/null || break; done
+
           EXCLUDES="--usepkg-exclude sys-auth/polkit --usepkg-exclude dev-libs/libei --usepkg-exclude media-video/wireplumber --usepkg-exclude media-libs/libpulse --usepkg-exclude sys-apps/accountsservice --usepkg-exclude sys-auth/elogind"
 
           emerge $EXCLUDES "$TARGET_PKG" 2>&1 || true
@@ -171,28 +180,57 @@ jobs:
           BUILDEOF
           chmod +x build_script.sh
 
-          # 🚀 FIREWALL: Added --privileged to allow Docker to perform proper IPC network sandboxing!
           docker run --rm --privileged \
             -v "${{ github.workspace }}:/overlay" \
-            -v "${{ github.workspace }}/cache/distfiles:/var/cache/distfiles" \
+            -v "/tmp/distfiles:/var/cache/distfiles" \
             gentoo/stage3:amd64-desktop-openrc bash /overlay/build_script.sh
 
-      - name: Deploy to SourceForge
+      - name: Upload Binary Artifact
         if: steps.check_bin.outputs.skip == 'false'
+        uses: actions/upload-artifact@v4
+        with:
+          name: binpkg-manual-build
+          path: job_out/
+          if-no-files-found: warn
+
+  deploy-binhost:
+    needs: build-and-deploy
+    runs-on: ubuntu-latest
+    timeout-minutes: 30
+    if: always() && needs.build-and-deploy.result == 'success'
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Setup SSH
         env:
-          SF_USERNAME: ${{ secrets.SF_USERNAME }}
           SF_SSH_KEY: ${{ secrets.SF_SSH_KEY }}
         run: |
           mkdir -p ~/.ssh && chmod 700 ~/.ssh
           echo "$SF_SSH_KEY" > ~/.ssh/id_ed25519
           chmod 600 ~/.ssh/id_ed25519
           ssh-keyscan -t rsa,ecdsa,ed25519 web.sourceforge.net >> ~/.ssh/known_hosts
+          chmod 644 ~/.ssh/known_hosts
 
+      - name: Download all artifacts
+        uses: actions/download-artifact@v4
+        with:
+          path: combined/
+          pattern: binpkg-*
+          merge-multiple: true
+
+      - name: Fetch and Merge
+        env:
+          SF_USERNAME: ${{ secrets.SF_USERNAME }}
+        run: |
           mkdir -p public_binhost
           rsync -avz -e "ssh" $SF_USERNAME@web.sourceforge.net:/home/project-web/gentoo-nexus/htdocs/ public_binhost/ 2>/dev/null || true
-          
-          if [ -d job_out ]; then cp -r job_out/* public_binhost/ 2>/dev/null || true; fi
+          if [ -d combined ]; then cp -r combined/* public_binhost/ 2>/dev/null || true; fi
 
+      - name: Build Index and Deploy
+        env:
+          SF_USERNAME: ${{ secrets.SF_USERNAME }}
+        run: |
           cat > deploy_script.sh << 'EOF'
           #!/bin/bash
           set -euo pipefail
@@ -231,7 +269,7 @@ jobs:
 
           FILE_LIST=$(ls -1 public_binhost/*/*.gpkg.tar public_binhost/*/*.tbz2 2>/dev/null | xargs -I{} basename {} | sort || echo "(no packages yet)")
           cat > public_binhost/index.html << HTML
-          <!DOCTYPE html><html><head><title>Gentoo Nexus Binhost</title><style>body { font-family: monospace; background: #1a1a1a; color: #e0e0e0; padding: 2em; } a { color: #66d9ef; }</style></head><body><h1>Gentoo Nexus Binhost</h1><p>Last build: <strong>${{ github.event.inputs.atom }}</strong></p><p>Updated: $(date -u '+%Y-%m-%d %H:%M:%S UTC')</p><pre>${FILE_LIST}</pre></body></html>
+          <!DOCTYPE html><html><head><title>Gentoo Nexus Binhost</title><style>body { font-family: monospace; background: #1a1a1a; color: #e0e0e0; padding: 2em; } a { color: #66d9ef; }</style></head><body><h1>Gentoo Nexus Binhost</h1><p>Last updated: $(date -u '+%Y-%m-%d %H:%M:%S UTC')</p><pre>${FILE_LIST}</pre></body></html>
           HTML
 
           rsync -avz --delete -e "ssh" public_binhost/ $SF_USERNAME@web.sourceforge.net:/home/project-web/gentoo-nexus/htdocs/
