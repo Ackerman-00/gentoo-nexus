@@ -304,10 +304,8 @@ jobs:
             emerge-webrsync -q
           fi
           
-          # getuto may not exist in all stage3 images
           command -v getuto >/dev/null 2>&1 && getuto || true
 
-          # ✅ Desktop profile uses OpenRC by default in 23.0 [[1]], [[4]]
           eselect profile set default/linux/amd64/23.0/desktop
           
           mkdir -p /etc/portage/repos.conf /etc/portage/binrepos.conf /overlay/distfiles /overlay/job_out
@@ -324,7 +322,7 @@ jobs:
           sys-apps/systemd-initctl
           MASK
 
-          # 🚀 CRITICAL: Mask gpm BEFORE ncurses (breaks circular dep [[17]], [[18]])
+          # 🚀 CRITICAL: Mask gpm BEFORE ncurses (breaks circular dep)
           cat > /etc/portage/package.mask/gpm << 'MASK'
           sys-libs/gpm
           MASK
@@ -355,6 +353,16 @@ jobs:
           media-libs/tiff -webp
           USE
 
+          # 🚀 Break harfbuzz circular dep
+          cat > /etc/portage/package.use/harfbuzz << 'USE'
+          media-libs/harfbuzz -cairo -doc -gtk-doc -introspection
+          USE
+
+          # 🚀 Break libdrm video_cards dependency
+          cat > /etc/portage/package.use/libdrm << 'USE'
+          x11-libs/libdrm video_cards_amdgpu video_cards_intel video_cards_nouveau -video_cards_radeon -video_cards_r600 -video_cards_r300
+          USE
+
           # 🚀 Binhost config
           cat > /etc/portage/binrepos.conf/nexus.conf << 'REPOCONF'
           [gentoo-nexus-sf]
@@ -366,7 +374,7 @@ jobs:
           sync-uri = https://ackerman-00.github.io/gentoo-nexus/
           REPOCONF
 
-          # 🚀 make.conf WITHOUT usepkg-exclude (moved to emerge commands)
+          # 🚀 make.conf WITHOUT usepkg-exclude in EMERGE_DEFAULT_OPTS
           cat > /etc/portage/make.conf << 'MAKECONF'
           FEATURES="-userfetch -userpriv -usersandbox -ipc-sandbox -network-sandbox -pid-sandbox getbinpkg buildpkg -binpkg-request-signature -binpkg-sig-verify"
           DISTDIR="/overlay/distfiles"
@@ -399,33 +407,30 @@ jobs:
           echo "*/*::guru **" >> /etc/portage/package.accept_keywords/guru
           echo "*/* *" >> /etc/portage/package.license/all
 
-          # 🚀 TIME TRAVEL FIX: Patch AFTER guru sync [[26]]
-          find /overlay /var/db/repos/guru -type f -name '*.ebuild' -exec sed -i 's/LLVM_COMPAT=( {18..21} )/LLVM_COMPAT=( {18..22} )/g' {} + || true
-          find /overlay /var/db/repos/guru -type f -name '*.ebuild' -exec sed -i 's/gui-libs\/display-info/media-libs\/libdisplay-info/g' {} + || true
-          find /overlay /var/db/repos/guru -type f -name '*.ebuild' -exec sed -i 's/media-libs\/mesa\[gbm\]/media-libs\/mesa/g' {} + || true
-          find /overlay /var/db/repos/guru -type f -name '*.ebuild' -exec sed -i 's/mesa\[gbm\]/mesa/g' {} + || true
-
-          # 🚀 Break Harfbuzz loop
-          echo "media-libs/harfbuzz -cairo" > /etc/portage/package.use/harfbuzz_break
-          emerge --oneshot --quiet media-libs/harfbuzz
-          rm -f /etc/portage/package.use/harfbuzz_break
-
-          # 🚀 Break Ncurses loop (gpm already masked)
-          emerge --oneshot --quiet sys-libs/ncurses
+          # 🚀 CRITICAL: Only patch OVERLAY ebuilds (NOT gentoo repo - causes Manifest corruption!)
+          find /overlay -type f -name '*.ebuild' -exec sed -i 's/LLVM_COMPAT=( {18..21} )/LLVM_COMPAT=( {18..22} )/g' {} + || true
+          find /overlay -type f -name '*.ebuild' -exec sed -i 's/gui-libs\/display-info/media-libs\/libdisplay-info/g' {} + || true
+          find /overlay -type f -name '*.ebuild' -exec sed -i 's/media-libs\/mesa\[gbm\]/media-libs\/mesa/g' {} + || true
+          find /overlay -type f -name '*.ebuild' -exec sed -i 's/mesa\[gbm\]/mesa/g' {} + || true
 
           # 🚀 Pre-compile systemd-infected packages LOCALLY (not from binhost)
           emerge --oneshot --quiet --usepkg=n --getbinpkg=n --autounmask=y --autounmask-write --autounmask-backtrack=y \
             sys-auth/polkit dev-libs/libei media-video/wireplumber media-libs/libpulse sys-apps/accountsservice 2>&1 || true
           
-          # 🚀 etc-update loop until clean
           for i in 1 2 3; do
             etc-update --automode -5 2>/dev/null || break
           done
 
+          # 🚀 Break Harfbuzz loop
+          emerge --oneshot --quiet --usepkg=n --getbinpkg=n media-libs/harfbuzz
+
+          # 🚀 Break Ncurses loop (gpm already masked)
+          emerge --oneshot --quiet --usepkg=n --getbinpkg=n sys-libs/ncurses
+
           # 🚀 Break TIFF/WEBP
           emerge --oneshot --quiet --usepkg=n --getbinpkg=n media-libs/tiff media-libs/libwebp
 
-          # 🚀 MAIN EMERGE with --usepkg-exclude on command line [[26]], [[28]]
+          # 🚀 MAIN EMERGE with --usepkg-exclude on command line
           emerge --autounmask=y --autounmask-write --autounmask-backtrack=y --keep-going --quiet \
             --usepkg-exclude sys-auth/polkit \
             --usepkg-exclude dev-libs/libei \
