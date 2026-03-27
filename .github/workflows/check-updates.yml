@@ -17,7 +17,7 @@ permissions:
   contents: write
 
 env:
-  CACHE_VERSION: v7
+  CACHE_VERSION: v8
   GENTOO_PROFILE: default/linux/amd64/23.0/desktop
 
 jobs:
@@ -361,9 +361,10 @@ jobs:
           #!/bin/bash
           set -euo pipefail
           
-          if [ ! -f /var/db/repos/gentoo/profiles/eapi ]; then
-            emerge-webrsync -q
-          fi
+          # CRITICAL: Force fresh Gentoo tree sync to fix Manifest issues
+          echo ">>> Forcing fresh Gentoo tree sync..."
+          emerge-webrsync -q
+          emerge --metadata --quiet 2>&1 | head -20 || true
           
           command -v getuto >/dev/null 2>&1 && getuto || true
           eselect profile set ${{ env.GENTOO_PROFILE }}
