@@ -7,6 +7,11 @@ on:
         description: 'Package atom (e.g. gui-wm/niri)'
         required: true
         type: string
+      use_binhost:
+        description: 'Use Gentoo official binhost for heavy packages'
+        required: false
+        type: boolean
+        default: true
 
 concurrency:
   group: manual-build-${{ github.event.inputs.atom }}
@@ -14,6 +19,10 @@ concurrency:
 
 permissions:
   contents: write
+
+env:
+  CACHE_VERSION: v5
+  GENTOO_PROFILE: default/linux/amd64/23.0/desktop
 
 jobs:
   manual:
@@ -23,9 +32,12 @@ jobs:
       - name: Checkout
         uses: actions/checkout@v4
 
-      - name: Get week number for cache key
+      - name: Generate cache key
         id: week
-        run: echo "key=$(date +%Y-%U)" >> "$GITHUB_OUTPUT"
+        run: |
+          WEEK=$(date +%Y-%U)
+          WORKFLOW_HASH=${{ hashFiles('.github/workflows/*.yml') }}
+          echo "key=${WEEK}-${{ env.CACHE_VERSION }}-${WORKFLOW_HASH:0:8}" >> "$GITHUB_OUTPUT"
 
       - name: Cache Gentoo portage tree
         uses: actions/cache@v4
@@ -35,7 +47,15 @@ jobs:
           restore-keys: |
             gentoo-tree-${{ runner.os }}-
 
-      - name: Build Binary Asset (Zero-Compile Active)
+      - name: Cache distfiles
+        uses: actions/cache@v4
+        with:
+          path: ${{ github.workspace }}/cache/distfiles
+          key: distfiles-${{ runner.os }}-${{ hashFiles('**/Manifest') }}
+          restore-keys: |
+            distfiles-${{ runner.os }}-
+
+      - name: Build Binary Package
         run: |
           mkdir -p job_out
           mkdir -p "${{ github.workspace }}/cache/gentoo-tree"
@@ -45,20 +65,22 @@ jobs:
           #!/bin/bash
           set -euo pipefail
           
+          # Initialize portage tree
           if [ ! -f /var/db/repos/gentoo/profiles/eapi ]; then
             emerge-webrsync -q
           fi
           
+          # Setup GPG keys
           command -v getuto >/dev/null 2>&1 && getuto || true
 
-          eselect profile set default/linux/amd64/23.0/desktop
+          # Set profile
+          eselect profile set ${{ env.GENTOO_PROFILE }}
           
-          mkdir -p /etc/portage/repos.conf /etc/portage/binrepos.conf /overlay/distfiles /overlay/job_out
-          mkdir -p /etc/portage/package.accept_keywords
-          mkdir -p /etc/portage/package.license
-          mkdir -p /etc/portage/package.use
-          mkdir -p /etc/portage/package.mask
+          # Create directories
+          mkdir -p /etc/portage/{repos.conf,binrepos.conf,package.{accept_keywords,license,use,mask}}
+          mkdir -p /overlay/{distfiles,job_out}
 
+          # 🚀 Mask systemd and gpm
           cat > /etc/portage/package.mask/systemd << 'MASK'
           sys-apps/systemd
           sys-apps/systemd-utils
@@ -70,12 +92,7 @@ jobs:
           sys-libs/gpm
           MASK
 
-          cat > /etc/portage/package.use/ncurses << 'USE'
-          sys-libs/ncurses -gpm -abi_x86_32
-          sys-libs/termcap -gpm
-          www-client/w3m -gpm
-          USE
-
+          # 🚀 ELOGIND configuration
           cat > /etc/portage/package.use/elogind << 'USE'
           */* -systemd elogind -gpm
           sys-auth/polkit -systemd elogind
@@ -94,26 +111,38 @@ jobs:
           media-libs/tiff -webp
           USE
 
-          cat > /etc/portage/package.use/harfbuzz << 'USE'
-          media-libs/harfbuzz -cairo -doc -gtk-doc -introspection
+          # 🚀 NCURSES lockdown
+          cat > /etc/portage/package.use/ncurses << 'USE'
+          sys-libs/ncurses -gpm -abi_x86_32
+          sys-libs/termcap -gpm
+          www-client/w3m -gpm
           USE
 
-          cat > /etc/portage/package.use/libdrm << 'USE'
-          x11-libs/libdrm video_cards_amdgpu video_cards_intel video_cards_nouveau -video_cards_radeon -video_cards_r600 -video_cards_r300
+          # 🚀 Break harfbuzz circular dep
+          cat > /etc/portage/package.use/harfbuzz << 'USE'
+          media-libs/harfbuzz -cairo -glib -introspection -doc -gtk-doc
           USE
+
+          # 🚀 Binhost configuration
+          cat > /etc/portage/binrepos.conf/gentoo.conf << 'REPOCONF'
+          [gentoo]
+          priority = 10000
+          sync-uri = https://distfiles.gentoo.org/releases/amd64/binpackages/23.0/x86-64/
+          verify-signature = true
+          REPOCONF
 
           cat > /etc/portage/binrepos.conf/nexus.conf << 'REPOCONF'
           [gentoo-nexus-sf]
           priority = 9999
           sync-uri = https://gentoo-nexus.sourceforge.io/
-
           [gentoo-nexus-gh]
           priority = 9998
           sync-uri = https://ackerman-00.github.io/gentoo-nexus/
           REPOCONF
 
+          # 🚀 make.conf
           cat > /etc/portage/make.conf << 'MAKECONF'
-          FEATURES="-userfetch -userpriv -usersandbox -ipc-sandbox -network-sandbox -pid-sandbox getbinpkg buildpkg -binpkg-request-signature -binpkg-sig-verify"
+          FEATURES="-userfetch -userpriv -usersandbox -ipc-sandbox -network-sandbox -pid-sandbox getbinpkg buildpkg -binpkg-request-signature"
           DISTDIR="/overlay/distfiles"
           PKGDIR="/overlay/job_out"
           USE="pipewire egl gles2 vulkan pam -systemd -test -gpm elogind"
@@ -123,9 +152,14 @@ jobs:
           ACCEPT_LICENSE="*"
           MAKECONF
 
-          emerge --noreplace --quiet dev-lang/go dev-lang/rust-bin app-eselect/eselect-repository dev-vcs/git
-          eselect repository enable guru && emaint sync -r guru
+          # Install tools
+          emerge --noreplace --quiet dev-lang/go dev-lang/rust-bin \
+            app-eselect/eselect-repository dev-vcs/git 2>&1 || true
+          
+          eselect repository enable guru 2>/dev/null || true
+          emaint sync -r guru 2>/dev/null || true
 
+          # Setup repos
           cat > /etc/portage/repos.conf/gentoo-nexus.conf << 'REPOCONF'
           [gentoo-nexus]
           location = /overlay
@@ -143,48 +177,86 @@ jobs:
           echo "*/*::guru **" >> /etc/portage/package.accept_keywords/guru
           echo "*/* *" >> /etc/portage/package.license/all
 
-          # 🚀 CRITICAL: Only patch OVERLAY ebuilds (NOT gentoo repo!)
-          find /overlay -type f -name '*.ebuild' -exec sed -i 's/LLVM_COMPAT=( {18..21} )/LLVM_COMPAT=( {18..22} )/g' {} + || true
-          find /overlay -type f -name '*.ebuild' -exec sed -i 's/gui-libs\/display-info/media-libs\/libdisplay-info/g' {} + || true
-          find /overlay -type f -name '*.ebuild' -exec sed -i 's/media-libs\/mesa\[gbm\]/media-libs\/mesa/g' {} + || true
-          find /overlay -type f -name '*.ebuild' -exec sed -i 's/mesa\[gbm\]/mesa/g' {} + || true
+          # 🚀 CRITICAL: Only patch overlay ebuilds
+          find /overlay -maxdepth 4 -type f -name '*.ebuild' \
+            -exec sed -i 's/LLVM_COMPAT=( {18..21} )/LLVM_COMPAT=( {18..22} )/g' {} + 2>/dev/null || true
+          find /overlay -maxdepth 4 -type f -name '*.ebuild' \
+            -exec sed -i 's/gui-libs\/display-info/media-libs\/libdisplay-info/g' {} + 2>/dev/null || true
+          find /overlay -maxdepth 4 -type f -name '*.ebuild' \
+            -exec sed -i 's/media-libs\/mesa\[gbm\]/media-libs\/mesa/g' {} + 2>/dev/null || true
+          find /overlay -maxdepth 4 -type f -name '*.ebuild' \
+            -exec sed -i 's/mesa\[gbm\]/mesa/g' {} + 2>/dev/null || true
 
-          emerge --oneshot --quiet --usepkg=n --getbinpkg=n --autounmask=y --autounmask-write --autounmask-backtrack=y \
-            sys-auth/polkit dev-libs/libei media-video/wireplumber media-libs/libpulse sys-apps/accountsservice 2>&1 || true
+          # 🚀 Pre-build systemd-sensitive packages
+          SYSTEMD_SENSITIVE="sys-auth/elogind sys-auth/polkit dev-libs/libei media-video/wireplumber media-libs/libpulse sys-apps/accountsservice"
+          
+          for pkg in $SYSTEMD_SENSITIVE; do
+            emerge --oneshot --quiet --usepkg=n --getbinpkg=n \
+              --autounmask=y --autounmask-write "$pkg" 2>&1 || true
+          done
           
           for i in 1 2 3; do
             etc-update --automode -5 2>/dev/null || break
           done
 
-          emerge --oneshot --quiet --usepkg=n --getbinpkg=n media-libs/harfbuzz
-          emerge --oneshot --quiet --usepkg=n --getbinpkg=n sys-libs/ncurses
-          emerge --oneshot --quiet --usepkg=n --getbinpkg=n media-libs/tiff media-libs/libwebp
+          # Break circular deps
+          emerge --oneshot --quiet --usepkg=n media-libs/harfbuzz 2>&1 || true
+          emerge --oneshot --quiet --usepkg=n sys-libs/ncurses 2>&1 || true
 
-          emerge --autounmask=y --autounmask-write --autounmask-backtrack=y --keep-going --quiet \
+          TARGET_PKG='${{ github.event.inputs.atom }}'
+          USE_BINHOST=${{ github.event.inputs.use_binhost }}
+
+          if [ "$USE_BINHOST" = "true" ]; then
+            # Build with binhost support
+            emerge --autounmask=y --autounmask-write --autounmask-backtrack=y \
+              --keep-going --quiet --getbinpkg --usepkg \
+              --usepkg-exclude sys-auth/polkit \
+              --usepkg-exclude dev-libs/libei \
+              --usepkg-exclude media-video/wireplumber \
+              --usepkg-exclude media-libs/libpulse \
+              --usepkg-exclude sys-apps/accountsservice \
+              --usepkg-exclude sys-auth/elogind \
+              "$TARGET_PKG" 2>&1 || true
+            
+            for i in 1 2 3; do
+              etc-update --automode -5 2>/dev/null || break
+            done
+            
+            emerge --autounmask=y --autounmask-write --autounmask-backtrack=y \
+              --keep-going --quiet --getbinpkg --usepkg \
+              --usepkg-exclude sys-auth/polkit \
+              --usepkg-exclude dev-libs/libei \
+              --usepkg-exclude media-video/wireplumber \
+              --usepkg-exclude media-libs/libpulse \
+              --usepkg-exclude sys-apps/accountsservice \
+              --usepkg-exclude sys-auth/elogind \
+              "$TARGET_PKG" 2>&1 || true
+          else
+            # Build without binhost (pure local)
+            emerge --autounmask=y --autounmask-write --autounmask-backtrack=y \
+              --keep-going --quiet "$TARGET_PKG" 2>&1 || true
+            
+            for i in 1 2 3; do
+              etc-update --automode -5 2>/dev/null || break
+            done
+            
+            emerge --autounmask=y --autounmask-write --autounmask-backtrack=y \
+              --keep-going --quiet "$TARGET_PKG" 2>&1 || true
+          fi
+          
+          for i in 1 2 3; do
+            etc-update --automode -5 2>/dev/null || break
+          done
+
+          # Final build
+          emerge --buildpkg --quiet \
             --usepkg-exclude sys-auth/polkit \
             --usepkg-exclude dev-libs/libei \
             --usepkg-exclude media-video/wireplumber \
             --usepkg-exclude media-libs/libpulse \
             --usepkg-exclude sys-apps/accountsservice \
-            '${{ github.event.inputs.atom }}' 2>&1 || true
-          
-          for i in 1 2 3; do
-            etc-update --automode -5 2>/dev/null || break
-          done
-          
-          emerge --autounmask=y --autounmask-write --autounmask-backtrack=y --keep-going --quiet \
-            --usepkg-exclude sys-auth/polkit \
-            --usepkg-exclude dev-libs/libei \
-            --usepkg-exclude media-video/wireplumber \
-            --usepkg-exclude media-libs/libpulse \
-            --usepkg-exclude sys-apps/accountsservice \
-            '${{ github.event.inputs.atom }}' 2>&1 || true
-          
-          for i in 1 2 3; do
-            etc-update --automode -5 2>/dev/null || break
-          done
-
-          emerge --buildpkg --quiet '${{ github.event.inputs.atom }}'
+            --usepkg-exclude sys-auth/elogind \
+            "$TARGET_PKG"
           BUILDEOF
           chmod +x build_script.sh
 
@@ -194,7 +266,7 @@ jobs:
             -v "${{ github.workspace }}/cache/distfiles:/var/cache/distfiles" \
             gentoo/stage3 bash /overlay/build_script.sh
 
-      - name: Upload Intermediate Artifact
+      - name: Upload Artifact
         uses: actions/upload-artifact@v4
         with:
           name: binpkg-manual-build
@@ -205,6 +277,7 @@ jobs:
     needs: manual
     runs-on: ubuntu-latest
     timeout-minutes: 30
+    if: always() && needs.manual.result == 'success'
     steps:
       - name: Checkout
         uses: actions/checkout@v4
@@ -216,28 +289,34 @@ jobs:
           mkdir -p ~/.ssh && chmod 700 ~/.ssh
           echo "$SF_SSH_KEY" > ~/.ssh/id_ed25519
           chmod 600 ~/.ssh/id_ed25519
-          ssh-keyscan -t rsa,ecdsa,ed25519 web.sourceforge.net >> ~/.ssh/known_hosts && chmod 644 ~/.ssh/known_hosts
+          ssh-keyscan -t rsa,ecdsa,ed25519 web.sourceforge.net >> ~/.ssh/known_hosts
+          chmod 644 ~/.ssh/known_hosts
 
-      - name: Download new binary artifacts
+      - name: Download artifact
         uses: actions/download-artifact@v4
         with:
+          name: binpkg-manual-build
           path: combined/
-          pattern: binpkg-*
-          merge-multiple: true
 
       - name: Fetch current SourceForge state
         env:
           SF_USERNAME: ${{ secrets.SF_USERNAME }}
         run: |
           mkdir -p public_binhost
-          rsync -avz -e "ssh" $SF_USERNAME@web.sourceforge.net:/home/project-web/gentoo-nexus/htdocs/ public_binhost/ || true
-          if [ -d combined ]; then cp -r combined/* public_binhost/ 2>/dev/null || true; fi
+          rsync -avz -e "ssh" \
+            $SF_USERNAME@web.sourceforge.net:/home/project-web/gentoo-nexus/htdocs/ \
+            public_binhost/ 2>/dev/null || true
+          
+          if [ -d combined ]; then
+            cp -r combined/* public_binhost/ 2>/dev/null || true
+          fi
 
-      - name: Build binhost index and remove old versions
+      - name: Build binhost index and cleanup
         run: |
           cat > deploy_script.sh << 'EOF'
           #!/bin/bash
           set -euo pipefail
+          
           python3 << 'PYEOF'
           import portage.versions
           from pathlib import Path
@@ -245,6 +324,9 @@ jobs:
           from functools import cmp_to_key
 
           pkg_dir = Path('/overlay/public_binhost')
+          if not pkg_dir.exists():
+              exit(0)
+
           groups = defaultdict(list)
 
           for f in list(pkg_dir.glob('*.gpkg.tar')) + list(pkg_dir.glob('*.tbz2')):
@@ -255,29 +337,59 @@ jobs:
                   ver_str = ver + ('-' + rev if rev != 'r0' else '')
                   groups[pkg_name].append((ver_str, f))
 
-          def ver_cmp(a, b): return portage.versions.vercmp(a, b)
+          def ver_cmp(a, b):
+              return portage.versions.vercmp(a, b)
 
           for pkg_name, items in groups.items():
               if len(items) > 1:
                   items.sort(key=cmp_to_key(ver_cmp))
-                  for old_ver, old_file in items[:-1]: old_file.unlink()
+                  for old_ver, old_file in items[:-1]:
+                      old_file.unlink()
           PYEOF
 
-          if ls /overlay/public_binhost/*.gpkg.tar 1>/dev/null 2>&1 || ls /overlay/public_binhost/*.tbz2 1>/dev/null 2>&1; then
+          if ls /overlay/public_binhost/*.gpkg.tar 1>/dev/null 2>&1 || \
+             ls /overlay/public_binhost/*.tbz2 1>/dev/null 2>&1; then
             echo 'PKGDIR="/overlay/public_binhost"' >> /etc/portage/make.conf
-            emaint binhost --fix
+            emaint binhost --fix 2>/dev/null || true
           fi
           EOF
           chmod +x deploy_script.sh
-          docker run --rm -v "${{ github.workspace }}:/overlay" -w /overlay gentoo/stage3 bash /overlay/deploy_script.sh
+          
+          docker run --rm \
+            -v "${{ github.workspace }}:/overlay" \
+            -w /overlay \
+            gentoo/stage3 bash /overlay/deploy_script.sh
 
-          FILE_LIST=$(ls -1 public_binhost/*.gpkg.tar public_binhost/*.tbz2 2>/dev/null | xargs -I{} basename {} | sort || echo "(no packages yet)")
+      - name: Generate index.html
+        run: |
+          FILE_LIST=$(ls -1 public_binhost/*.gpkg.tar public_binhost/*.tbz2 2>/dev/null | \
+                      xargs -I{} basename {} | sort || echo "(no packages yet)")
+          
           cat > public_binhost/index.html << HTML
-          <!DOCTYPE html><html><head><title>Gentoo Nexus Binhost</title><style>body { font-family: monospace; background: #1a1a1a; color: #e0e0e0; padding: 2em; } a { color: #66d9ef; }</style></head><body><h1>Gentoo Nexus Binhost</h1><p>Last manual build: <strong>${{ github.event.inputs.atom }}</strong></p><pre>${FILE_LIST}</pre></body></html>
+          <!DOCTYPE html>
+          <html>
+          <head>
+            <title>Gentoo Nexus Binhost</title>
+            <style>
+              body { font-family: monospace; background: #1a1a1a; color: #e0e0e0; padding: 2em; }
+              a { color: #66d9ef; }
+              h1 { color: #a6e22e; }
+              .build-info { color: #75715e; }
+            </style>
+          </head>
+          <body>
+            <h1>🚀 Gentoo Nexus Binhost</h1>
+            <p class="build-info">Manual build: <strong>${{ github.event.inputs.atom }}</strong></p>
+            <p class="build-info">Timestamp: $(date -u '+%Y-%m-%d %H:%M:%S UTC')</p>
+            <pre>${FILE_LIST}</pre>
+          </body>
+          </html>
           HTML
 
       - name: Deploy to SourceForge
         env:
           SF_USERNAME: ${{ secrets.SF_USERNAME }}
         run: |
-          rsync -avz --delete -e "ssh" public_binhost/ $SF_USERNAME@web.sourceforge.net:/home/project-web/gentoo-nexus/htdocs/
+          rsync -avz --delete -e "ssh" \
+            public_binhost/ \
+            $SF_USERNAME@web.sourceforge.net:/home/project-web/gentoo-nexus/htdocs/
