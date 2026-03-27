@@ -17,7 +17,7 @@ permissions:
   contents: write
 
 env:
-  CACHE_VERSION: v11
+  CACHE_VERSION: v12
   GENTOO_PROFILE: default/linux/amd64/23.0/desktop
 
 jobs:
@@ -320,7 +320,8 @@ jobs:
           #!/bin/bash
           set -euo pipefail
           
-          # 🚀 Sync portage tree (DO NOT delete cache - just sync)
+          # 🚀 CRITICAL: Force fresh Gentoo tree (delete cache to fix Manifest mismatches)
+          rm -rf /var/db/repos/gentoo
           emerge-webrsync -q
           
           command -v getuto >/dev/null 2>&1 && getuto || true
