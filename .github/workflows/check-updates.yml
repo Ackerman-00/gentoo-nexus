@@ -17,7 +17,7 @@ permissions:
   contents: write
 
 env:
-  CACHE_VERSION: v10
+  CACHE_VERSION: v11
   GENTOO_PROFILE: default/linux/amd64/23.0/desktop
 
 jobs:
@@ -320,13 +320,9 @@ jobs:
           #!/bin/bash
           set -euo pipefail
           
-          # 🚀 CRITICAL: Force fresh portage tree sync (fixes Manifest errors)
-          rm -rf /var/db/repos/gentoo 2>/dev/null || true
+          # 🚀 Sync portage tree (DO NOT delete cache - just sync)
           emerge-webrsync -q
           
-          # 🚀 Regenerate all Manifests after sync
-          emerge --metadata --quiet 2>&1 || true
-
           command -v getuto >/dev/null 2>&1 && getuto || true
           eselect profile set ${{ env.GENTOO_PROFILE }}
           
@@ -422,21 +418,7 @@ jobs:
           echo "*/*::guru **" >> /etc/portage/package.accept_keywords/guru
           echo "*/* *" >> /etc/portage/package.license/all
 
-          # 🚀 Build systemd-sensitive packages locally first
-          emerge --oneshot --quiet --usepkg=n --getbinpkg=n \
-            sys-auth/elogind sys-auth/polkit dev-libs/libei \
-            media-video/wireplumber media-libs/libpulse sys-apps/accountsservice \
-            2>&1 || true
-
-          # 🚀 Build LLVM toolchain locally
-          emerge --oneshot --quiet --usepkg=n --getbinpkg=n \
-            llvm-core/llvm-common llvm-core/llvm llvm-core/clang \
-            2>&1 || true
-
-          # 🚀 Build Mesa locally
-          emerge --oneshot --quiet --usepkg=n --getbinpkg=n media-libs/mesa 2>&1 || true
-
-          # 🚀 MAIN emerge
+          # 🚀 MAIN emerge - let Portage handle all dependencies automatically
           emerge --autounmask=y --autounmask-write --autounmask-backtrack=y \
             --keep-going --quiet --getbinpkg --usepkg \
             --usepkg-exclude sys-auth/polkit \
