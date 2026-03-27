@@ -4,6 +4,7 @@ inherit go-module
 
 DESCRIPTION="Stateless, cursor-based system and process monitoring tool"
 HOMEPAGE="https://github.com/AvengeMedia/dgop"
+
 SRC_URI="https://github.com/AvengeMedia/dgop/archive/refs/tags/v${PV}.tar.gz -> ${P}.tar.gz"
 
 LICENSE="MIT"
@@ -17,7 +18,6 @@ BDEPEND=">=dev-lang/go-1.21"
 
 src_compile() {
     export GOPROXY="https://proxy.golang.org,direct"
-    
     ego build -o dgop ./cmd/dgop || die "ego build failed"
 }
 
