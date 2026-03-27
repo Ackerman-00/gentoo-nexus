@@ -7,11 +7,6 @@ on:
         description: 'Package atom to build (e.g. gui-wm/niri)'
         required: true
         type: string
-      force_rebuild:
-        description: 'Force rebuild even if binary exists on binhost'
-        required: false
-        type: boolean
-        default: false
 
 concurrency:
   group: build-${{ github.event.inputs.atom }}
@@ -28,38 +23,7 @@ jobs:
       - name: Checkout
         uses: actions/checkout@v4
 
-      - name: Check SourceForge Binhost Status
-        id: check_bin
-        run: |
-          PKG="${{ github.event.inputs.atom }}"
-          BINHOST="https://gentoo-nexus.sourceforge.io/Packages"
-
-          # 🚀 If force_rebuild is checked, skip the audit entirely
-          if [ "${{ github.event.inputs.force_rebuild }}" = "true" ]; then
-            echo "🚨 Force rebuild requested. Bypassing Binhost check."
-            echo "skip=false" >> "$GITHUB_OUTPUT"
-            exit 0
-          fi
-
-          EBUILD_FILE=$(ls -1v "${PKG}"/*.ebuild 2>/dev/null | tail -n 1)
-          if [ -z "$EBUILD_FILE" ]; then
-            echo "skip=false" >> "$GITHUB_OUTPUT"
-            exit 0
-          fi
-          
-          PN=$(basename "${PKG}")
-          VER=$(basename "${EBUILD_FILE}" | sed -E "s/^${PN}-//; s/\.ebuild$//")
-          
-          if curl --fail -sL "$BINHOST" 2>/dev/null | grep -q "^CPV: ${PKG}-${VER}$"; then
-            echo "✅ Binary for ${PKG}-${VER} already exists on SourceForge. Skipping!"
-            echo "skip=true" >> "$GITHUB_OUTPUT"
-          else
-            echo "🚀 No binary found for ${PKG}-${VER}. Proceeding to build."
-            echo "skip=false" >> "$GITHUB_OUTPUT"
-          fi
-
       - name: Build Binary Package
-        if: steps.check_bin.outputs.skip == 'false'
         run: |
           mkdir -p job_out
           mkdir -p "${{ github.workspace }}/cache/distfiles"
@@ -101,12 +65,6 @@ jobs:
           verify-signature = false
           REPOCONF
 
-          cat > /etc/portage/binrepos.conf/nexus.conf << 'REPOCONF'
-          [gentoo-nexus-sf]
-          priority = 9999
-          sync-uri = https://gentoo-nexus.sourceforge.io/
-          REPOCONF
-
           cat > /etc/portage/make.conf << 'MAKECONF'
           FEATURES="-userfetch -userpriv -usersandbox -ipc-sandbox -network-sandbox -pid-sandbox getbinpkg buildpkg"
           EMERGE_DEFAULT_OPTS="--getbinpkg --usepkg --binpkg-respect-use=y --binpkg-changed-deps=y --autounmask=y --autounmask-write --autounmask-backtrack=y --keep-going --quiet"
@@ -143,7 +101,6 @@ jobs:
           TARGET_PKG='${{ github.event.inputs.atom }}'
           echo "$TARGET_PKG **" >> /etc/portage/package.accept_keywords/target
 
-          # 🚀 THE BOOTSTRAP: Shatter Circular Dependencies Natively
           echo ">>> Bootstrapping Base Libraries to shatter circular loops..."
           emerge --oneshot --quiet --nodeps dev-libs/glib dev-libs/gobject-introspection-common dev-util/gdbus-codegen 2>&1 || true
           emerge --oneshot --quiet --nodeps dev-libs/gobject-introspection 2>&1 || true
@@ -168,7 +125,6 @@ jobs:
             gentoo/stage3:amd64-desktop-openrc bash /overlay/build_script.sh
 
       - name: Deploy to SourceForge
-        if: steps.check_bin.outputs.skip == 'false'
         env:
           SF_USERNAME: ${{ secrets.SF_USERNAME }}
           SF_SSH_KEY: ${{ secrets.SF_SSH_KEY }}
@@ -201,7 +157,9 @@ jobs:
               cpv = f"{rel_path.parent}/{f.name.replace('.gpkg.tar', '').replace('.tbz2', '')}"
               parts = portage.versions.pkgsplit(cpv)
               if parts:
-                  groups[parts].append((parts + ('-' + parts if parts != 'r0' else ''), f))
+                  pkg_name, ver, rev = parts
+                  ver_str = ver + ('-' + rev if rev != 'r0' else '')
+                  groups[pkg_name].append((ver_str, f))
 
           def ver_cmp(a, b): return portage.versions.vercmp(a, b)
 
