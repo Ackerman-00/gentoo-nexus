@@ -12,32 +12,37 @@ KEYWORDS="~amd64"
 
 RESTRICT="bindist mirror test"
 
+QA_PREBUILT="opt/rootapp/*"
+
 RDEPEND="
-    x11-libs/gtk+:3
+    dev-libs/icu
     dev-libs/nss
     media-libs/alsa-lib
     sys-apps/dbus
+    x11-libs/gtk+:3
 "
 
-# Set S to the extracted squashfs directory
+BDEPEND="sys-fs/squashfs-tools"
+
 S="${WORKDIR}/squashfs-root"
 
 src_unpack() {
-    cp "${DISTDIR}/${P}.AppImage" "${WORKDIR}/" || die
-    cd "${WORKDIR}" || die
-    
-    # Use the built-in extractor instead of raw unsquashfs
-    chmod +x "${P}.AppImage" || die
-    ./"${P}.AppImage" --appimage-extract || die "Failed to extract AppImage"
+    unsquashfs -q -d "${S}" "${DISTDIR}/${A}" || die "Failed to unpack AppImage"
 }
 
 src_install() {
-    insinto /opt/rootapp
-    doins -r *
+    dodir /opt/rootapp
+
+    cp -a "${S}"/* "${ED}/opt/rootapp/" || die "Failed to copy application files"
     
-    fperms +x /opt/rootapp/AppRun
     dosym ../../opt/rootapp/AppRun /usr/bin/rootapp
     
-    doicon -s 256 Root.png
+    # Install the icon
+    if [[ -f "${S}/Root.png" ]]; then
+        doicon "${S}/Root.png"
+    elif [[ -f "${S}/.DirIcon" ]]; then
+        newicon "${S}/.DirIcon" Root.png
+    fi
+    
     make_desktop_entry "rootapp" "RootApp" "Root" "Network;Chat;"
 }
