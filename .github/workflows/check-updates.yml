@@ -41,8 +41,12 @@ jobs:
         env:
           GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
         run: |
-          # 🚀 FIX: Upgrade Niri to support LLVM 22 natively to match Mesa 26!
+          # 🚀 FIX: Upgrade Niri to support LLVM 22 natively
           find . -type f -name '*.ebuild' -exec sed -i 's/LLVM_COMPAT=( {18..21} )/LLVM_COMPAT=( {18..22} )/g' {} +
+          # 🚀 FIX: Auto-heal Niri dependency typo
+          find . -type f -name '*.ebuild' -exec sed -i 's/gui-libs\/display-info/media-libs\/libdisplay-info/g' {} +
+          # 🚀 FIX: Remove deprecated [gbm] flag requirement from Mesa
+          find . -type f -name '*.ebuild' -exec sed -i 's/media-libs\/mesa\[gbm\]/media-libs\/mesa/g' {} +
 
           python3 << 'EOF'
           import os, re, requests, subprocess, stat
@@ -367,16 +371,14 @@ jobs:
           echo "*/*::guru **" >> /etc/portage/package.accept_keywords/guru
           echo "*/* *" >> /etc/portage/package.license/all
 
-          # 🚀 THE GENTOO LOOP BREAKERS 🚀
-          # Break Harfbuzz <-> Cairo Loop
+          # 🚀 THE FIX: Break the Circular Dependency Loop for Harfbuzz
           echo "media-libs/harfbuzz -cairo" > /etc/portage/package.use/harfbuzz_break
           emerge --oneshot --quiet media-libs/harfbuzz
           rm /etc/portage/package.use/harfbuzz_break
 
-          # Break Ncurses <-> GPM Loop
-          echo "sys-libs/ncurses -gpm" > /etc/portage/package.use/ncurses_break
+          # 🚀 THE FINAL FIX: Break Ncurses loop PERMANENTLY for this CI run
+          echo "sys-libs/ncurses -gpm" > /etc/portage/package.use/ncurses
           emerge --oneshot --quiet sys-libs/ncurses
-          rm /etc/portage/package.use/ncurses_break
 
           EMERGE_DEFAULT_OPTS="" emerge --oneshot --quiet --usepkg=n --getbinpkg=n media-libs/tiff media-libs/libwebp
 
@@ -458,7 +460,7 @@ jobs:
               basename = f.name.replace('.gpkg.tar', '').replace('.tbz2', '')
               parts = portage.versions.pkgsplit(basename)
               if parts:
-                  pkg_name, ver, rev = parts, parts, parts
+                  pkg_name, ver, rev = parts
                   ver_str = ver + ('-' + rev if rev != 'r0' else '')
                   groups[pkg_name].append((ver_str, f))
 
