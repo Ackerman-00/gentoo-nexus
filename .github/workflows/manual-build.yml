@@ -75,13 +75,21 @@ jobs:
           cat > build_script.sh << 'BUILDEOF'
           #!/bin/bash
           set -euo pipefail
-
+          
+          # 🚀 FIX: Prevent Portage missing dir warnings
           mkdir -p /var/db/repos/gentoo
           rm -rf /var/db/repos/gentoo/*
           emerge-webrsync -q
+          
+          # 🚀 FIX: Silence the Gentoo News warnings
+          eselect news read all >/dev/null 2>&1 || true
+          
           command -v getuto >/dev/null 2>&1 && getuto || true
           
           eselect profile set default/linux/amd64/23.0/desktop
+          
+          # 🚀 FIX: Uninstall gpm cleanly before masking it to prevent Portage warnings
+          emerge --unmerge --quiet sys-libs/gpm 2>/dev/null || true
           
           mkdir -p /etc/portage/{repos.conf,binrepos.conf,package.{accept_keywords,license,use,mask}}
           mkdir -p /overlay/{distfiles,job_out}
@@ -130,6 +138,9 @@ jobs:
           emerge --noreplace --quiet dev-lang/go dev-lang/rust-bin app-eselect/eselect-repository dev-vcs/git
           eselect repository enable guru 2>/dev/null || true
           emaint sync -r guru 2>/dev/null || true
+          
+          # 🚀 FIX: Silence Guru News
+          eselect news read all >/dev/null 2>&1 || true
 
           cat > /etc/portage/repos.conf/gentoo-nexus.conf << 'REPOCONF'
           [gentoo-nexus]
@@ -213,8 +224,7 @@ jobs:
           #!/bin/bash
           set -euo pipefail
           
-          # 🚀 THE MAGIC: We run a Python script to securely merge the new index 
-          # with the server's existing index, entirely bypassing rsync pulls!
+          # 🚀 THE MAGIC: Restored Python array indices for correct parsing!
           python3 << 'PYEOF'
           import urllib.request
           import os
