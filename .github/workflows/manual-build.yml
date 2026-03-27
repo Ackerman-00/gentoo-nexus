@@ -94,6 +94,14 @@ jobs:
           media-libs/tiff -webp
           USE
 
+          cat > /etc/portage/package.use/harfbuzz << 'USE'
+          media-libs/harfbuzz -cairo -doc -gtk-doc -introspection
+          USE
+
+          cat > /etc/portage/package.use/libdrm << 'USE'
+          x11-libs/libdrm video_cards_amdgpu video_cards_intel video_cards_nouveau -video_cards_radeon -video_cards_r600 -video_cards_r300
+          USE
+
           cat > /etc/portage/binrepos.conf/nexus.conf << 'REPOCONF'
           [gentoo-nexus-sf]
           priority = 9999
@@ -135,17 +143,11 @@ jobs:
           echo "*/*::guru **" >> /etc/portage/package.accept_keywords/guru
           echo "*/* *" >> /etc/portage/package.license/all
 
-          # 🚀 TIME TRAVEL FIX: Patch AFTER guru sync
-          find /overlay /var/db/repos/guru -type f -name '*.ebuild' -exec sed -i 's/LLVM_COMPAT=( {18..21} )/LLVM_COMPAT=( {18..22} )/g' {} + || true
-          find /overlay /var/db/repos/guru -type f -name '*.ebuild' -exec sed -i 's/gui-libs\/display-info/media-libs\/libdisplay-info/g' {} + || true
-          find /overlay /var/db/repos/guru -type f -name '*.ebuild' -exec sed -i 's/media-libs\/mesa\[gbm\]/media-libs\/mesa/g' {} + || true
-          find /overlay /var/db/repos/guru -type f -name '*.ebuild' -exec sed -i 's/mesa\[gbm\]/mesa/g' {} + || true
-
-          echo "media-libs/harfbuzz -cairo" > /etc/portage/package.use/harfbuzz_break
-          emerge --oneshot --quiet media-libs/harfbuzz
-          rm -f /etc/portage/package.use/harfbuzz_break
-
-          emerge --oneshot --quiet sys-libs/ncurses
+          # 🚀 CRITICAL: Only patch OVERLAY ebuilds (NOT gentoo repo!)
+          find /overlay -type f -name '*.ebuild' -exec sed -i 's/LLVM_COMPAT=( {18..21} )/LLVM_COMPAT=( {18..22} )/g' {} + || true
+          find /overlay -type f -name '*.ebuild' -exec sed -i 's/gui-libs\/display-info/media-libs\/libdisplay-info/g' {} + || true
+          find /overlay -type f -name '*.ebuild' -exec sed -i 's/media-libs\/mesa\[gbm\]/media-libs\/mesa/g' {} + || true
+          find /overlay -type f -name '*.ebuild' -exec sed -i 's/mesa\[gbm\]/mesa/g' {} + || true
 
           emerge --oneshot --quiet --usepkg=n --getbinpkg=n --autounmask=y --autounmask-write --autounmask-backtrack=y \
             sys-auth/polkit dev-libs/libei media-video/wireplumber media-libs/libpulse sys-apps/accountsservice 2>&1 || true
@@ -154,6 +156,8 @@ jobs:
             etc-update --automode -5 2>/dev/null || break
           done
 
+          emerge --oneshot --quiet --usepkg=n --getbinpkg=n media-libs/harfbuzz
+          emerge --oneshot --quiet --usepkg=n --getbinpkg=n sys-libs/ncurses
           emerge --oneshot --quiet --usepkg=n --getbinpkg=n media-libs/tiff media-libs/libwebp
 
           emerge --autounmask=y --autounmask-write --autounmask-backtrack=y --keep-going --quiet \
