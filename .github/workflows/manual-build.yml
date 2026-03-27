@@ -75,7 +75,6 @@ jobs:
           mkdir -p /etc/portage/{repos.conf,binrepos.conf,package.{accept_keywords,license,use,mask}}
           mkdir -p /overlay/{distfiles,job_out}
 
-          # 🚀 CRITICAL: DO NOT MASK systemd-utils (provides udev for elogind)
           cat > /etc/portage/package.mask/systemd << 'MASK'
           sys-apps/systemd
           sys-apps/gentoo-systemd-integration
@@ -158,7 +157,7 @@ jobs:
           echo "*/*::guru **" >> /etc/portage/package.accept_keywords/guru
           echo "*/* *" >> /etc/portage/package.license/all
 
-          # 🚀 FIREWALL: Never touch /overlay/cache!
+          # FIREWALL: Never touch /overlay/cache!
           find /overlay -path /overlay/cache -prune -o -path /overlay/job_out -prune -o -path /overlay/.git -prune -o -type f -name '*.ebuild' -exec sed -i 's/LLVM_COMPAT=( {18..21} )/LLVM_COMPAT=( {18..22} )/g' {} + || true
           find /overlay -path /overlay/cache -prune -o -path /overlay/job_out -prune -o -path /overlay/.git -prune -o -type f -name '*.ebuild' -exec sed -i 's/gui-libs\/display-info/media-libs\/libdisplay-info/g' {} + || true
           find /overlay -path /overlay/cache -prune -o -path /overlay/job_out -prune -o -path /overlay/.git -prune -o -type f -name '*.ebuild' -exec sed -i 's/media-libs\/mesa\[gbm\]/media-libs\/mesa/g' {} + || true
@@ -168,29 +167,30 @@ jobs:
             ebuild "$eb" manifest 2>&1 || true
           done
 
-          # 🚀🚀🚀 CRITICAL: Bootstrap glib to break circular dep
-          echo ">>> PHASE 1: Bootstrapping glib without python and introspection..."
-          USE="-python -introspection" emerge --oneshot --quiet --nodeps \
-            dev-libs/glib dev-libs/gobject-introspection-common dev-util/gdbus-codegen \
-            2>&1 || true
+          # BREAK CIRCULAR DEP: docutils→pillow→harfbuzz→glib→docutils
+          echo ">>> PHASE 1: Build glib WITHOUT python (breaks docutils pull)..."
+          echo "dev-libs/glib -python -introspection" > /etc/portage/package.use/glib_bootstrap
+          emerge --oneshot --quiet --nodeps dev-libs/glib 2>&1 || true
+          rm -f /etc/portage/package.use/glib_bootstrap
 
-          echo ">>> PHASE 2: Installing docutils and pillow (binary packages)..."
-          emerge --oneshot --quiet dev-python/docutils dev-python/pillow 2>&1 || true
+          echo ">>> PHASE 2: Build harfbuzz WITHOUT glib/introspection..."
+          echo "media-libs/harfbuzz -glib -introspection -cairo" > /etc/portage/package.use/harfbuzz_bootstrap
+          emerge --oneshot --quiet --nodeps media-libs/harfbuzz 2>&1 || true
+          rm -f /etc/portage/package.use/harfbuzz_bootstrap
 
-          echo ">>> PHASE 3: Building harfbuzz without glib..."
-          USE="-cairo -glib -introspection" emerge --oneshot --quiet media-libs/harfbuzz 2>&1 || true
+          echo ">>> PHASE 3: Install docutils and pillow (binaries, no deps)..."
+          emerge --oneshot --quiet --usepkgonly dev-python/docutils dev-python/pillow 2>&1 || true
 
-          echo ">>> PHASE 4: Rebuilding glib with python and introspection..."
-          emerge --oneshot --quiet \
-            dev-libs/glib dev-libs/gobject-introspection-common dev-libs/gobject-introspection dev-util/gdbus-codegen \
-            2>&1 || true
+          echo ">>> PHASE 4: Rebuild glib WITH python/introspection..."
+          emerge --oneshot --quiet dev-libs/glib dev-libs/gobject-introspection 2>&1 || true
 
-          # 🚀 Pre-build systemd-sensitive packages LOCALLY
+          echo ">>> PHASE 5: Rebuild harfbuzz WITH glib..."
+          emerge --oneshot --quiet media-libs/harfbuzz 2>&1 || true
+
+          # Pre-build systemd-sensitive packages LOCALLY
           LOCAL_BUILD_PKGS="sys-auth/elogind sys-auth/polkit dev-libs/libei media-video/wireplumber media-libs/libpulse sys-apps/accountsservice"
           for pkg in $LOCAL_BUILD_PKGS; do
-            emerge --oneshot --quiet --usepkg=n --getbinpkg=n \
-              --autounmask=y --autounmask-write --autounmask-backtrack=y \
-              "$pkg" 2>&1 || true
+            emerge --oneshot --quiet --usepkg=n --getbinpkg=n --autounmask=y --autounmask-write "$pkg" 2>&1 || true
           done
           
           for i in 1 2 3; do etc-update --automode -5 2>/dev/null || break; done
@@ -200,19 +200,15 @@ jobs:
           EXCLUDES="--usepkg-exclude sys-auth/polkit --usepkg-exclude dev-libs/libei --usepkg-exclude media-video/wireplumber --usepkg-exclude media-libs/libpulse --usepkg-exclude sys-apps/accountsservice --usepkg-exclude sys-auth/elogind"
 
           if [ "$USE_BINHOST" = "true" ]; then
-            emerge --autounmask=y --autounmask-write --autounmask-backtrack=y \
-              --keep-going --quiet --getbinpkg --usepkg $EXCLUDES "$TARGET_PKG" 2>&1 || true
+            emerge --autounmask=y --autounmask-write --autounmask-backtrack=y --keep-going --quiet --getbinpkg --usepkg $EXCLUDES "$TARGET_PKG" 2>&1 || true
             for i in 1 2 3; do etc-update --automode -5 2>/dev/null || break; done
             
-            emerge --autounmask=y --autounmask-write --autounmask-backtrack=y \
-              --keep-going --quiet --getbinpkg --usepkg $EXCLUDES "$TARGET_PKG" 2>&1 || true
+            emerge --autounmask=y --autounmask-write --autounmask-backtrack=y --keep-going --quiet --getbinpkg --usepkg $EXCLUDES "$TARGET_PKG" 2>&1 || true
           else
-            emerge --autounmask=y --autounmask-write --autounmask-backtrack=y \
-              --keep-going --quiet "$TARGET_PKG" 2>&1 || true
+            emerge --autounmask=y --autounmask-write --autounmask-backtrack=y --keep-going --quiet "$TARGET_PKG" 2>&1 || true
             for i in 1 2 3; do etc-update --automode -5 2>/dev/null || break; done
             
-            emerge --autounmask=y --autounmask-write --autounmask-backtrack=y \
-              --keep-going --quiet "$TARGET_PKG" 2>&1 || true
+            emerge --autounmask=y --autounmask-write --autounmask-backtrack=y --keep-going --quiet "$TARGET_PKG" 2>&1 || true
           fi
           
           for i in 1 2 3; do etc-update --automode -5 2>/dev/null || break; done
