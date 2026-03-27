@@ -1,0 +1,8 @@
+app-misc/dgop
+app-misc/rootapp-bin
+games-util/protonplus-bin
+gui-wm/dank-material-shell
+gui-wm/mangowc
+gui-wm/niri
+x11-base/xwayland-satellite
+x11-misc/matugen
