@@ -1,5 +1,5 @@
 EAPI=8
-EGIT_COMMIT="b07bde3ee82d"
+EGIT_COMMIT="8f48f56fe199"
 _commit="b07bde3ee82dd73115e6b949e4f3f63695da35ea"
 
 LLVM_COMPAT=( {18..22} )
