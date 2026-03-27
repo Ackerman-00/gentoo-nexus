@@ -1,6 +1,6 @@
 EAPI=8
 
-inherit meson vala
+inherit meson vala xdg
 
 DESCRIPTION="Compatibility tools manager for Wine/Proton"
 HOMEPAGE="https://github.com/Vysp3r/ProtonPlus"
@@ -8,18 +8,17 @@ SRC_URI="https://github.com/Vysp3r/ProtonPlus/archive/refs/tags/v${PV}.tar.gz ->
 
 LICENSE="GPL-3.0-or-later"
 SLOT="0"
-KEYWORDS="amd64"
+KEYWORDS="~amd64" #
 
-# THE FIX: Tell Portage the exact folder name inside the tarball
 S="${WORKDIR}/ProtonPlus-${PV}"
 
 DEPEND="
-    app-arch/libarchive
+    app-arch/libarchive:=
     dev-libs/glib:2
     dev-libs/json-glib
     dev-libs/libgee:0.8
     gui-libs/gtk:4
-    gui-libs/libadwaita
+    gui-libs/libadwaita:1
     net-libs/libsoup:3.0
 "
 RDEPEND="${DEPEND}"
