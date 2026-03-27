@@ -27,7 +27,11 @@ BDEPEND="sys-fs/squashfs-tools"
 S="${WORKDIR}/squashfs-root"
 
 src_unpack() {
-    unsquashfs -q -d "${S}" "${DISTDIR}/${A}" || die "Failed to unpack AppImage"
+    local offset=$(grep -abo "hsqs" "${DISTDIR}/${A}" | cut -d: -f1 | head -n 1)
+    
+    [[ -n ${offset} ]] || die "Could not find SquashFS offset in AppImage"
+    
+    unsquashfs -q -o "${offset}" -d "${S}" "${DISTDIR}/${A}" || die "Failed to unpack AppImage"
 }
 
 src_install() {
