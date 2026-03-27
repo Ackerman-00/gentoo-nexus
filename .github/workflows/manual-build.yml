@@ -75,7 +75,8 @@ jobs:
           cat > build_script.sh << 'BUILDEOF'
           #!/bin/bash
           set -euo pipefail
-          
+
+          mkdir -p /var/db/repos/gentoo
           rm -rf /var/db/repos/gentoo/*
           emerge-webrsync -q
           command -v getuto >/dev/null 2>&1 && getuto || true
