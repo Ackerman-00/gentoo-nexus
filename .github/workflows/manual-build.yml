@@ -16,8 +16,7 @@ permissions:
   contents: write
 
 env:
-  CACHE_VERSION: v14
-  GENTOO_PROFILE: default/linux/amd64/23.0/desktop
+  CACHE_VERSION: v26
 
 jobs:
   manual:
@@ -65,9 +64,27 @@ jobs:
           fi
           
           command -v getuto >/dev/null 2>&1 && getuto || true
+          eselect profile set default/linux/amd64/23.0/desktop
           
           mkdir -p /etc/portage/{repos.conf,binrepos.conf,package.{accept_keywords,license,use,mask}}
           mkdir -p /overlay/{distfiles,job_out}
+
+          # 🚀 MASK SYSTEMD (DO NOT MASK SYSTEMD-UTILS)
+          cat > /etc/portage/package.mask/systemd << 'MASK'
+          sys-apps/systemd
+          sys-apps/gentoo-systemd-integration
+          MASK
+
+          cat > /etc/portage/package.mask/gpm << 'MASK'
+          sys-libs/gpm
+          MASK
+
+          cat > /etc/portage/binrepos.conf/gentoo.conf << 'REPOCONF'
+          [gentoo]
+          priority = 10000
+          sync-uri = https://distfiles.gentoo.org/releases/amd64/binpackages/23.0/x86-64/
+          verify-signature = true
+          REPOCONF
 
           cat > /etc/portage/binrepos.conf/nexus.conf << 'REPOCONF'
           [gentoo-nexus-sf]
@@ -78,11 +95,13 @@ jobs:
           sync-uri = https://ackerman-00.github.io/gentoo-nexus/
           REPOCONF
 
-          cat >> /etc/portage/make.conf << 'MAKECONF'
-          FEATURES="${FEATURES} getbinpkg buildpkg -binpkg-request-signature"
+          cat > /etc/portage/make.conf << 'MAKECONF'
+          FEATURES="-userfetch -userpriv -usersandbox -ipc-sandbox -network-sandbox -pid-sandbox getbinpkg buildpkg -binpkg-request-signature"
           EMERGE_DEFAULT_OPTS="--getbinpkg --usepkg --binpkg-respect-use=y --binpkg-changed-deps=y"
           DISTDIR="/overlay/distfiles"
           PKGDIR="/overlay/job_out"
+          USE="pipewire egl gles2 vulkan pam -systemd -test -gpm elogind"
+          VIDEO_CARDS="amdgpu radeonsi nouveau virgl"
           EGIT_CLONE_TYPE="single"
           ACCEPT_KEYWORDS="~amd64 amd64"
           ACCEPT_LICENSE="*"
@@ -109,36 +128,25 @@ jobs:
           echo "*/*::guru **" >> /etc/portage/package.accept_keywords/guru
           echo "*/* *" >> /etc/portage/package.license/all
 
-          # 🚀 THE FIREWALL FIX: Safely patch ONLY our overlay
-          for pkg in gui-wm/niri x11-base/xwayland-satellite; do
-            if [ -d "/overlay/$pkg" ]; then
-              sed -i 's/LLVM_COMPAT=( {18..21} )/LLVM_COMPAT=( {18..22} )/g' "/overlay/$pkg"/*.ebuild 2>/dev/null || true
-              sed -i 's/gui-libs\/display-info/media-libs\/libdisplay-info/g' "/overlay/$pkg"/*.ebuild 2>/dev/null || true
-              sed -i 's/media-libs\/mesa\[gbm\]/media-libs\/mesa/g' "/overlay/$pkg"/*.ebuild 2>/dev/null || true
-              sed -i 's/media-libs\/mesa\[gbm(+)\]/media-libs\/mesa/g' "/overlay/$pkg"/*.ebuild 2>/dev/null || true
-              sed -i 's/mesa\[gbm\]/mesa/g' "/overlay/$pkg"/*.ebuild 2>/dev/null || true
-              sed -i 's/mesa\[gbm(+)\]/mesa/g' "/overlay/$pkg"/*.ebuild 2>/dev/null || true
-              ebuild $(ls /overlay/$pkg/*.ebuild | head -n 1) manifest 2>/dev/null || true
-            fi
-          done
+          find /overlay -maxdepth 4 -type f -name '*.ebuild' -not -path '*/cache/*' -exec sed -i 's/LLVM_COMPAT=( {18..21} )/LLVM_COMPAT=( {18..22} )/g' {} + 2>/dev/null || true
+          find /overlay -maxdepth 4 -type f -name '*.ebuild' -not -path '*/cache/*' -exec sed -i 's/gui-libs\/display-info/media-libs\/libdisplay-info/g' {} + 2>/dev/null || true
+          find /overlay -maxdepth 4 -type f -name '*.ebuild' -not -path '*/cache/*' -exec sed -i 's/media-libs\/mesa\[gbm\]/media-libs\/mesa/g' {} + 2>/dev/null || true
+          find /overlay -maxdepth 4 -type f -name '*.ebuild' -not -path '*/cache/*' -exec sed -i 's/mesa\[gbm\]/mesa/g' {} + 2>/dev/null || true
 
-          # Patch Guru dependencies if they get pulled
-          for pkg in gui-libs/wlroots gui-libs/scenefx; do
-            if [ -d "/var/db/repos/guru/$pkg" ]; then
-              sed -i 's/media-libs\/mesa\[gbm\]/media-libs\/mesa/g' "/var/db/repos/guru/$pkg"/*.ebuild 2>/dev/null || true
-              sed -i 's/media-libs\/mesa\[gbm(+)\]/media-libs\/mesa/g' "/var/db/repos/guru/$pkg"/*.ebuild 2>/dev/null || true
-              sed -i 's/mesa\[gbm\]/mesa/g' "/var/db/repos/guru/$pkg"/*.ebuild 2>/dev/null || true
-              sed -i 's/mesa\[gbm(+)\]/mesa/g' "/var/db/repos/guru/$pkg"/*.ebuild 2>/dev/null || true
-              ebuild $(ls /var/db/repos/guru/$pkg/*.ebuild | head -n 1) manifest 2>/dev/null || true
-            fi
-          done
-
-          # 🚀 SHATTER CIRCULAR DEPENDENCIES
-          echo ">>> Shattering circular dependencies via binary pre-install..."
-          emerge --usepkgonly --oneshot --nodeps --quiet dev-python/docutils media-libs/harfbuzz sys-libs/ncurses sys-libs/gpm dev-libs/glib x11-libs/cairo x11-libs/pango 2>&1 || true
+          # 🚀 THE BOOTSTRAP: Shatter Circular Dependencies Natively
+          mkdir -p /etc/portage/make.conf.d
+          echo 'USE="-introspection -cairo -doc -gtk-doc"' > /etc/portage/make.conf.d/99-bootstrap.conf
+          
+          echo ">>> Bootstrapping Base Libraries..."
+          emerge --oneshot --quiet --nodeps dev-libs/glib dev-libs/gobject-introspection-common dev-util/gdbus-codegen media-libs/harfbuzz dev-python/docutils dev-python/pillow 2>&1 || true
+          emerge --oneshot --quiet --nodeps dev-libs/gobject-introspection 2>&1 || true
+          
+          rm -f /etc/portage/make.conf.d/99-bootstrap.conf
+          
+          echo ">>> Restoring Full Libraries..."
+          emerge --oneshot --quiet dev-libs/glib dev-libs/gobject-introspection-common dev-libs/gobject-introspection dev-util/gdbus-codegen media-libs/harfbuzz 2>&1 || true
 
           TARGET_PKG='${{ github.event.inputs.atom }}'
-          echo ">>> Main Emerge targeting: $TARGET_PKG"
 
           emerge --autounmask=y --autounmask-write --autounmask-backtrack=y --keep-going --quiet "$TARGET_PKG" 2>&1 || true
           for i in 1 2 3; do etc-update --automode -5 2>/dev/null || break; done
@@ -219,9 +227,7 @@ jobs:
               cpv = f"{rel_path.parent}/{f.name.replace('.gpkg.tar', '').replace('.tbz2', '')}"
               parts = portage.versions.pkgsplit(cpv)
               if parts:
-                  pkg_name, ver, rev = parts
-                  ver_str = ver + ('-' + rev if rev != 'r0' else '')
-                  groups[pkg_name].append((ver_str, f))
+                  groups[parts].append((parts + ('-' + parts if parts != 'r0' else ''), f))
 
           def ver_cmp(a, b): return portage.versions.vercmp(a, b)
 
