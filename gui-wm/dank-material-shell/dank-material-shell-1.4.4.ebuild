@@ -1,6 +1,6 @@
 EAPI=8
 
-inherit go-module git-r3
+inherit go-module git-r3 xdg
 
 DESCRIPTION="A Material You inspired shell for Wayland"
 HOMEPAGE="https://github.com/AvengeMedia/DankMaterialShell"
@@ -10,7 +10,6 @@ LICENSE="GPL-3.0-or-later"
 SLOT="0"
 KEYWORDS=""
 
-# Required to allow go modules to download during src_compile
 RESTRICT="network-sandbox"
 
 DEPEND="
@@ -26,9 +25,13 @@ RDEPEND="${DEPEND}"
 BDEPEND=">=dev-lang/go-1.21"
 
 src_compile() {
-    cd core || die "Failed to enter core directory"
     export GOPROXY="https://proxy.golang.org,direct"
-    go build -o dms ./cmd/dms || die "Go build failed"
+    
+    pushd core >/dev/null || die "Failed to enter core directory"
+    
+    ego build -o dms ./cmd/dms
+    
+    popd >/dev/null || die
 }
 
 src_install() {
