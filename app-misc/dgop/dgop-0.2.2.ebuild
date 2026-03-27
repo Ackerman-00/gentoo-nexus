@@ -8,7 +8,7 @@ EGIT_REPO_URI="https://github.com/AvengeMedia/dgop.git"
 
 LICENSE="MIT"
 SLOT="0"
-KEYWORDS=""
+KEYWORDS="~amd64"
 
 RESTRICT="network-sandbox"
 
