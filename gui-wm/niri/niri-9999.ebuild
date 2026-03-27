@@ -22,7 +22,7 @@ DEPEND="
     dev-libs/libinput:=
     dev-libs/wayland
     media-libs/libdisplay-info:=
-    media-libs/mesa[gbm]
+    media-libs/mesa
     sys-auth/seatd:=
     virtual/libudev:=
     x11-libs/cairo
