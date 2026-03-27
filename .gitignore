@@ -177,3 +177,4 @@ distfiles/
 cache/
 job_out/
 *.sh
+.env
