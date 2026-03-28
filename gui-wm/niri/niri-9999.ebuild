@@ -16,7 +16,6 @@ KEYWORDS=""
 IUSE="+dbus +screencast"
 REQUIRED_USE="screencast? ( dbus )"
 
-# CRITICAL FIX: Explicitly declare the live property
 PROPERTIES="live"
 RESTRICT="network-sandbox"
 
