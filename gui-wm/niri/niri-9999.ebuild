@@ -1,7 +1,6 @@
 EAPI=8
 
-EGIT_COMMIT="8f48f56fe199"
-_commit="8f48f56fe19918b5cfa02e5d68a47ebaf7bf3dee"
+EGIT_COMMIT="8f48f56fe19918b5cfa02e5d68a47ebaf7bf3dee"
 LLVM_COMPAT=( {18..22} )
 RUST_MIN_VER="1.82.0"
 
@@ -17,6 +16,8 @@ KEYWORDS=""
 IUSE="+dbus +screencast"
 REQUIRED_USE="screencast? ( dbus )"
 
+# CRITICAL FIX: Explicitly declare the live property
+PROPERTIES="live"
 RESTRICT="network-sandbox"
 
 DEPEND="
@@ -50,6 +51,8 @@ pkg_setup() {
 }
 
 src_unpack() {
+    export EGIT_OVERRIDE_COMMIT_NIRI_WM_NIRI="${EGIT_COMMIT}"
+    
     git-r3_src_unpack
     cargo_live_src_unpack
 }
@@ -57,7 +60,6 @@ src_unpack() {
 src_prepare() {
     sed -i 's/git = "[^ ]*"/version = "*"/' Cargo.toml || die
     
-    # OpenRC Fix: Rewrites the desktop file to bypass systemd
     local cmd="niri --session"
     use dbus && cmd="dbus-run-session ${cmd}"
     sed -i "s/niri-session/${cmd}/" resources/niri.desktop || die
