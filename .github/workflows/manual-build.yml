@@ -98,7 +98,6 @@ jobs:
           sys-libs/gpm
           MASK
 
-          # 🚀 ZLIB FIX: Needed for QtMultimedia & Dank Material Shell
           cat > /etc/portage/package.use/global << 'USE'
           */* -systemd -gpm
           sys-libs/ncurses -abi_x86_32
@@ -118,7 +117,6 @@ jobs:
           sync-uri = https://gentoo-nexus.sourceforge.io/
           REPOCONF
 
-          # 🚀 EMERGE UPDATE FIX: '--update --deep' added to resolve GTK4 slot conflicts!
           cat > /etc/portage/make.conf << 'MAKECONF'
           FEATURES="-userfetch -userpriv -usersandbox -ipc-sandbox -network-sandbox -pid-sandbox getbinpkg buildpkg"
           EMERGE_DEFAULT_OPTS="--getbinpkg --usepkg --binpkg-respect-use=y --binpkg-changed-deps=y --autounmask=y --autounmask-write --autounmask-backtrack=y --keep-going --quiet --update"
@@ -178,6 +176,12 @@ jobs:
 
           EXCLUDES="--usepkg-exclude sys-auth/polkit --usepkg-exclude dev-libs/libei --usepkg-exclude media-video/wireplumber --usepkg-exclude media-libs/libpulse --usepkg-exclude sys-apps/accountsservice --usepkg-exclude sys-auth/elogind"
 
+          # 🚀 FIX: Force Portage to download the tarball and generate a secure Manifest
+          echo ">>> Generating fresh Manifest for $TARGET_PKG..."
+          for ebuild_file in /overlay/$TARGET_PKG/*.ebuild; do
+              [ -e "$ebuild_file" ] && ebuild "$ebuild_file" manifest || true
+          done
+
           echo ">>> Compiling Main Target: $TARGET_PKG"
           emerge $EXCLUDES "$TARGET_PKG" 2>&1 || true
           for i in 1 2 3; do etc-update --automode -5 2>/dev/null || break; done
@@ -209,7 +213,6 @@ jobs:
           #!/bin/bash
           set -euo pipefail
           
-          # 🚀 UI FIX: Tuple unpacking handles deployments without any array index corruption!
           python3 << 'PYEOF'
           import urllib.request
           import os
