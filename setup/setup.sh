@@ -253,7 +253,7 @@ sys-libs/libxcrypt compat
 EOF
 
 cat << EOF > /etc/portage/package.accept_keywords/nexus
-gui-apps/matugen::gentoo-nexus **
+x11-misc/matugen::gentoo-nexus **
 x11-base/xwayland-satellite::gentoo-nexus **
 EOF
 
