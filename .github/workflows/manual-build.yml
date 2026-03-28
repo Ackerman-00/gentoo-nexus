@@ -98,9 +98,11 @@ jobs:
           sys-libs/gpm
           MASK
 
+          # 🚀 ZLIB FIX: Needed for QtMultimedia & Dank Material Shell
           cat > /etc/portage/package.use/global << 'USE'
           */* -systemd -gpm
           sys-libs/ncurses -abi_x86_32
+          sys-libs/zlib minizip
           USE
 
           cat > /etc/portage/binrepos.conf/gentoo.conf << 'REPOCONF'
@@ -116,9 +118,10 @@ jobs:
           sync-uri = https://gentoo-nexus.sourceforge.io/
           REPOCONF
 
+          # 🚀 EMERGE UPDATE FIX: '--update --deep' added to resolve GTK4 slot conflicts!
           cat > /etc/portage/make.conf << 'MAKECONF'
           FEATURES="-userfetch -userpriv -usersandbox -ipc-sandbox -network-sandbox -pid-sandbox getbinpkg buildpkg"
-          EMERGE_DEFAULT_OPTS="--getbinpkg --usepkg --binpkg-respect-use=y --binpkg-changed-deps=y --autounmask=y --autounmask-write --autounmask-backtrack=y --keep-going --quiet"
+          EMERGE_DEFAULT_OPTS="--getbinpkg --usepkg --binpkg-respect-use=y --binpkg-changed-deps=y --autounmask=y --autounmask-write --autounmask-backtrack=y --keep-going --quiet --update --deep"
           DISTDIR="/var/cache/distfiles"
           PKGDIR="/overlay/job_out"
           VIDEO_CARDS="amdgpu radeonsi nouveau virgl"
@@ -206,7 +209,7 @@ jobs:
           #!/bin/bash
           set -euo pipefail
           
-          # 🚀 FIX: Tuple unpacking handles deployments without any array index corruption!
+          # 🚀 UI FIX: Tuple unpacking handles deployments without any array index corruption!
           python3 << 'PYEOF'
           import urllib.request
           import os
@@ -251,9 +254,9 @@ jobs:
               if parts:
                   pkgname, pkgver, pkgrev = parts
                   ver_str = pkgver + ('-' + pkgrev if pkgrev != 'r0' else '')
-                  grouped[pkgname].append((ver_str, cpv))
+                  grouped.get(pkgname, list()).append((ver_str, cpv))
               else:
-                  grouped[cpv].append(('0', cpv))
+                  grouped.get(cpv, list()).append(('0', cpv))
 
           def ver_cmp(a, b): return portage.versions.vercmp(a, b)
 
@@ -267,12 +270,12 @@ jobs:
               if len(items) > 1:
                   items.sort(key=cmp_to_key(custom_sort))
               best_ver, best_cpv = items.pop()
-              final_blocks[best_cpv] = all_blocks.get(best_cpv)
+              final_blocks.update({best_cpv: all_blocks.get(best_cpv)})
 
           with open('/overlay/job_out/Packages', 'w', encoding='utf-8') as f:
               f.write("PKGDIR: .\nPACKAGES:\n\n")
               for cpv in sorted(final_blocks.keys()):
-                  f.write(final_blocks[cpv])
+                  f.write(final_blocks.get(cpv))
 
           html = "<!DOCTYPE html><html><head><title>Gentoo Nexus Binhost</title><style>body { font-family: monospace; background: #1a1a1a; color: #e0e0e0; padding: 2em; } a { color: #66d9ef; }</style></head><body><h1>Gentoo Nexus Binhost</h1>"
           html += "<p>Last Updated: " + os.popen("date -u '+%Y-%m-%d %H:%M:%S UTC'").read().strip() + "</p><pre>\n"
