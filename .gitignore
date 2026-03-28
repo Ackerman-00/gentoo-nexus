@@ -178,3 +178,5 @@ cache/
 job_out/
 *.sh
 .env
+changed_packages.txt
+sf_packages.txt
