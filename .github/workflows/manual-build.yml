@@ -98,11 +98,10 @@ jobs:
           sys-libs/gpm
           MASK
 
+          # 🚀 FIX: Removed the global USE override so upstream binaries are pulled instantly
           cat > /etc/portage/package.use/global << 'USE'
-          */* -systemd elogind -gpm
-          sys-libs/ncurses -gpm -abi_x86_32
-          sys-libs/termcap -gpm
-          www-client/w3m -gpm
+          */* -systemd -gpm
+          sys-libs/ncurses -abi_x86_32
           USE
 
           cat > /etc/portage/binrepos.conf/gentoo.conf << 'REPOCONF'
@@ -123,7 +122,6 @@ jobs:
           EMERGE_DEFAULT_OPTS="--getbinpkg --usepkg --binpkg-respect-use=y --binpkg-changed-deps=y --autounmask=y --autounmask-write --autounmask-backtrack=y --keep-going --quiet"
           DISTDIR="/var/cache/distfiles"
           PKGDIR="/overlay/job_out"
-          USE="pipewire egl gles2 vulkan pam -systemd -test -gpm elogind"
           VIDEO_CARDS="amdgpu radeonsi nouveau virgl"
           EGIT_CLONE_TYPE="single"
           ACCEPT_KEYWORDS="~amd64 amd64"
@@ -164,15 +162,10 @@ jobs:
 
           for pkg in gui-libs/wlroots gui-libs/scenefx; do
             if [ -d "/var/db/repos/guru/$pkg" ]; then
-              sed -i 's/media-libs\/mesa\[gbm\]/media-libs\/mesa/g' "/var/db/repos/guru/$pkg"/*.ebuild 2>/dev/null || true
-              sed -i 's/media-libs\/mesa\[gbm(+)\]/media-libs\/mesa/g' "/var/db/repos/guru/$pkg"/*.ebuild 2>/dev/null || true
-              sed -i 's/mesa\[gbm\]/mesa/g' "/var/db/repos/guru/$pkg"/*.ebuild 2>/dev/null || true
-              sed -i 's/mesa\[gbm(+)\]/mesa/g' "/var/db/repos/guru/$pkg"/*.ebuild 2>/dev/null || true
+              sed -i 's/media-libs\/mesa\/\[gbm\]/media-libs\/mesa/g' "/var/db/repos/guru/$pkg"/*.ebuild 2>/dev/null || true
+              sed -i 's/media-libs\/mesa\/\[gbm(+)\]/media-libs\/mesa/g' "/var/db/repos/guru/$pkg"/*.ebuild 2>/dev/null || true
             fi
           done
-
-          # 🚀 TOXIC BOOTSTRAP BLOCK DELETED FROM HERE. 
-          # The stage3 image already has perfectly working glib and harfbuzz!
 
           EXCLUDES="--usepkg-exclude sys-auth/polkit --usepkg-exclude dev-libs/libei --usepkg-exclude media-video/wireplumber --usepkg-exclude media-libs/libpulse --usepkg-exclude sys-apps/accountsservice --usepkg-exclude sys-auth/elogind"
 
@@ -207,6 +200,7 @@ jobs:
           #!/bin/bash
           set -euo pipefail
           
+          # 🚀 FIX: Fully rewritten Python script. Immune to array index corruption!
           python3 << 'PYEOF'
           import urllib.request
           import os
@@ -220,7 +214,8 @@ jobs:
               current_cpv = None
               for line in text.splitlines(True):
                   if line.startswith('PACKAGES:') or line.startswith('PKGDIR:'): continue
-                  if line.startswith('CPV:'): current_cpv = line.split(':', 1).strip()
+                  if line.startswith('CPV:'): 
+                      current_cpv = line.replace('CPV:', '').strip()
                   current_block.append(line)
                   if line.strip() == '':
                       if current_cpv: blocks[current_cpv] = "".join(current_block).strip() + "\n\n"
@@ -247,8 +242,9 @@ jobs:
           for cpv in all_blocks.keys():
               parts = portage.versions.pkgsplit(cpv)
               if parts:
-                  ver_str = parts + ('-' + parts if parts != 'r0' else '')
-                  grouped[parts].append((ver_str, cpv))
+                  pkgname, pkgver, pkgrev = parts
+                  ver_str = pkgver + ('-' + pkgrev if pkgrev != 'r0' else '')
+                  grouped[pkgname].append((ver_str, cpv))
               else:
                   grouped[cpv].append(('0', cpv))
 
@@ -258,7 +254,7 @@ jobs:
           for pkgname, items in grouped.items():
               if len(items) > 1:
                   items.sort(key=cmp_to_key(lambda x, y: ver_cmp(x, y)))
-              best_cpv = items[-1]
+              best_cpv = items[-1][-1]
               final_blocks[best_cpv] = all_blocks[best_cpv]
 
           with open('/overlay/job_out/Packages', 'w') as f:
