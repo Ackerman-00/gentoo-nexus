@@ -98,7 +98,6 @@ jobs:
           sys-libs/gpm
           MASK
 
-          # 🚀 FIX: Removed the global USE override so upstream binaries are pulled instantly
           cat > /etc/portage/package.use/global << 'USE'
           */* -systemd -gpm
           sys-libs/ncurses -abi_x86_32
@@ -145,6 +144,14 @@ jobs:
           location = /var/db/repos/guru
           masters = gentoo
           REPOCONF
+
+          # 🚀 GURU SHIELD: Protect our custom packages from 9999 hijackers
+          echo ">>> Shielding gentoo-nexus packages from Guru overrides..."
+          for pkg in /overlay/*/*/*.ebuild; do
+            [ -e "$pkg" ] || continue
+            cat_pkg=$(echo "$pkg" | awk -F'/' '{print $(NF-2)"/"$(NF-1)}')
+            echo "$cat_pkg::guru" >> /etc/portage/package.mask/guru_shield
+          done
 
           echo "*/*::gentoo-nexus ~amd64" >> /etc/portage/package.accept_keywords/nexus
           echo "*/*::guru ~amd64" >> /etc/portage/package.accept_keywords/guru
@@ -200,7 +207,6 @@ jobs:
           #!/bin/bash
           set -euo pipefail
           
-          # 🚀 FIX: Fully rewritten Python script. Immune to array index corruption!
           python3 << 'PYEOF'
           import urllib.request
           import os

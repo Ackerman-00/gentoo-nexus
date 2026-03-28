@@ -1,7 +1,7 @@
 EAPI=8
+
 EGIT_COMMIT="8f48f56fe199"
 _commit="b07bde3ee82dd73115e6b949e4f3f63695da35ea"
-
 LLVM_COMPAT=( {18..22} )
 RUST_MIN_VER="1.82.0"
 
@@ -51,6 +51,7 @@ pkg_setup() {
 
 src_unpack() {
     git-r3_src_unpack
+    cargo_live_src_unpack
 }
 
 src_prepare() {
@@ -74,7 +75,6 @@ src_configure() {
 
 src_compile() {
     cargo_src_compile
-
     "$(cargo_target_dir)"/niri completions bash > niri  || die
     "$(cargo_target_dir)"/niri completions fish > niri.fish || die
     "$(cargo_target_dir)"/niri completions zsh > _niri || die
@@ -82,13 +82,10 @@ src_compile() {
 
 src_install() {
     cargo_src_install
-
     insinto /usr/share/wayland-sessions
     doins resources/niri.desktop
-
     insinto /usr/share/xdg-desktop-portal
     doins resources/niri-portals.conf
-
     dobashcomp niri
     dofishcomp niri.fish
     dozshcomp _niri
@@ -98,7 +95,6 @@ src_test() {
     local -x XDG_RUNTIME_DIR="${T}/xdg"
     mkdir "${XDG_RUNTIME_DIR}" || die
     chmod 0700 "${XDG_RUNTIME_DIR}" || die
-
     local -x RAYON_NUM_THREADS=2
     local skip=( --skip=::egl )
     cargo_src_test -- --test-threads=2 "${skip[@]}"

@@ -1,42 +1,61 @@
 EAPI=8
 
-inherit go-module git-r3 xdg
+inherit go-module desktop xdg
 
-DESCRIPTION="A Material You inspired shell for Wayland"
+DESCRIPTION="A complete desktop shell for niri and other Wayland compositors."
 HOMEPAGE="https://github.com/AvengeMedia/DankMaterialShell"
-EGIT_REPO_URI="https://github.com/AvengeMedia/DankMaterialShell.git"
+SRC_URI="https://github.com/AvengeMedia/DankMaterialShell/archive/v${PV}.tar.gz -> ${P}.tar.gz"
 
 LICENSE="GPL-3.0-or-later"
 SLOT="0"
-KEYWORDS=""
+KEYWORDS="~amd64"
 
 RESTRICT="network-sandbox"
 
 DEPEND="
     gui-apps/quickshell
-    app-misc/dgop
+    media-sound/cava
+    app-misc/cliphist
+    gui-apps/wl-clipboard
     x11-misc/matugen
-    dev-qt/qtdeclarative:6
-    dev-qt/qtwayland:6
-    sys-libs/pam
-    sys-apps/accountsservice
+    gui-wm/niri
+    dev-qt/qtmultimedia:6
+    app-misc/dgop
+    sys-apps/danksearch
+    x11-base/xwayland-satellite
 "
 RDEPEND="${DEPEND}"
 BDEPEND=">=dev-lang/go-1.21"
 
+# Automatically enter the core directory where the Go project lives
+S="${WORKDIR}/DankMaterialShell-${PV}/core"
+
 src_compile() {
     export GOPROXY="https://proxy.golang.org,direct"
-    
-    pushd core >/dev/null || die "Failed to enter core directory"
-    
-    ego build -o dms ./cmd/dms
-    
-    popd >/dev/null || die
+
+    # Using upstream's compiler flags
+    ego build -ldflags="-s -w" -o ./dms ./cmd/dms
+
+    mkdir -pv completions || die
+    ./dms completion bash > completions/dms || die
+    ./dms completion fish > completions/dms.fish || die
+    ./dms completion zsh > completions/_dms || die
 }
 
 src_install() {
-    dobin core/dms
-    
+    dobin dms
+    dodoc ../README.md
+
+    # Install the generated completions
+    dobashcomp completions/dms
+    dofishcomp completions/dms.fish
+    dozshcomp completions/_dms
+
+    # Install Desktop assets
+    newicon -s scalable ../assets/danklogo.svg danklogo.svg
+    domenu ../assets/dms-open.desktop
+
+    # Install Quickshell components
     insinto /usr/share/quickshell/dms
-    doins -r quickshell/*
+    doins -r ../quickshell/*
 }

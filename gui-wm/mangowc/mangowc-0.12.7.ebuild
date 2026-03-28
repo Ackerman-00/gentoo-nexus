@@ -33,6 +33,8 @@ BDEPEND="
     virtual/pkgconfig
 "
 
+S="${WORKDIR}/mango-${PV}"
+
 src_configure() {
     local emesonargs=(
         $(meson_feature X xwayland)
