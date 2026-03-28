@@ -2,7 +2,6 @@ name: Check All Updates
 
 on:
   schedule:
-    # 🚀 Automation: Runs every 6 hours (00:00, 06:00, 12:00, 18:00 UTC)
     - cron: '0 */6 * * *'
   workflow_dispatch:
 
@@ -37,7 +36,6 @@ jobs:
         env:
           GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
         run: |
-          # Maintenance: Auto-patching known EAPI/Dependency shifts
           find . -path ./cache -prune -o -type f -name '*.ebuild' -exec sed -i 's/LLVM_COMPAT=( {18..21} )/LLVM_COMPAT=( {18..22} )/g' {} + || true
           find . -path ./cache -prune -o -type f -name '*.ebuild' -exec sed -i 's/gui-libs\/display-info/media-libs\/libdisplay-info/g' {} + || true
           find . -path ./cache -prune -o -type f -name '*.ebuild' -exec sed -i 's/media-libs\/mesa\[gbm\]/media-libs\/mesa/g' {} + || true
@@ -192,7 +190,6 @@ jobs:
           #!/bin/bash
           set -euo pipefail
           
-          # Log Hygiene: Fix common warnings before sync
           mkdir -p /var/db/repos/gentoo
           rm -rf /var/db/repos/gentoo/*
           emerge-webrsync -q
