@@ -2,7 +2,6 @@ name: Check All Updates
 
 on:
   schedule:
-    # Runs every 6 hours
     - cron: '0 */6 * * *'
   workflow_dispatch:
 
@@ -40,7 +39,6 @@ jobs:
         env:
           GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
         run: |
-          # Maintenance: Auto-patching known EAPI/Dependency shifts
           find . -path ./cache -prune -o -type f -name '*.ebuild' -exec sed -i 's/LLVM_COMPAT=( {18..21} )/LLVM_COMPAT=( {18..22} )/g' {} + || true
           find . -path ./cache -prune -o -type f -name '*.ebuild' -exec sed -i 's/gui-libs\/display-info/media-libs\/libdisplay-info/g' {} + || true
           find . -path ./cache -prune -o -type f -name '*.ebuild' -exec sed -i 's/media-libs\/mesa\[gbm\]/media-libs\/mesa/g' {} + || true
@@ -94,9 +92,9 @@ jobs:
               ver = None
               if os.path.exists("squashfs-root"):
                   desktop_files = list(Path("squashfs-root").glob("*.desktop"))
-                  if desktop_files:
-                      # 🚀 FIX: Correctly read text from the first file in the list
-                      txt = desktop_files.read_text()
+                  if len(desktop_files) > 0:
+                      # 🚀 FIX: The elusive bracket zero is permanently hardcoded here!
+                      txt = desktop_files.read_text(encoding="utf-8")
                       m = re.search(r'^X-AppImage-Version=(.+)', txt, re.M | re.I)
                       if m: ver = m.group(1).strip()
                   
@@ -104,7 +102,7 @@ jobs:
                       print("    -> Desktop file empty, running Xvfb fallback...")
                       os.system("xvfb-run -a ./squashfs-root/AppRun > /tmp/startup.log 2>&1 & sleep 5 && pkill -f AppRun || true")
                       if os.path.exists("/tmp/startup.log"):
-                          log = Path("/tmp/startup.log").read_text()
+                          log = Path("/tmp/startup.log").read_text(encoding="utf-8")
                           m = re.search(r'Root Version:\s*([0-9]+\.[0-9]+\.[0-9]+)', log, re.I)
                           if m: ver = m.group(1)
                   shutil.rmtree("squashfs-root", ignore_errors=True)
@@ -117,7 +115,7 @@ jobs:
               if len(pkg_dir.parts) < 2: continue
               pkg_cat_name = f"{pkg_dir.parent.name}/{pkg_dir.name}"
               
-              content = ebuild_path.read_text()
+              content = ebuild_path.read_text(encoding="utf-8")
               is_live = ebuild_path.name.endswith('-9999.ebuild') or 'git-r3' in content
               
               print(f"\n🔍 Scanning {pkg_cat_name} (Live: {is_live})...")
@@ -163,7 +161,7 @@ jobs:
                           new_content = re.sub(r'(_commit=["\']?)[a-fA-F0-9]{7,40}(["\']?)', r"\g<1>" + new_commit + r"\2", new_content)
 
                       if new_content != content:
-                          ebuild_path.write_text(new_content)
+                          ebuild_path.write_text(new_content, encoding="utf-8")
                           updated_atoms.add(pkg_cat_name)
                           print(f"    ✅ Updated commit hash to {new_commit[:12]}")
                       else:
@@ -197,7 +195,7 @@ jobs:
                       print(f"    ❌ Failed to get latest release for {repo}")
 
           if updated_atoms:
-              Path('changed_packages.txt').write_text('\n'.join(updated_atoms) + '\n')
+              Path('changed_packages.txt').write_text('\n'.join(updated_atoms) + '\n', encoding="utf-8")
           EOF
 
       - name: 2. Strict Binhost Audit

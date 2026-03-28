@@ -145,7 +145,6 @@ jobs:
           masters = gentoo
           REPOCONF
 
-          # 🚀 GURU SHIELD: Protect our custom packages from 9999 hijackers
           echo ">>> Shielding gentoo-nexus packages from Guru overrides..."
           for pkg in /overlay/*/*/*.ebuild; do
             [ -e "$pkg" ] || continue
