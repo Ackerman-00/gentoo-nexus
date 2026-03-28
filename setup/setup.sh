@@ -1,6 +1,6 @@
 #!/bin/bash
 if [ "$EUID" -ne 0 ]; then 
-    echo -e "\e[1;31mERROR: Must run as root inside the Gentoo chroot!\e[0m"
+    echo -e "\e[1;31m[!] FATAL: Execution requires root privileges inside the Gentoo chroot.\e[0m"
     exit 1 
 fi
 
@@ -9,25 +9,27 @@ G="\e[1;32m"
 Y="\e[1;33m"
 C="\e[0m"
 
-echo -e "${B}======================================================${C}"
-echo -e "${G}      GENTOO NEXUS: AUTOMATED BINHOST INSTALLER       ${C}"
-echo -e "${B}======================================================${C}"
+echo -e "${B}================================================================${C}"
+echo -e "${G}    GENTOO NEXUS ARCHITECT: AUTOMATED BINARY DEPLOYMENT 2026    ${C}"
+echo -e "${B}================================================================${C}"
+echo -e "Targeting: Linux Kernel 6.19.10+ | Mesa 26.0.3+ | Niri 25.11+\n"
 
-echo -e "\n${Y} HARDWARE TARGET${C}"
+echo -e "${Y} HARDWARE ARCHITECTURE${C}"
 echo "1) Desktop (Ryzen 5 5600G - Zen 3 | AMD GPU)"
 echo "2) Desktop (Ryzen 7 7700  - Zen 4 | RTX 5060)"
 echo "3) Laptop  (Ryzen 3 7320U - Zen 2 | AMD GPU)"
-echo "4) Laptop  (HP EliteBook  - Skylake | Intel HD)"
-read -p "Choice [1-4]: " hw_choice
+echo "4) Laptop  (HP EliteBook  - Skylake | Intel Iris)"
+read -p "Target [1-4]: " hw_choice
 
-echo -e "\n${Y} SOFTWARE SELECTION${C}"
+echo -e "\n${Y} SOFTWARE SUBSYSTEMS${C}"
 read -p "Enter primary username: " username
+read -p "Enable GURU (for -bin packages)? [y/n]: " guru_choice
 read -p "Enable Steam natively? [y/n]: " steam_choice
 read -p "Enable Heroic & ProtonPlus? [y/n]: " games_choice
 read -p "Enable Vesktop? [y/n]: " vesktop_choice
 read -p "Enable RootApp? [y/n]: " rootapp_choice
 
-echo -e "\n${Y} ENVIRONMENT SELECTION${C}"
+echo -e "\n${Y} WAYLAND COMPOSITOR${C}"
 echo "1) niri (Nexus)"
 echo "2) mangowc (Nexus)"
 echo "3) Hyprland"
@@ -42,15 +44,17 @@ echo "2) dank-material-shell (Nexus)"
 echo "3) None"
 read -p "Choice [1-3]: " shell_choice
 
-echo -e "\n${Y} DISPLAY MANAGER${C}"
+echo -e "\n${Y} DISPLAY MANAGER (GREETER)${C}"
 echo "1) ly (TUI)"
 echo "2) sddm"
 echo "3) gdm"
 echo "4) greetd"
-echo "5) None"
+echo "5) None (TTY boot)"
 read -p "Choice [1-5]: " dm_choice
 
-echo -e "\n${B}>>> INITIALIZING BINHOSTS & PROFILE...${C}"
+[[ "$vesktop_choice" == "y" ]] && guru_choice="y"
+
+echo -e "\n${B}>>> [1/7] INITIALIZING BINHOSTS & 23.0 PROFILE...${C}"
 eselect profile set default/linux/amd64/23.0/desktop
 mkdir -p /etc/portage/binrepos.conf
 
@@ -67,12 +71,12 @@ sync-uri = https://gentoo-nexus.sourceforge.io/
 verify-signature = false
 EOF
 
-echo -e "\n${B}>>> CONFIGURING MAKE.CONF & HARDWARE...${C}"
+echo -e "\n${B}>>> [2/7] INJECTING KERNEL & COMPILER OPTIMIZATIONS...${C}"
 case $hw_choice in
     1) ZRAM_SIZE="6144M"; V_CARD="amdgpu radeonsi"; ARCH="znver3"; G_CMD="" ;;
     2) ZRAM_SIZE="8192M"; V_CARD="nvidia"; ARCH="znver4"; G_CMD="nvidia-drm.modeset=1" ;;
     3) ZRAM_SIZE="4096M"; V_CARD="amdgpu radeonsi"; ARCH="znver2"; G_CMD="" ;;
-    4) ZRAM_SIZE="8192M"; V_CARD="intel i965 iris"; ARCH="skylake"; G_CMD="i915.enable_psr=0" ;;
+    4) ZRAM_SIZE="8192M"; V_CARD="intel iris"; ARCH="skylake"; G_CMD="i915.enable_psr=0" ;;
 esac
 
 cat << EOF > /etc/portage/make.conf
@@ -98,30 +102,31 @@ if [ -n "$G_CMD" ]; then
     fi
 fi
 
-echo -e "\n${B}>>> BOOTSTRAPPING & SYNCING REPOSITORIES...${C}"
+echo -e "\n${B}>>> [3/7] SYNCHRONIZING REPOSITORIES...${C}"
 emerge-webrsync -q
 emerge --noreplace --quiet --getbinpkg app-eselect/eselect-repository dev-vcs/git
 eselect repository add gentoo-nexus git https://github.com/Ackerman-00/gentoo-nexus.git
+[[ "$guru_choice" == "y" ]] && eselect repository enable guru
 [[ "$steam_choice" == "y" ]] && eselect repository enable steam-overlay
-[[ "$de_choice" == "8" ]] && eselect repository add cosmic-overlay git https://github.com/fsvm88/cosmic-overlay.git
+[[ "$de_choice" == "6" ]] && eselect repository add cosmic-overlay git https://github.com/fsvm88/cosmic-overlay.git
 emaint sync -a
 
-echo -e "\n${B}>>> WIRING PORTAGE RULES & MULTILIB...${C}"
+echo -e "\n${B}>>> [4/7] COMPILING PORTAGE GRAPH & MULTILIB RULES...${C}"
 mkdir -p /etc/portage/package.{use,mask,accept_keywords}
 
 cat << EOF > /etc/portage/package.use/system
 sys-kernel/installkernel dracut grub
 media-video/pipewire sound-server extra
 sys-auth/pambase elogind
+sys-libs/libxcrypt compat
 EOF
-
-[[ "$hw_choice" == "2" ]] && echo "x11-drivers/nvidia-drivers kernel-open" > /etc/portage/package.use/nvidia
 
 cat << EOF > /etc/portage/package.accept_keywords/nexus
 gui-apps/matugen::gentoo-nexus **
 x11-base/xwayland-satellite::gentoo-nexus **
 EOF
 
+[[ "$hw_choice" == "2" ]] && echo "x11-drivers/nvidia-drivers kernel-open" > /etc/portage/package.use/nvidia
 [[ "$de_choice" == "1" ]] && echo "gui-wm/niri::gentoo-nexus **" >> /etc/portage/package.accept_keywords/nexus
 [[ "$de_choice" == "2" ]] && echo "gui-wm/mangowc::gentoo-nexus **" >> /etc/portage/package.accept_keywords/nexus
 [[ "$shell_choice" == "1" ]] && echo "gui-wm/noctalia-shell::gentoo-nexus **" >> /etc/portage/package.accept_keywords/nexus
@@ -132,7 +137,6 @@ if [ "$steam_choice" == "y" ]; then
 sys-libs/glibc abi_x86_32
 media-libs/mesa abi_x86_32
 media-libs/libglvnd abi_x86_32
-virtual/opengl abi_x86_32
 x11-libs/libX11 abi_x86_32
 x11-libs/libXext abi_x86_32
 x11-libs/libxcb abi_x86_32
@@ -146,7 +150,7 @@ EOF
     [[ "$hw_choice" == "2" ]] && echo "x11-drivers/nvidia-drivers abi_x86_32" >> /etc/portage/package.use/steam
 fi
 
-echo -e "\n${B}>>> SETTING UP USERS & SERVICES...${C}"
+echo -e "\n${B}>>> [5/7] ESTABLISHING USER & SYSTEM SERVICES...${C}"
 if id "$username" &>/dev/null; then
     usermod -aG wheel,audio,video,usb,cdrom,portage,seat,input "$username"
 else
@@ -176,8 +180,8 @@ if [[ "$hw_choice" =~ ^$ ]]; then
     echo -e "[device]\nwifi.backend=iwd" > /etc/NetworkManager/conf.d/wifi_backend.conf
 fi
 
-echo -e "\n${B}>>> ASSEMBLING INSTALLATION TARGETS...${C}"
-INSTALL_LIST="sys-kernel/gentoo-kernel-bin sys-kernel/linux-firmware sys-kernel/dracut sys-boot/grub sys-boot/efibootmgr app-admin/doas sys-auth/elogind media-video/pipewire media-video/wireplumber gui-apps/foot mate-extra/mate-polkit x11-base/xwayland-satellite gui-apps/swaync net-misc/networkmanager sys-fs/dosfstools sys-fs/fuse media-fonts/noto media-fonts/noto-emoji"
+echo -e "\n${B}>>> [6/7] ASSEMBLING BINARY TARGETS...${C}"
+INSTALL_LIST="sys-kernel/gentoo-kernel-bin sys-kernel/linux-firmware sys-kernel/dracut sys-boot/grub sys-boot/efibootmgr app-admin/doas sys-auth/elogind media-video/pipewire media-video/wireplumber gui-apps/foot mate-extra/mate-polkit x11-base/xwayland-satellite gui-apps/swaync net-misc/networkmanager sys-fs/dosfstools sys-fs/fuse media-fonts/noto media-fonts/noto-emoji sys-power/upower"
 
 case $de_choice in
     1) INSTALL_LIST="$INSTALL_LIST gui-wm/niri::gentoo-nexus sys-apps/xdg-desktop-portal-gnome" ;;
@@ -200,18 +204,17 @@ esac
 [[ "$hw_choice" == "2" ]] && INSTALL_LIST="$INSTALL_LIST x11-drivers/nvidia-drivers"
 [[ "$hw_choice" == "4" ]] && INSTALL_LIST="$INSTALL_LIST sys-firmware/intel-microcode media-libs/intel-media-driver"
 [[ "$games_choice" == "y" ]] && INSTALL_LIST="$INSTALL_LIST games-util/heroic-bin games-util/protonplus-bin::gentoo-nexus"
-[[ "$vesktop_choice" == "y" ]] && INSTALL_LIST="$INSTALL_LIST net-im/vesktop-bin::gentoo-nexus"
+[[ "$vesktop_choice" == "y" ]] && INSTALL_LIST="$INSTALL_LIST net-im/vesktop-bin::guru"
 [[ "$steam_choice" == "y" ]] && INSTALL_LIST="$INSTALL_LIST games-util/steam-launcher"
 [[ "$rootapp_choice" == "y" ]] && INSTALL_LIST="$INSTALL_LIST app-misc/rootapp-bin::gentoo-nexus"
 
-echo -e "\n${B}>>> EXECUTING BINARY DEPLOYMENT...${C}"
+echo -e "\n${B}>>> [7/7] EXECUTING AUTONOMOUS BINARY DEPLOYMENT...${C}"
 BIN_OPTS="--getbinpkg --usepkg --binpkg-respect-use=y --keep-going"
 
 emerge --autounmask=y --autounmask-write $BIN_OPTS $INSTALL_LIST || true
 etc-update --automode -5
 emerge $BIN_OPTS --update $INSTALL_LIST
 
-echo -e "\n${B}>>> POST-INSTALL CONFIGURATION...${C}"
 if [[ "$dm_choice" =~ ^[1-4]$ ]]; then
     rc-update add "$DM_SVC" default
 fi
@@ -219,19 +222,10 @@ fi
 if [[ "$de_choice" =~ ^$ ]]; then
     mkdir -p /usr/share/wayland-sessions/
     sed -i 's/Exec=niri-session/Exec=dbus-run-session niri --session/' /usr/share/wayland-sessions/niri.desktop 2>/dev/null
-    
-    NIRI_CONF="/home/$username/.config/niri/config.kdl"
-    mkdir -p $(dirname "$NIRI_CONF")
-    cat << EOF > "$NIRI_CONF"
-spawn-at-startup "xwayland-satellite"
-spawn-at-startup "/usr/libexec/polkit-mate-authentication-agent-1"
-environment { DISPLAY ":0"; }
-EOF
-    chown -R "$username":"$username" "/home/$username/.config"
 fi
 
 echo -e "\n${G}[✓] GENTOO NEXUS DEPLOYMENT COMPLETE!${C}"
-echo -e "${Y}Final steps to execute manually:${C}"
+echo -e "${Y}To finalize the installation, run the following manually:${C}"
 echo "1. passwd root"
 echo "2. passwd $username"
 echo "3. grub-install --target=x86_64-efi --efi-directory=/boot/efi --bootloader-id=Gentoo"
