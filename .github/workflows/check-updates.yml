@@ -54,7 +54,7 @@ jobs:
 
           updated_atoms = set()
           gh_token = os.environ.get('GITHUB_TOKEN')
-          hdrs = {"Authorization": f"token {gh_token}"} if gh_token else {}
+          hdrs = {"Authorization": f"token {gh_token}"} if gh_token else dict()
 
           def get_latest_github_release(repo):
               try:
@@ -65,7 +65,7 @@ jobs:
                   r2 = requests.get(f"https://api.github.com/repos/{repo}/tags", headers=hdrs, timeout=15)
                   if r2.status_code == 200:
                       for tag in r2.json():
-                          name = tag["name"].lstrip("v")
+                          name = tag.get("name", "").lstrip("v")
                           if re.match(r'^[0-9]', name): return name
               except Exception: pass
               return None
@@ -91,14 +91,14 @@ jobs:
               
               ver = None
               if os.path.exists("squashfs-root"):
-                  desktop_files = list(Path("squashfs-root").glob("*.desktop"))
-                  if len(desktop_files) > 0:
-                      # 🚀 FIX: The elusive bracket zero is permanently hardcoded here!
-                      txt = desktop_files.read_text(encoding="utf-8")
+                  # 🚀 FIX: Using an iterator loop to completely avoid bracket indexing!
+                  for d_file in Path("squashfs-root").glob("*.desktop"):
+                      txt = d_file.read_text(encoding="utf-8")
                       m = re.search(r'^X-AppImage-Version=(.+)', txt, re.M | re.I)
                       if m: ver = m.group(1).strip()
+                      break
                   
-                  if ver in [None, "1.0", "1.0.0"]:
+                  if ver in (None, "1.0", "1.0.0"):
                       print("    -> Desktop file empty, running Xvfb fallback...")
                       os.system("xvfb-run -a ./squashfs-root/AppRun > /tmp/startup.log 2>&1 & sleep 5 && pkill -f AppRun || true")
                       if os.path.exists("/tmp/startup.log"):
@@ -112,22 +112,23 @@ jobs:
           for ebuild_path in Path('.').rglob('*.ebuild'):
               if 'cache' in ebuild_path.parts or 'job_out' in ebuild_path.parts: continue
               pkg_dir = ebuild_path.parent
-              if len(pkg_dir.parts) < 2: continue
-              pkg_cat_name = f"{pkg_dir.parent.name}/{pkg_dir.name}"
+              # Tuple unpacking to avoid brackets
+              *parent_parts, cat_name, pkg_name = pkg_dir.parts
+              pkg_cat_name = f"{cat_name}/{pkg_name}"
               
               content = ebuild_path.read_text(encoding="utf-8")
               is_live = ebuild_path.name.endswith('-9999.ebuild') or 'git-r3' in content
               
               print(f"\n🔍 Scanning {pkg_cat_name} (Live: {is_live})...")
 
-              if pkg_dir.name == "rootapp-bin":
+              if pkg_name == "rootapp-bin":
                   new_ver = get_rootapp_version()
                   if new_ver:
                       curr_ver_m = re.search(r'-([0-9][0-9.]*(?:_p[0-9]+)?(?:-r[0-9]+)?)\.ebuild$', ebuild_path.name)
                       curr_ver = curr_ver_m.group(1) if curr_ver_m else None
                       print(f"    -> Current: {curr_ver} | Found Upstream: {new_ver}")
                       if curr_ver and new_ver != curr_ver:
-                          new_path = pkg_dir / f"{pkg_dir.name}-{new_ver}.ebuild"
+                          new_path = pkg_dir / f"{pkg_name}-{new_ver}.ebuild"
                           ebuild_path.rename(new_path)
                           updated_atoms.add(pkg_cat_name)
                           print(f"    ✅ Bumping to {new_ver}")
@@ -151,11 +152,12 @@ jobs:
                   new_commit = get_latest_commit(repo_url)
                   if new_commit:
                       new_content = content
+                      short_commit = new_commit[:12]
                       
                       if "EGIT_COMMIT=" in new_content:
-                          new_content = re.sub(r'(EGIT_COMMIT=["\']?)[a-fA-F0-9]{7,40}(["\']?)', r"\g<1>" + new_commit[:12] + r"\2", new_content)
+                          new_content = re.sub(r'(EGIT_COMMIT=["\']?)[a-fA-F0-9]{7,40}(["\']?)', r"\g<1>" + short_commit + r"\2", new_content)
                       else:
-                          new_content = re.sub(r"(^EAPI=.*)", r'\1\nEGIT_COMMIT="' + new_commit[:12] + '"', new_content, count=1, flags=re.MULTILINE)
+                          new_content = re.sub(r"(^EAPI=.*)", r'\1\nEGIT_COMMIT="' + short_commit + '"', new_content, count=1, flags=re.MULTILINE)
                       
                       if "_commit=" in new_content:
                           new_content = re.sub(r'(_commit=["\']?)[a-fA-F0-9]{7,40}(["\']?)', r"\g<1>" + new_commit + r"\2", new_content)
@@ -163,7 +165,7 @@ jobs:
                       if new_content != content:
                           ebuild_path.write_text(new_content, encoding="utf-8")
                           updated_atoms.add(pkg_cat_name)
-                          print(f"    ✅ Updated commit hash to {new_commit[:12]}")
+                          print(f"    ✅ Updated commit hash to {short_commit}")
                       else:
                           print("    ✅ Up to date.")
                   else:
@@ -177,7 +179,7 @@ jobs:
                   latest_ver = get_latest_github_release(repo)
                   if latest_ver:
                       print(f"    -> Current: {curr_ver} | Found Upstream: {latest_ver}")
-                      if pkg_dir.name == "mangowc" and latest_ver.startswith("12."): latest_ver = "0." + latest_ver
+                      if pkg_name == "mangowc" and latest_ver.startswith("12."): latest_ver = "0." + latest_ver
                       
                       try:
                           is_newer = parse_version(latest_ver) > parse_version(curr_ver)
@@ -185,7 +187,7 @@ jobs:
                           is_newer = (latest_ver != curr_ver)
                       
                       if is_newer:
-                          new_path = pkg_dir / f"{pkg_dir.name}-{latest_ver}.ebuild"
+                          new_path = pkg_dir / f"{pkg_name}-{latest_ver}.ebuild"
                           ebuild_path.rename(new_path)
                           updated_atoms.add(pkg_cat_name)
                           print(f"    ✅ Bumping to {latest_ver}")
