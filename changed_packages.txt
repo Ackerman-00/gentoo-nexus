@@ -1,4 +1,0 @@
-app-misc/rootapp-bin
-gui-wm/mangowc
-gui-wm/niri
-sys-apps/danksearch
