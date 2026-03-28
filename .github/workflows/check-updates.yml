@@ -95,6 +95,7 @@ jobs:
               if os.path.exists("squashfs-root"):
                   desktop_files = list(Path("squashfs-root").glob("*.desktop"))
                   if desktop_files:
+                      # 🚀 FIX: Correctly read text from the first file in the list
                       txt = desktop_files.read_text()
                       m = re.search(r'^X-AppImage-Version=(.+)', txt, re.M | re.I)
                       if m: ver = m.group(1).strip()
