@@ -206,6 +206,7 @@ jobs:
           #!/bin/bash
           set -euo pipefail
           
+          # 🚀 FIX: Tuple unpacking handles deployments without any array index corruption!
           python3 << 'PYEOF'
           import urllib.request
           import os
@@ -214,27 +215,28 @@ jobs:
           from functools import cmp_to_key
 
           def parse_blocks(text):
-              blocks = {}
-              current_block = []
+              blocks = dict()
+              current_block = list()
               current_cpv = None
               for line in text.splitlines(True):
                   if line.startswith('PACKAGES:') or line.startswith('PKGDIR:'): continue
                   if line.startswith('CPV:'): 
-                      current_cpv = line.replace('CPV:', '').strip()
+                      _, cpv_val = line.split(':', 1)
+                      current_cpv = cpv_val.strip()
                   current_block.append(line)
                   if line.strip() == '':
                       if current_cpv: blocks[current_cpv] = "".join(current_block).strip() + "\n\n"
-                      current_block = []
+                      current_block = list()
                       current_cpv = None
               if current_cpv: blocks[current_cpv] = "".join(current_block).strip() + "\n\n"
               return blocks
 
-          local_blocks = {}
+          local_blocks = dict()
           if os.path.exists('/overlay/job_out/Packages'):
-              with open('/overlay/job_out/Packages', 'r') as f:
+              with open('/overlay/job_out/Packages', 'r', encoding='utf-8') as f:
                   local_blocks = parse_blocks(f.read())
 
-          server_blocks = {}
+          server_blocks = dict()
           try:
               req = urllib.request.urlopen("https://gentoo-nexus.sourceforge.io/Packages", timeout=15)
               server_blocks = parse_blocks(req.read().decode('utf-8'))
@@ -244,7 +246,7 @@ jobs:
           all_blocks = {**server_blocks, **local_blocks}
 
           grouped = defaultdict(list)
-          for cpv in all_blocks.keys():
+          for cpv in list(all_blocks.keys()):
               parts = portage.versions.pkgsplit(cpv)
               if parts:
                   pkgname, pkgver, pkgrev = parts
@@ -255,14 +257,19 @@ jobs:
 
           def ver_cmp(a, b): return portage.versions.vercmp(a, b)
 
-          final_blocks = {}
+          def custom_sort(itemA, itemB):
+              verA, cpvA = itemA
+              verB, cpvB = itemB
+              return ver_cmp(verA, verB)
+
+          final_blocks = dict()
           for pkgname, items in grouped.items():
               if len(items) > 1:
-                  items.sort(key=cmp_to_key(lambda x, y: ver_cmp(x, y)))
-              best_cpv = items[-1][-1]
-              final_blocks[best_cpv] = all_blocks[best_cpv]
+                  items.sort(key=cmp_to_key(custom_sort))
+              best_ver, best_cpv = items.pop()
+              final_blocks[best_cpv] = all_blocks.get(best_cpv)
 
-          with open('/overlay/job_out/Packages', 'w') as f:
+          with open('/overlay/job_out/Packages', 'w', encoding='utf-8') as f:
               f.write("PKGDIR: .\nPACKAGES:\n\n")
               for cpv in sorted(final_blocks.keys()):
                   f.write(final_blocks[cpv])
@@ -273,7 +280,7 @@ jobs:
               html += f"{cpv}\n"
           html += "</pre></body></html>"
           
-          with open('/overlay/job_out/index.html', 'w') as f:
+          with open('/overlay/job_out/index.html', 'w', encoding='utf-8') as f:
               f.write(html)
           PYEOF
           EOF
