@@ -91,7 +91,7 @@ jobs:
               
               ver = None
               if os.path.exists("squashfs-root"):
-                  # 🚀 FIX: Using an iterator loop to completely avoid bracket indexing!
+                  # 🚀 UI FIX: Using a for-loop to completely avoid bracket indexing!
                   for d_file in Path("squashfs-root").glob("*.desktop"):
                       txt = d_file.read_text(encoding="utf-8")
                       m = re.search(r'^X-AppImage-Version=(.+)', txt, re.M | re.I)
