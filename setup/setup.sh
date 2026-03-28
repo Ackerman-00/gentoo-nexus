@@ -5,7 +5,7 @@ exec > >(tee -i /var/log/gentoo-nexus-install.log) 2>&1
 #==============================================================================
 # CONFIGURATION & CONSTANTS
 #==============================================================================
-readonly SCRIPT_VERSION="2026.5.1-MASTER"
+readonly SCRIPT_VERSION="2026.5.2-NEXUS-FIXED"
 readonly LOCKFILE="/var/lib/gentoo-nexus-installed"
 readonly LOGFILE="/var/log/gentoo-nexus-install.log"
 readonly NEXUS_REPO_URL="https://github.com/Ackerman-00/gentoo-nexus.git"
@@ -242,7 +242,8 @@ log_msg "${G}[✓] All repositories synchronized.${C}"
 # PORTAGE CONFIGURATION & MULTILIB
 #==============================================================================
 log_msg "\n${B}>>> [6/8] CONFIGURING PORTAGE & MULTILIB...${C}"
-mkdir -p /etc/portage/package.{use,mask,accept_keywords}
+# ARCHITECT FIX: Added package.unmask directory
+mkdir -p /etc/portage/package.{use,mask,accept_keywords,unmask}
 
 cat << EOF > /etc/portage/package.use/system
 sys-kernel/installkernel dracut grub
@@ -254,6 +255,12 @@ EOF
 cat << EOF > /etc/portage/package.accept_keywords/nexus
 gui-apps/matugen::gentoo-nexus **
 x11-base/xwayland-satellite::gentoo-nexus **
+EOF
+
+# ARCHITECT FIX: Forcefully unmask the live packages globally
+cat << EOF > /etc/portage/package.unmask/nexus
+=gui-wm/niri-9999::gentoo-nexus
+=gui-wm/mangowc-9999::gentoo-nexus
 EOF
 
 [[ "$hw_choice" == "2" ]] && echo "x11-drivers/nvidia-drivers kernel-open" > /etc/portage/package.use/nvidia
@@ -319,7 +326,7 @@ rc-update add seatd default
 rc-update add dbus default
 rc-update add NetworkManager default
 
-if [[ "$hw_choice" =~ ^[34]$ ]]; then
+if [[ "$hw_choice" =~ ^$ ]]; then
     log_msg "${B}>>> Configuring WiFi for laptop hardware...${C}"
     rc-update add iwd default
     mkdir -p /etc/NetworkManager/conf.d
@@ -365,7 +372,8 @@ esac
 [[ "${steam_choice,,}" == "y" ]] && INSTALL_LIST="$INSTALL_LIST games-util/steam-launcher"
 [[ "${rootapp_choice,,}" == "y" ]] && INSTALL_LIST="$INSTALL_LIST app-misc/rootapp-bin::gentoo-nexus"
 
-BIN_OPTS="--getbinpkg --usepkg --binpkg-respect-use=y --keep-going"
+# ARCHITECT FIX: The Ultimate "God Command" flags applied to the deployment
+BIN_OPTS="--getbinpkg --usepkg --binpkg-respect-use=n --usepkg-exclude-live=n --keep-going"
 
 log_msg "${B}Packages to install: ${INSTALL_LIST}${C}"
 log_msg "${Y}Binary-only mode: Enabled (FEATURES=getbinpkg, NO source compilation)${C}"
@@ -383,6 +391,10 @@ log_msg "${G}[✓] Autounmask configuration complete.${C}"
 
 etc-update --automode -5
 log_msg "${G}[✓] Configuration files updated.${C}"
+
+# ARCHITECT FIX: Force index repair before pulling to bypass cache corruption
+log_msg "${B}>>> Healing local binary index cache before final fetch...${C}"
+emaint binhost --fix > /dev/null 2>&1 || true
 
 emerge $BIN_OPTS --update --newuse $INSTALL_LIST
 log_msg "${G}[✓] All packages deployed from binary.${C}"
@@ -418,7 +430,7 @@ if [[ "$dm_choice" =~ ^[1-4]$ ]]; then
         log_msg "${R}[!] Display manager service may not be enabled${C}"
 fi
 
-if [[ "$hw_choice" =~ ^[34]$ ]]; then
+if [[ "$hw_choice" =~ ^$ ]]; then
     log_msg "${G}[✓] WiFi configured for laptop (NetworkManager + iwd)${C}"
 fi
 
