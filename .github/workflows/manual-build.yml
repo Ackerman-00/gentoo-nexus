@@ -270,9 +270,16 @@ jobs:
 
           final_blocks = dict()
           for pkgname, items in grouped.items():
-              if len(items) > 1:
-                  items.sort(key=cmp_to_key(custom_sort))
-              best_ver, best_cpv = items.pop()
+              local_items = [(v, cpv) for v, cpv in items if cpv in local_blocks]
+              server_items = [(v, cpv) for v, cpv in items if cpv not in local_blocks]
+              
+              if local_items:
+                  local_items.sort(key=cmp_to_key(custom_sort))
+                  best_ver, best_cpv = local_items.pop()
+              else:
+                  server_items.sort(key=cmp_to_key(custom_sort))
+                  best_ver, best_cpv = server_items.pop()
+              
               final_blocks.update({best_cpv: all_blocks.get(best_cpv)})
 
           with open('/overlay/job_out/Packages', 'w', encoding='utf-8') as f:
