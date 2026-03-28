@@ -76,19 +76,14 @@ jobs:
           #!/bin/bash
           set -euo pipefail
           
-          # 🚀 FIX: Prevent Portage missing dir warnings
           mkdir -p /var/db/repos/gentoo
           rm -rf /var/db/repos/gentoo/*
           emerge-webrsync -q
-          
-          # 🚀 FIX: Silence the Gentoo News warnings
           eselect news read all >/dev/null 2>&1 || true
           
           command -v getuto >/dev/null 2>&1 && getuto || true
-          
           eselect profile set default/linux/amd64/23.0/desktop
           
-          # 🚀 FIX: Uninstall gpm cleanly before masking it to prevent Portage warnings
           emerge --unmerge --quiet sys-libs/gpm 2>/dev/null || true
           
           mkdir -p /etc/portage/{repos.conf,binrepos.conf,package.{accept_keywords,license,use,mask}}
@@ -138,8 +133,6 @@ jobs:
           emerge --noreplace --quiet dev-lang/go dev-lang/rust-bin app-eselect/eselect-repository dev-vcs/git
           eselect repository enable guru 2>/dev/null || true
           emaint sync -r guru 2>/dev/null || true
-          
-          # 🚀 FIX: Silence Guru News
           eselect news read all >/dev/null 2>&1 || true
 
           cat > /etc/portage/repos.conf/gentoo-nexus.conf << 'REPOCONF'
@@ -178,18 +171,8 @@ jobs:
             fi
           done
 
-          echo ">>> Bootstrapping Base Libraries..."
-          mkdir -p /etc/portage/package.use
-          echo "dev-libs/glib -introspection" > /etc/portage/package.use/glib_bootstrap
-          
-          emerge --oneshot --quiet --nodeps dev-libs/glib dev-libs/gobject-introspection-common dev-util/gdbus-codegen 2>&1 || true
-          emerge --oneshot --quiet --nodeps dev-libs/gobject-introspection 2>&1 || true
-          
-          rm -f /etc/portage/package.use/glib_bootstrap
-          emerge --oneshot --quiet dev-libs/glib 2>&1 || true
-
-          USE="-cairo -glib -introspection -doc -gtk-doc" emerge --oneshot --quiet --nodeps media-libs/harfbuzz 2>&1 || true
-          emerge --oneshot --quiet --nodeps sys-libs/ncurses 2>&1 || true
+          # 🚀 TOXIC BOOTSTRAP BLOCK DELETED FROM HERE. 
+          # The stage3 image already has perfectly working glib and harfbuzz!
 
           EXCLUDES="--usepkg-exclude sys-auth/polkit --usepkg-exclude dev-libs/libei --usepkg-exclude media-video/wireplumber --usepkg-exclude media-libs/libpulse --usepkg-exclude sys-apps/accountsservice --usepkg-exclude sys-auth/elogind"
 
@@ -224,7 +207,6 @@ jobs:
           #!/bin/bash
           set -euo pipefail
           
-          # 🚀 THE MAGIC: Restored Python array indices for correct parsing!
           python3 << 'PYEOF'
           import urllib.request
           import os
@@ -259,7 +241,6 @@ jobs:
           except Exception as e:
               print("Notice: Server index missing or unreachable. Starting fresh.")
 
-          # Combine old packages with the new package
           all_blocks = {**server_blocks, **local_blocks}
 
           grouped = defaultdict(list)
@@ -280,13 +261,11 @@ jobs:
               best_cpv = items[-1]
               final_blocks[best_cpv] = all_blocks[best_cpv]
 
-          # Write out the combined, intelligently merged index
           with open('/overlay/job_out/Packages', 'w') as f:
               f.write("PKGDIR: .\nPACKAGES:\n\n")
               for cpv in sorted(final_blocks.keys()):
                   f.write(final_blocks[cpv])
 
-          # Generate a nice HTML page dynamically
           html = "<!DOCTYPE html><html><head><title>Gentoo Nexus Binhost</title><style>body { font-family: monospace; background: #1a1a1a; color: #e0e0e0; padding: 2em; } a { color: #66d9ef; }</style></head><body><h1>Gentoo Nexus Binhost</h1>"
           html += "<p>Last Updated: " + os.popen("date -u '+%Y-%m-%d %H:%M:%S UTC'").read().strip() + "</p><pre>\n"
           for cpv in sorted(final_blocks.keys()):
