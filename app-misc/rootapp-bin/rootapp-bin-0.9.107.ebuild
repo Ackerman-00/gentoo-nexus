@@ -22,16 +22,13 @@ RDEPEND="
     x11-libs/gtk+:3
 "
 
-BDEPEND="sys-fs/squashfs-tools"
-
 S="${WORKDIR}/squashfs-root"
 
 src_unpack() {
-    local offset=$(grep -abo "hsqs" "${DISTDIR}/${A}" | cut -d: -f1 | head -n 1)
-    
-    [[ -n ${offset} ]] || die "Could not find SquashFS offset in AppImage"
-    
-    unsquashfs -q -o "${offset}" -d "${S}" "${DISTDIR}/${A}" || die "Failed to unpack AppImage"
+    cp "${DISTDIR}/${A}" "${WORKDIR}/${P}.AppImage" || die
+    cd "${WORKDIR}" || die
+    chmod +x "${P}.AppImage" || die
+    ./"${P}.AppImage" --appimage-extract || die "Failed to extract AppImage"
 }
 
 src_install() {
@@ -41,7 +38,6 @@ src_install() {
     
     dosym ../../opt/rootapp/AppRun /usr/bin/rootapp
     
-    # Install the icon
     if [[ -f "${S}/Root.png" ]]; then
         doicon "${S}/Root.png"
     elif [[ -f "${S}/.DirIcon" ]]; then
