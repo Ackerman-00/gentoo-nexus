@@ -5,7 +5,7 @@ exec > >(tee -i /var/log/gentoo-nexus-install.log) 2>&1
 #==============================================================================
 # CONFIGURATION & CONSTANTS
 #==============================================================================
-readonly SCRIPT_VERSION="2026.10.3-NEXUS-ULTIMATE-FIXED"
+readonly SCRIPT_VERSION="2026.10.4-NEXUS-ULTIMATE-FIXED"
 readonly LOCKFILE="/var/lib/gentoo-nexus-installed"
 readonly LOGFILE="/var/log/gentoo-nexus-install.log"
 readonly NEXUS_REPO_URL="https://github.com/Ackerman-00/gentoo-nexus.git"
@@ -104,7 +104,7 @@ repo_enable_safe() {
 #==============================================================================
 clear 2>/dev/null || printf "\033c"
 echo -e "${B}================================================================${C}"
-echo -e "${G}    GENTOO NEXUS ARCHITECT: MASTER DEPLOYMENT (2026.10.3)       ${C}"
+echo -e "${G}    GENTOO NEXUS ARCHITECT: MASTER DEPLOYMENT (2026.10.4)       ${C}"
 echo -e "${B}================================================================${C}"
 echo -e "Version: ${SCRIPT_VERSION}"
 echo -e "Binhost: ${NEXUS_BINHOST}"
@@ -173,6 +173,7 @@ fi
 
 mkdir -p /etc/portage/binrepos.conf
 
+# ARCHITECT FIX: Priority 100 for Nexus ensures your UI packages are checked FIRST.
 cat > /etc/portage/binrepos.conf/nexus.conf << EOF
 [gentoo-nexus-sf]
 priority = 100
@@ -180,6 +181,7 @@ sync-uri = ${NEXUS_BINHOST}
 verify-signature = false
 EOF
 
+# Fallback to Gentoo mirror
 cat > /etc/portage/binrepos.conf/gentoo.conf << EOF
 [gentoo]
 priority = 1
@@ -207,6 +209,7 @@ CXXFLAGS="\${COMMON_FLAGS}"
 RUSTFLAGS="-C opt-level=2"
 MAKEOPTS="-j$(nproc) -l$(nproc)"
 USE="wayland X vulkan pipewire dbus elogind udev opengl dri gbm vaapi vdpau ffmpeg bluetooth screencast gstreamer minizip${STEAM_USE} -daemon -systemd -aqua -cups"
+# Broad Video Card support ensures Mesa Binary matches Gentoo Mirrors 1:1
 VIDEO_CARDS="amdgpu radeonsi intel iris nvidia"
 LINUX_FIRMWARE="${LINUX_FW}"
 FEATURES="getbinpkg -userfetch -userpriv -usersandbox"
