@@ -5,7 +5,7 @@ exec > >(tee -i /var/log/gentoo-nexus-install.log) 2>&1
 #==============================================================================
 # CONFIGURATION & CONSTANTS
 #==============================================================================
-readonly SCRIPT_VERSION="2026.5.4-NEXUS-ULTIMATE"
+readonly SCRIPT_VERSION="2026.5.5-NEXUS-ULTIMATE"
 readonly LOCKFILE="/var/lib/gentoo-nexus-installed"
 readonly LOGFILE="/var/log/gentoo-nexus-install.log"
 readonly NEXUS_REPO_URL="https://github.com/Ackerman-00/gentoo-nexus.git"
@@ -82,7 +82,6 @@ get_choice() {
     done
 }
 
-# QWEN FIX: Bulletproof Repo Addition avoiding eselect exit 250 crashes
 repo_add_safe() {
     local name="$1" type="$2" url="$3"
     if [[ -d "/var/db/repos/${name}" ]] || eselect repository list 2>/dev/null | grep -q "\b${name}\b"; then
@@ -166,7 +165,6 @@ log_msg "${G}[✓] Network connectivity verified.${C}"
 eselect profile set default/linux/amd64/23.0/desktop
 eselect news read all >/dev/null 2>&1 || true
 
-# QWEN FIX: Multilib Profile Check for Steam
 if [[ "${steam_choice,,}" == "y" ]]; then
     if eselect profile show 2>/dev/null | grep -q "no-multilib"; then
         log_msg "${R}[!] FATAL: Steam requires a multilib profile, but no-multilib is currently selected.${C}"
@@ -227,6 +225,12 @@ sys-apps/systemd
 sys-apps/gentoo-systemd-integration
 MASK
 
+# ARCHITECT FIX: Resolve ffmpeg dependency constraints for Pipewire
+cat > /etc/portage/package.use/audio << 'USE'
+media-video/pipewire extra sound-server
+media-video/wireplumber extra
+USE
+
 cat > /etc/portage/package.accept_keywords/nexus << 'EOF'
 */*::gentoo-nexus **
 x11-base/xwayland-satellite::gentoo-nexus **
@@ -236,7 +240,6 @@ gui-wm/dank-material-shell::gentoo-nexus **
 x11-misc/matugen::gentoo-nexus **
 EOF
 
-# QWEN FIX: Safe GRUB appending (no silent sed destruction)
 if [ -n "$G_CMD" ]; then
     mkdir -p /etc/default
     touch /etc/default/grub
@@ -353,13 +356,11 @@ INSTALL_LIST+=(
 
 BIN_OPTS="--getbinpkg --usepkg --binpkg-respect-use=n --keep-going --autounmask=y --autounmask-write"
 
-# QWEN FIX: Correct autounmask error trap logic
 set +e
 emerge ${BIN_OPTS} "${INSTALL_LIST[@]}"
 AUTOUNMASK_EXIT=$?
 set -e
 
-# Exit code 1 means changes were successfully written to config files
 if [[ $AUTOUNMASK_EXIT -ne 0 ]] && [[ $AUTOUNMASK_EXIT -ne 1 ]]; then
     log_msg "${R}[!] ERROR: emerge --autounmask-write failed (Exit Code: ${AUTOUNMASK_EXIT})${C}"
     exit 1
@@ -408,7 +409,6 @@ case $dm_choice in
         ;;
 esac
 
-# QWEN FIX: Reliable Bootloader EFI Detection
 log_msg "\n${B}>>> BOOTLOADER DEPLOYMENT...${C}"
 if mountpoint -q /boot/efi 2>/dev/null; then
     if grep -q '/boot/efi.*vfat' /proc/mounts; then
