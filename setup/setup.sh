@@ -339,7 +339,7 @@ esac
 
 [[ "${matugen_choice,,}" == "y" ]]  && INSTALL_LIST+=( "x11-misc/matugen::gentoo-nexus" )
 [[ "${steam_choice,,}" == "y" ]]    && INSTALL_LIST+=( "games-util/steam-launcher" )
-[[ "${games_choice,,}" == "y" ]]    && INSTALL_LIST+=( "games-util/protonplus-bin::gentoo-nexus" "games-util/heroic-games-launcher-bin" )
+[[ "${games_choice,,}" == "y" ]]    && INSTALL_LIST+=( "games-util/protonplus-bin::gentoo-nexus" "games-util/heroic-bin" )
 [[ "${vesktop_choice,,}" == "y" ]]  && INSTALL_LIST+=( "net-im/vesktop-bin" )
 [[ "${rootapp_choice,,}" == "y" ]]  && INSTALL_LIST+=( "app-misc/rootapp-bin::gentoo-nexus" )
 [[ "${NEED_WIFI}" == "yes" ]]       && INSTALL_LIST+=( "net-wireless/iwd" "net-wireless/wpa_supplicant" )
