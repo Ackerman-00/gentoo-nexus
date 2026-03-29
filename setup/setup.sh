@@ -219,23 +219,24 @@ mkdir -p /etc/portage/profile
 mkdir -p /etc/portage/package.{use,mask,accept_keywords,unmask,license}
 mkdir -p /etc/portage/repos.conf
 
-# ARCHITECT FIX: Only mask the systemd init daemon. DO NOT mask systemd-utils.
+# ARCHITECT FIX: Systemd Mask
 cat > /etc/portage/package.mask/systemd << 'MASK'
 sys-apps/systemd
 sys-apps/gentoo-systemd-integration
 MASK
 
+# ARCHITECT FIX: FFMPEG Version Ceiling (Forces qtmultimedia binhost compatibility)
 cat > /etc/portage/package.mask/ffmpeg << 'MASK'
 >=media-video/ffmpeg-8.0
 MASK
 
-# ARCHITECT FIX: Removed systemd-utils from provided so the compiler can find libudev.so
 cat > /etc/portage/profile/package.provided << 'PROV'
 sys-apps/systemd-299.0
 sys-apps/gentoo-systemd-integration-99.0
 sys-apps/systemd-initctl-99.0
 PROV
 
+# ARCHITECT FIX: Deep Profile Unmasks
 cat > /etc/portage/package.unmask/overrides << 'UNMASK'
 media-libs/dav1d
 media-libs/libdvdnav
@@ -255,7 +256,6 @@ media-libs/libpulse -systemd
 sys-fs/eudev -systemd
 virtual/udev -systemd
 virtual/libudev -systemd
-sys-apps/systemd-utils -systemd
 sys-libs/ncurses -gpm
 sys-kernel/installkernel dracut
 media-libs/libsdl2 -pipewire
@@ -265,6 +265,7 @@ cat > /etc/portage/package.use/video_overrides << 'USE'
 x11-libs/libdrm video_cards_nouveau video_cards_radeon
 USE
 
+# ARCHITECT FIX: Explicit Keyword Overrides for Testing Binaries
 cat > /etc/portage/package.accept_keywords/nexus << 'EOF'
 */*::gentoo-nexus **
 x11-base/xwayland-satellite::gentoo-nexus **
@@ -401,8 +402,8 @@ INSTALL_LIST+=(
 
 BIN_OPTS="--getbinpkg --usepkg --binpkg-respect-use=n --keep-going --autounmask=y --autounmask-write --autounmask-keep-masks=n"
 
-# ARCHITECT FIX: Sequence udev perfectly so compilers can find the library
-emerge --oneshot --quiet sys-apps/systemd-utils virtual/libudev || true
+# ARCHITECT FIX: Added ${BIN_OPTS} to explicitly fetch binary systemd-utils and libudev!
+emerge ${BIN_OPTS} --oneshot --quiet sys-apps/systemd-utils virtual/libudev || true
 
 set +e
 emerge ${BIN_OPTS} "${INSTALL_LIST[@]}"
