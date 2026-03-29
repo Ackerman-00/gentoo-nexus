@@ -390,7 +390,7 @@ INSTALL_LIST+=(
     "sys-apps/ripgrep"
 )
 
-BIN_OPTS="--getbinpkg --usepkg --binpkg-respect-use=n --keep-going --autounmask=y --autounmask-write --autounmask-keep-masks=n"
+BIN_OPTS="--getbinpkg --usepkgonly --binpkg-respect-use=n --keep-going --autounmask=y --autounmask-write --autounmask-keep-masks=n"
 
 emerge --oneshot --quiet sys-fs/eudev virtual/udev || true
 
