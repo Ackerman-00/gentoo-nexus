@@ -5,7 +5,7 @@ exec > >(tee -i /var/log/gentoo-nexus-install.log) 2>&1
 #==============================================================================
 # CONFIGURATION & CONSTANTS
 #==============================================================================
-readonly SCRIPT_VERSION="2026.6.3-NEXUS-ULTIMATE"
+readonly SCRIPT_VERSION="2026.7.2-NEXUS-ULTIMATE"
 readonly LOCKFILE="/var/lib/gentoo-nexus-installed"
 readonly LOGFILE="/var/log/gentoo-nexus-install.log"
 readonly NEXUS_REPO_URL="https://github.com/Ackerman-00/gentoo-nexus.git"
@@ -234,14 +234,13 @@ sys-apps/gentoo-systemd-integration-9-r2
 sys-apps/systemd-initctl-4
 PROV
 
-# ARCHITECT FIX: Unmask dav1d explicitly
 cat > /etc/portage/package.unmask/overrides << 'UNMASK'
 media-libs/dav1d
 UNMASK
 
-# ARCHITECT FIX: Installkernel dracut, libsdl2 circle breaker, and GPM block. Removed gtk4-layer-shell since swaync is gone.
+# ARCHITECT FIX: Installkernel dracut, libsdl2/pipewire circle breaker, and GPM block.
 cat > /etc/portage/package.use/global_overrides << 'USE'
-media-video/pipewire extra sound-server
+media-video/pipewire extra sound-server -ffmpeg
 media-video/wireplumber extra
 sys-apps/dbus -systemd
 sys-auth/polkit -systemd
@@ -359,7 +358,6 @@ esac
     "x11-misc/matugen::gentoo-nexus"
     "app-misc/dgop::gentoo-nexus"
     "sys-apps/danksearch::gentoo-nexus"
-    "gui-apps/foot"
 )
 
 case $dm_choice in
@@ -376,18 +374,19 @@ esac
 [[ "${rootapp_choice,,}" == "y" ]]  && INSTALL_LIST+=( "app-misc/rootapp-bin::gentoo-nexus" )
 [[ "${NEED_WIFI}" == "yes" ]]       && INSTALL_LIST+=( "net-wireless/iwd" "net-wireless/wpa_supplicant" )
 
-# ARCHITECT FIX: swaync is completely removed from the install list.
+# ARCHITECT FIX: Terminals updated, swaync removed.
 INSTALL_LIST+=(
     "gui-apps/wl-clipboard"
     "app-misc/cliphist"
     "media-sound/cava"
-    "gui-apps/foot"
+    "x11-terms/alacritty"
+    "x11-terms/kitty"
     "app-editors/nano"
     "sys-apps/ripgrep"
 )
 
-# ARCHITECT FIX: STRICT BINARY MODE (--usepkgonly) 
-BIN_OPTS="--getbinpkg --usepkgonly --binpkg-respect-use=n --keep-going --autounmask=y --autounmask-write --autounmask-keep-masks=n"
+# ARCHITECT FIX: Restored --usepkg to allow fallback compilation if exact binary USE flags are missing
+BIN_OPTS="--getbinpkg --usepkg --binpkg-respect-use=n --keep-going --autounmask=y --autounmask-write --autounmask-keep-masks=n"
 
 emerge --oneshot --quiet sys-fs/eudev virtual/udev || true
 
