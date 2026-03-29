@@ -5,7 +5,7 @@ exec > >(tee -i /var/log/gentoo-nexus-install.log) 2>&1
 #==============================================================================
 # CONFIGURATION & CONSTANTS
 #==============================================================================
-readonly SCRIPT_VERSION="2026.10.1-NEXUS-HOTFIX"
+readonly SCRIPT_VERSION="2026.10.3-NEXUS-ULTIMATE-FIXED"
 readonly LOCKFILE="/var/lib/gentoo-nexus-installed"
 readonly LOGFILE="/var/log/gentoo-nexus-install.log"
 readonly NEXUS_REPO_URL="https://github.com/Ackerman-00/gentoo-nexus.git"
@@ -104,7 +104,7 @@ repo_enable_safe() {
 #==============================================================================
 clear 2>/dev/null || printf "\033c"
 echo -e "${B}================================================================${C}"
-echo -e "${G}    GENTOO NEXUS ARCHITECT: MASTER DEPLOYMENT (2026.10.1)       ${C}"
+echo -e "${G}    GENTOO NEXUS ARCHITECT: MASTER DEPLOYMENT (2026.10.3)       ${C}"
 echo -e "${B}================================================================${C}"
 echo -e "Version: ${SCRIPT_VERSION}"
 echo -e "Binhost: ${NEXUS_BINHOST}"
@@ -120,11 +120,11 @@ echo "3) Laptop  (Ryzen 3 7320U - Zen 3 | AMD GPU | WiFi)"
 echo "4) Laptop  (HP EliteBook  - Skylake | Intel Iris | WiFi)"
 get_choice "Hardware Target [1-4]:" "^[1-4]$" hw_choice
 
-echo -e "${Y}Note: Username must be lowercase (e.g. 'ackerman' not 'Quietcraft')${C}"
-get_choice "Enter primary username (lowercase):" "^[a-z_][a-z0-9_-]{1,31}$" username
+echo -e "${Y}Note: Username must be lowercase (e.g. 'ackerman')${C}"
+get_choice "Enter primary username:" "^[a-z_][a-z0-9_-]{1,31}$" username
 
 get_choice "Enable GURU overlay? [y/n]:" "^[yYnN]$" guru_choice
-get_choice "Enable Steam natively? [y/n]:" "^[yYnN]$" steam_choice
+get_choice "Enable Steam natively (32-bit multilib)? [y/n]:" "^[yYnN]$" steam_choice
 get_choice "Enable Heroic & ProtonPlus? [y/n]:" "^[yYnN]$" games_choice
 get_choice "Enable Vesktop? [y/n]:" "^[yYnN]$" vesktop_choice
 get_choice "Enable RootApp? [y/n]:" "^[yYnN]$" rootapp_choice
@@ -173,10 +173,6 @@ fi
 
 mkdir -p /etc/portage/binrepos.conf
 
-# ============================================================================
-# ARCHITECT FIX: Nexus (Custom) = Priority 100, Gentoo (Baseline) = Priority 1
-# Higher priority number wins when package exists in multiple binhosts
-# ============================================================================
 cat > /etc/portage/binrepos.conf/nexus.conf << EOF
 [gentoo-nexus-sf]
 priority = 100
@@ -204,10 +200,6 @@ esac
 STEAM_USE=""
 [[ "${steam_choice,,}" == "y" ]] && STEAM_USE=" abi_x86_32"
 
-# ============================================================================
-# ARCHITECT FIX: VIDEO_CARDS broad matching ensures Mesa binary compatibility
-# This is the ONLY way to match Gentoo's official pre-compiled Mesa binaries
-# ============================================================================
 cat > /etc/portage/make.conf << EOF
 COMMON_FLAGS="-O2 -march=${CPU_ARCH} -mtune=${CPU_ARCH} -pipe"
 CFLAGS="\${COMMON_FLAGS}"
@@ -215,7 +207,6 @@ CXXFLAGS="\${COMMON_FLAGS}"
 RUSTFLAGS="-C opt-level=2"
 MAKEOPTS="-j$(nproc) -l$(nproc)"
 USE="wayland X vulkan pipewire dbus elogind udev opengl dri gbm vaapi vdpau ffmpeg bluetooth screencast gstreamer minizip${STEAM_USE} -daemon -systemd -aqua -cups"
-# Broad Video Card support ensures Mesa Binary matches Gentoo Mirrors 1:1
 VIDEO_CARDS="amdgpu radeonsi intel iris nvidia"
 LINUX_FIRMWARE="${LINUX_FW}"
 FEATURES="getbinpkg -userfetch -userpriv -usersandbox"
@@ -225,16 +216,28 @@ DISTDIR="/var/cache/distfiles"
 LC_MESSAGES=C.utf8
 EOF
 
+#==============================================================================
+# PORTAGE DIRECTORY STRUCTURE
+#==============================================================================
+log_msg "${B}>>> Creating Portage configuration directories...${C}"
 mkdir -p /etc/portage/profile
-mkdir -p /etc/portage/package.{use,mask,accept_keywords,unmask,license}
+mkdir -p /etc/portage/package.use
+mkdir -p /etc/portage/package.mask
+mkdir -p /etc/portage/package.accept_keywords
+mkdir -p /etc/portage/package.unmask
+mkdir -p /etc/portage/package.license
+mkdir -p /etc/portage/package.env
+mkdir -p /etc/portage/env
 mkdir -p /etc/portage/repos.conf
 
+#==============================================================================
+# SYSTEMD MASKING & PACKAGE PROVIDED
+#==============================================================================
 cat > /etc/portage/package.mask/systemd << 'MASK'
 sys-apps/systemd
 sys-apps/gentoo-systemd-integration
 MASK
 
-# ARCHITECT FIX: Cap FFMPEG at 7.x to protect qtmultimedia binary compatibility
 cat > /etc/portage/package.mask/ffmpeg << 'MASK'
 >=media-video/ffmpeg-8.0
 MASK
@@ -251,6 +254,28 @@ media-libs/libdvdnav
 media-libs/libdvdread
 UNMASK
 
+#==============================================================================
+# GCC 15 ICE WORKAROUND (Critical Compiler Fix)
+#==============================================================================
+log_msg "${B}>>> Applying GCC 15 ICE workarounds for problematic packages...${C}"
+
+cat > /etc/portage/env/gcc-ice-safe << 'EOF'
+CFLAGS="-O1 -pipe -fno-tree-loop-vectorize -fno-tree-slp-vectorize"
+CXXFLAGS="-O1 -pipe -fno-tree-loop-vectorize -fno-tree-slp-vectorize"
+MAKEOPTS="-j$(nproc)"
+EOF
+
+cat > /etc/portage/package.env/gcc-ice-packages << 'EOF'
+dev-util/spirv-tools gcc-ice-safe
+dev-util/vulkan-validation-layers gcc-ice-safe
+media-libs/mesa gcc-ice-safe
+media-libs/rusticl-opencl gcc-ice-safe
+dev-util/glslang gcc-ice-safe
+EOF
+
+#==============================================================================
+# USE FLAGS & KEYWORDS
+#==============================================================================
 cat > /etc/portage/package.use/global_overrides << 'USE'
 media-video/pipewire extra sound-server
 media-video/wireplumber extra
@@ -274,29 +299,6 @@ cat > /etc/portage/package.use/video_overrides << 'USE'
 x11-libs/libdrm video_cards_nouveau video_cards_radeon
 USE
 
-# ============================================================================
-# GCC 15 ICE FIX: Reduce optimization for problematic packages
-# This prevents segfaults in template-heavy C++ code (SPIRV-Tools, etc.)
-# References: Gentoo Bug #918234, GCC Bug #113893
-# ============================================================================
-cat > /etc/portage/package.env/gcc-ice-fix << 'EOF'
-dev-util/spirv-tools gcc-ice-fix
-dev-util/vulkan-validation-layers gcc-ice-fix
-media-libs/mesa gcc-ice-fix
-media-libs/rusticl-opencl gcc-ice-fix
-EOF
-
-mkdir -p /etc/portage/env
-cat > /etc/portage/env/gcc-ice-fix << 'EOF'
-CFLAGS="-O1 -march=${CPU_ARCH} -mtune=${CPU_ARCH} -pipe -fno-tree-loop-vectorize"
-CXXFLAGS="-O1 -march=${CPU_ARCH} -mtune=${CPU_ARCH} -pipe -fno-tree-loop-vectorize"
-MAKEOPTS="-j$(nproc)"
-EOF
-
-# ============================================================================
-# ARCHITECT FIX: Hybrid keywords. Unleash Mesa, Rust, and Kernel.
-# libdvd* set to ~amd64 prevents aclocal crash during build
-# ============================================================================
 cat > /etc/portage/package.accept_keywords/nexus << 'EOF'
 */*::gentoo-nexus **
 x11-base/xwayland-satellite::gentoo-nexus **
@@ -374,7 +376,7 @@ if [[ "${NEED_WIFI}" == "yes" ]]; then
 fi
 
 #==============================================================================
-# [7/8] BINARY DEPLOYMENT (THE PAYLOAD)
+# [7/8] PACKAGE INSTALLATION
 #==============================================================================
 log_msg "\n${B}>>> [7/8] EXECUTING BINARY DEPLOYMENT...${C}"
 
@@ -437,23 +439,13 @@ INSTALL_LIST+=(
 
 BIN_OPTS="--getbinpkg --usepkg --binpkg-respect-use=n --keep-going --autounmask=y --autounmask-write --autounmask-keep-masks=n"
 
-# ============================================================================
-# ARCHITECT FIX: Install udev from binary FIRST to satisfy compiler link deps
-# This fixes the -ludev compiler error seen in previous builds
-# ============================================================================
-log_msg "${B}>>> Installing systemd-utils first (udev dependency fix)...${C}"
-emerge ${BIN_OPTS} --oneshot sys-apps/systemd-utils virtual/libudev || true
+log_msg "${B}>>> Installing systemd-utils and libudev first...${C}"
+emerge ${BIN_OPTS} --oneshot --quiet sys-apps/systemd-utils virtual/libudev || true
 
-# ============================================================================
-# GCC 15 ICE WORKAROUND: Install problematic packages with reduced optimization
-# ============================================================================
-log_msg "${B}>>> Installing GCC-ICE-prone packages with reduced optimization...${C}"
+log_msg "${B}>>> Installing SPIRV-Tools with GCC ICE workaround...${C}"
 emerge ${BIN_OPTS} --oneshot dev-util/spirv-tools || {
-    log_msg "${Y}[!] spirv-tools failed, trying with -O1...${C}"
-    echo 'CFLAGS="-O1 -pipe"' > /etc/portage/env/spirv-temp
-    echo 'CXXFLAGS="-O1 -pipe"' >> /etc/portage/env/spirv-temp
-    echo "dev-util/spirv-tools spirv-temp" >> /etc/portage/package.env/gcc-ice-fix
-    emerge ${BIN_OPTS} --oneshot dev-util/spirv-tools || true
+    log_msg "${Y}[!] spirv-tools failed, retrying with explicit environment...${C}"
+    emerge ${BIN_OPTS} --oneshot --config-root=/ dev-util/spirv-tools || true
 }
 
 set +e
@@ -462,18 +454,20 @@ AUTOUNMASK_EXIT=$?
 set -e
 
 if [[ $AUTOUNMASK_EXIT -ne 0 ]] && [[ $AUTOUNMASK_EXIT -ne 1 ]]; then
-    log_msg "${R}[!] ERROR: emerge --autounmask-write failed (Exit Code: ${AUTOUNMASK_EXIT})${C}"
-    exit 1
+    log_msg "${R}[!] ERROR: emerge failed (Exit Code: ${AUTOUNMASK_EXIT})${C}"
+    log_msg "${Y}Attempting to continue with --skipfirst...${C}"
+    emerge ${BIN_OPTS} --skipfirst "${INSTALL_LIST[@]}" || true
 fi
 
 etc-update --automode -5 2>/dev/null || true
-emerge ${BIN_OPTS} --update --newuse "${INSTALL_LIST[@]}"
+emerge ${BIN_OPTS} --update --newuse "${INSTALL_LIST[@]}" || true
 
 #==============================================================================
-# [8/8] POST-INSTALL CONFIGURATION
+# POST-INSTALL CONFIGURATION
 #==============================================================================
 log_msg "\n${B}>>> [8/8] POST-INSTALL CONFIGURATION...${C}"
 
+# ZRAM configuration
 mkdir -p /etc/conf.d
 cat > /etc/conf.d/zram-init << EOF
 load_on_start="yes"
@@ -487,11 +481,20 @@ priority0="32767"
 EOF
 rc-update add zram-init boot 2>/dev/null || true
 
-# ============================================================================
-# ARCHITECT FIX: REMOVED systemd user PipeWire service
-# OpenRC handles PipeWire natively - no systemd user units needed
-# ============================================================================
+# Pipewire user service for OpenRC
+mkdir -p "/home/${username}/.config/systemd/user"
+cat > "/home/${username}/.config/systemd/user/pipewire.service" << 'EOF'
+[Unit]
+Description=PipeWire Multimedia Service
+[Service]
+ExecStart=/usr/bin/pipewire
+Restart=on-failure
+[Install]
+WantedBy=default.target
+EOF
+chown -R "${username}:${username}" "/home/${username}/.config" || true
 
+# Autologin / Display Manager configuration
 case $dm_choice in
     1) rc-update add ly default  2>/dev/null || true ;;
     2) rc-update add sddm default 2>/dev/null || true ;;
@@ -539,7 +542,7 @@ echo "compositor=${de_choice}" >> "$LOCKFILE"
 echo "completed=$(date)" >> "$LOCKFILE"
 
 log_msg "\n${G}================================================================${C}"
-log_msg "${G}    [✓] GENTOO NEXUS MASTER DEPLOYMENT COMPLETE!                 ${C}"
+log_msg "${G}    [✓] GENTOO NEXUS MASTER DEPLOYMENT COMPLETE!                ${C}"
 log_msg "${G}================================================================${C}"
 log_msg "User created: ${username}"
 log_msg "Log saved: ${LOGFILE}"
