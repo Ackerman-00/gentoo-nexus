@@ -176,7 +176,6 @@ jobs:
 
           EXCLUDES="--usepkg-exclude sys-auth/polkit --usepkg-exclude dev-libs/libei --usepkg-exclude media-video/wireplumber --usepkg-exclude media-libs/libpulse --usepkg-exclude sys-apps/accountsservice --usepkg-exclude sys-auth/elogind"
 
-          # 🚀 FIX: Force Portage to download the tarball and generate a secure Manifest
           echo ">>> Generating fresh Manifest for $TARGET_PKG..."
           for ebuild_file in /overlay/$TARGET_PKG/*.ebuild; do
               [ -e "$ebuild_file" ] && ebuild "$ebuild_file" manifest || true
@@ -216,9 +215,6 @@ jobs:
           python3 << 'PYEOF'
           import urllib.request
           import os
-          import portage.versions
-          from collections import defaultdict
-          from functools import cmp_to_key
 
           def parse_blocks(text):
               blocks = dict()
@@ -237,11 +233,13 @@ jobs:
               if current_cpv: blocks[current_cpv] = "".join(current_block).strip() + "\n\n"
               return blocks
 
+          # Load local block
           local_blocks = dict()
           if os.path.exists('/overlay/job_out/Packages'):
               with open('/overlay/job_out/Packages', 'r', encoding='utf-8') as f:
                   local_blocks = parse_blocks(f.read())
 
+          # Load server block
           server_blocks = dict()
           try:
               req = urllib.request.urlopen("https://gentoo-nexus.sourceforge.io/Packages", timeout=15)
@@ -249,44 +247,29 @@ jobs:
           except Exception as e:
               print("Notice: Server index missing or unreachable. Starting fresh.")
 
-          all_blocks = {**server_blocks, **local_blocks}
-
-          grouped = defaultdict(list)
-          for cpv in list(all_blocks.keys()):
-              parts = portage.versions.pkgsplit(cpv)
-              if parts:
-                  pkgname, pkgver, pkgrev = parts
-                  ver_str = pkgver + ('-' + pkgrev if pkgrev != 'r0' else '')
-                  grouped.get(pkgname, list()).append((ver_str, cpv))
-              else:
-                  grouped.get(cpv, list()).append(('0', cpv))
-
-          def ver_cmp(a, b): return portage.versions.vercmp(a, b)
-
-          def custom_sort(itemA, itemB):
-              verA, cpvA = itemA
-              verB, cpvB = itemB
-              return ver_cmp(verA, verB)
-
-          final_blocks = dict()
-          for pkgname, items in grouped.items():
-              local_items = [(v, cpv) for v, cpv in items if cpv in local_blocks]
-              server_items = [(v, cpv) for v, cpv in items if cpv not in local_blocks]
+          # Architect Fix: Bulletproof text-merge based on CPV matching
+          final_blocks = server_blocks.copy()
+          
+          # Iterate over local packages. If they are new or updated, they overwrite the old server entry.
+          for cpv, block_text in local_blocks.items():
+              # Extract the base package name (e.g. "gui-wm/niri" from "gui-wm/niri-9999-1")
+              pkg_name = "/".join(cpv.split("-")[:-1]) if "-" in cpv else cpv 
               
-              if local_items:
-                  local_items.sort(key=cmp_to_key(custom_sort))
-                  best_ver, best_cpv = local_items.pop()
-              else:
-                  server_items.sort(key=cmp_to_key(custom_sort))
-                  best_ver, best_cpv = server_items.pop()
+              # Find and remove old versions of this package from the final list to prevent duplicates
+              keys_to_remove = [k for k in final_blocks.keys() if k.startswith(pkg_name + "-")]
+              for k in keys_to_remove:
+                  del final_blocks[k]
               
-              final_blocks.update({best_cpv: all_blocks.get(best_cpv)})
+              # Add the new local build to the final list
+              final_blocks[cpv] = block_text
 
+          # Write merged index
           with open('/overlay/job_out/Packages', 'w', encoding='utf-8') as f:
               f.write("PKGDIR: .\nPACKAGES:\n\n")
               for cpv in sorted(final_blocks.keys()):
                   f.write(final_blocks.get(cpv))
 
+          # Write HTML
           html = "<!DOCTYPE html><html><head><title>Gentoo Nexus Binhost</title><style>body { font-family: monospace; background: #1a1a1a; color: #e0e0e0; padding: 2em; } a { color: #66d9ef; }</style></head><body><h1>Gentoo Nexus Binhost</h1>"
           html += "<p>Last Updated: " + os.popen("date -u '+%Y-%m-%d %H:%M:%S UTC'").read().strip() + "</p><pre>\n"
           for cpv in sorted(final_blocks.keys()):
