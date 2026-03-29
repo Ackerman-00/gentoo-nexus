@@ -5,7 +5,7 @@ exec > >(tee -i /var/log/gentoo-nexus-install.log) 2>&1
 #==============================================================================
 # CONFIGURATION & CONSTANTS
 #==============================================================================
-readonly SCRIPT_VERSION="2026.6.1-NEXUS-ULTIMATE"
+readonly SCRIPT_VERSION="2026.6.2-NEXUS-ULTIMATE"
 readonly LOCKFILE="/var/lib/gentoo-nexus-installed"
 readonly LOGFILE="/var/log/gentoo-nexus-install.log"
 readonly NEXUS_REPO_URL="https://github.com/Ackerman-00/gentoo-nexus.git"
@@ -236,12 +236,12 @@ sys-apps/gentoo-systemd-integration-9-r2
 sys-apps/systemd-initctl-4
 PROV
 
-# ARCHITECT FIX: Force Unmask dav1d explicitly
 cat > /etc/portage/package.unmask/overrides << 'UNMASK'
 media-libs/dav1d
 gui-libs/gtk4-layer-shell
 UNMASK
 
+# ARCHITECT FIX: Added installkernel dracut and libsdl2 -pipewire (circle breaker)
 cat > /etc/portage/package.use/global_overrides << 'USE'
 media-video/pipewire extra sound-server
 media-video/wireplumber extra
@@ -257,6 +257,8 @@ virtual/udev -systemd
 virtual/libudev -systemd
 sys-libs/ncurses -gpm
 gui-libs/gtk4-layer-shell introspection vala
+sys-kernel/installkernel dracut
+media-libs/libsdl2 -pipewire
 USE
 
 cat > /etc/portage/package.use/video_overrides << 'USE'
