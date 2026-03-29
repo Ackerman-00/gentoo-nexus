@@ -5,7 +5,7 @@ exec > >(tee -i /var/log/gentoo-nexus-install.log) 2>&1
 #==============================================================================
 # CONFIGURATION & CONSTANTS
 #==============================================================================
-readonly SCRIPT_VERSION="2026.5.6-NEXUS-ULTIMATE"
+readonly SCRIPT_VERSION="2026.5.7-NEXUS-ULTIMATE"
 readonly LOCKFILE="/var/lib/gentoo-nexus-installed"
 readonly LOGFILE="/var/log/gentoo-nexus-install.log"
 readonly NEXUS_REPO_URL="https://github.com/Ackerman-00/gentoo-nexus.git"
@@ -57,7 +57,6 @@ fi
 mkdir -p "$(dirname "$LOCKFILE")"
 echo "Installation started: $(date)" > "$LOCKFILE"
 
-# PATH GUARD: Force Portage to recognize the binary sandbox across sudo boundaries
 export PKGDIR=$(portageq envvar PKGDIR 2>/dev/null || echo "/var/cache/binpkgs")
 
 #==============================================================================
@@ -220,21 +219,32 @@ EOF
 mkdir -p /etc/portage/package.{use,mask,accept_keywords,unmask,license}
 mkdir -p /etc/portage/repos.conf
 
+# ARCHITECT FIX: Ultimate Systemd and Profile Masks
 cat > /etc/portage/package.mask/systemd << 'MASK'
 sys-apps/systemd
 sys-apps/gentoo-systemd-integration
+sys-apps/systemd-utils
 MASK
 
-# ARCHITECT FIX: Crush systemd infections and satisfy Pipewire constraints
+# ARCHITECT FIX: Force Unmask dav1d for ffmpeg
+cat > /etc/portage/package.unmask/dav1d << 'UNMASK'
+media-libs/dav1d
+UNMASK
+
+# ARCHITECT FIX: The Final Dependency Cycle & Systemd Overrides
 cat > /etc/portage/package.use/global_overrides << 'USE'
 media-video/pipewire extra sound-server
 media-video/wireplumber extra
 sys-apps/dbus -systemd
 sys-auth/polkit -systemd
 net-misc/networkmanager -systemd
+net-dialup/ppp -systemd
+sys-block/zram-init -systemd
+sys-apps/util-linux -systemd
+media-libs/libpulse -systemd
+sys-libs/ncurses -gpm
 USE
 
-# ARCHITECT FIX: Satisfy Steam's libdrm video card requirements
 cat > /etc/portage/package.use/video_overrides << 'USE'
 x11-libs/libdrm video_cards_nouveau video_cards_radeon
 USE
@@ -363,7 +373,7 @@ INSTALL_LIST+=(
     "sys-apps/ripgrep"
 )
 
-BIN_OPTS="--getbinpkg --usepkg --binpkg-respect-use=n --keep-going --autounmask=y --autounmask-write"
+BIN_OPTS="--getbinpkg --usepkg --binpkg-respect-use=n --keep-going --autounmask=y --autounmask-write --autounmask-keep-masks=n"
 
 set +e
 emerge ${BIN_OPTS} "${INSTALL_LIST[@]}"
