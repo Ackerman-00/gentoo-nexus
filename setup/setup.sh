@@ -5,7 +5,7 @@ exec > >(tee -i /var/log/gentoo-nexus-install.log) 2>&1
 #==============================================================================
 # CONFIGURATION & CONSTANTS
 #==============================================================================
-readonly SCRIPT_VERSION="2026.5.3-NEXUS-MASTER"
+readonly SCRIPT_VERSION="2026.5.4-NEXUS-ULTIMATE"
 readonly LOCKFILE="/var/lib/gentoo-nexus-installed"
 readonly LOGFILE="/var/log/gentoo-nexus-install.log"
 readonly NEXUS_REPO_URL="https://github.com/Ackerman-00/gentoo-nexus.git"
@@ -57,6 +57,9 @@ fi
 mkdir -p "$(dirname "$LOCKFILE")"
 echo "Installation started: $(date)" > "$LOCKFILE"
 
+# PATH GUARD: Force Portage to recognize the binary sandbox across sudo boundaries
+export PKGDIR=$(portageq envvar PKGDIR 2>/dev/null || echo "/var/cache/binpkgs")
+
 #==============================================================================
 # HELPER FUNCTIONS
 #==============================================================================
@@ -79,20 +82,19 @@ get_choice() {
     done
 }
 
-# FIX: Add or skip repo gracefully — eselect exits 250 if already enabled
+# QWEN FIX: Bulletproof Repo Addition avoiding eselect exit 250 crashes
 repo_add_safe() {
     local name="$1" type="$2" url="$3"
-    if eselect repository list | grep -q "^\s*\[.*\] ${name}\b"; then
-        log_msg "${Y}[~] Repository '${name}' already enabled, skipping add.${C}"
+    if [[ -d "/var/db/repos/${name}" ]] || eselect repository list 2>/dev/null | grep -q "\b${name}\b"; then
+        log_msg "${Y}[~] Repository '${name}' already exists, skipping add.${C}"
     else
         eselect repository add "${name}" "${type}" "${url}" || true
     fi
 }
 
-# FIX: Enable built-in repo safely
 repo_enable_safe() {
     local name="$1"
-    if eselect repository list | grep -q "^\s*\[.*\] ${name}\b"; then
+    if [[ -d "/var/db/repos/${name}" ]] || eselect repository list 2>/dev/null | grep -q "\b${name}\b"; then
         log_msg "${Y}[~] Repository '${name}' already enabled, skipping.${C}"
     else
         eselect repository enable "${name}" || true
@@ -102,7 +104,7 @@ repo_enable_safe() {
 #==============================================================================
 # HEADER
 #==============================================================================
-clear
+clear 2>/dev/null || printf "\033c"
 echo -e "${B}================================================================${C}"
 echo -e "${G}    GENTOO NEXUS ARCHITECT: AUTOMATED BINARY DEPLOYMENT 2026    ${C}"
 echo -e "${B}================================================================${C}"
@@ -120,7 +122,6 @@ echo "3) Laptop  (Ryzen 3 7320U - Zen 3 | AMD GPU | WiFi)"
 echo "4) Laptop  (HP EliteBook  - Skylake | Intel Iris | WiFi)"
 get_choice "Hardware Target [1-4]:" "^[1-4]$" hw_choice
 
-# FIX: Username regex — lowercase only (explain this to user)
 echo -e "${Y}Note: Username must be lowercase (e.g. 'ackerman' not 'Quietcraft')${C}"
 get_choice "Enter primary username (lowercase):" "^[a-z_][a-z0-9_-]{1,31}$" username
 
@@ -150,7 +151,6 @@ echo "3) greetd + tuigreet"
 echo "4) None (TTY autologin)"
 get_choice "Display Manager [1-4]:" "^[1-4]$" dm_choice
 
-# Vesktop requires guru
 [[ "${vesktop_choice,,}" == "y" ]] && guru_choice="y"
 
 #==============================================================================
@@ -165,6 +165,14 @@ log_msg "${G}[✓] Network connectivity verified.${C}"
 
 eselect profile set default/linux/amd64/23.0/desktop
 eselect news read all >/dev/null 2>&1 || true
+
+# QWEN FIX: Multilib Profile Check for Steam
+if [[ "${steam_choice,,}" == "y" ]]; then
+    if eselect profile show 2>/dev/null | grep -q "no-multilib"; then
+        log_msg "${R}[!] FATAL: Steam requires a multilib profile, but no-multilib is currently selected.${C}"
+        exit 1
+    fi
+fi
 
 mkdir -p /etc/portage/binrepos.conf
 
@@ -186,13 +194,12 @@ EOF
 # HARDWARE-SPECIFIC CONFIGURATION
 #==============================================================================
 case $hw_choice in
-    1) ZRAM_SIZE="6144M"; V_CARD="amdgpu radeonsi"; CPU_ARCH="znver3"; NEED_WIFI="no" ;;
-    2) ZRAM_SIZE="8192M"; V_CARD="nvidia";           CPU_ARCH="znver4"; NEED_WIFI="no" ;;
-    3) ZRAM_SIZE="4096M"; V_CARD="amdgpu radeonsi"; CPU_ARCH="znver3"; NEED_WIFI="yes" ;;
-    4) ZRAM_SIZE="8192M"; V_CARD="intel iris";       CPU_ARCH="skylake"; NEED_WIFI="yes" ;;
+    1) ZRAM_SIZE="6144M"; V_CARD="amdgpu radeonsi"; CPU_ARCH="znver3"; NEED_WIFI="no"; G_CMD="" ;;
+    2) ZRAM_SIZE="8192M"; V_CARD="nvidia";           CPU_ARCH="znver4"; NEED_WIFI="no"; G_CMD="nvidia-drm.modeset=1" ;;
+    3) ZRAM_SIZE="4096M"; V_CARD="amdgpu radeonsi"; CPU_ARCH="znver3"; NEED_WIFI="yes"; G_CMD="" ;;
+    4) ZRAM_SIZE="8192M"; V_CARD="intel iris";       CPU_ARCH="skylake"; NEED_WIFI="yes"; G_CMD="i915.enable_psr=0" ;;
 esac
 
-# Steam needs multilib/32-bit USE flags
 STEAM_USE=""
 [[ "${steam_choice,,}" == "y" ]] && STEAM_USE=" abi_x86_32"
 
@@ -215,13 +222,11 @@ EOF
 mkdir -p /etc/portage/package.{use,mask,accept_keywords,unmask,license}
 mkdir -p /etc/portage/repos.conf
 
-# Mask systemd
 cat > /etc/portage/package.mask/systemd << 'MASK'
 sys-apps/systemd
 sys-apps/gentoo-systemd-integration
 MASK
 
-# Accept keywords for Nexus live packages
 cat > /etc/portage/package.accept_keywords/nexus << 'EOF'
 */*::gentoo-nexus **
 x11-base/xwayland-satellite::gentoo-nexus **
@@ -231,17 +236,27 @@ gui-wm/dank-material-shell::gentoo-nexus **
 x11-misc/matugen::gentoo-nexus **
 EOF
 
+# QWEN FIX: Safe GRUB appending (no silent sed destruction)
+if [ -n "$G_CMD" ]; then
+    mkdir -p /etc/default
+    touch /etc/default/grub
+    if grep -q "^GRUB_CMDLINE_LINUX_DEFAULT=" /etc/default/grub; then
+        if ! grep -q "$G_CMD" /etc/default/grub; then
+            sed -i "s/^\(GRUB_CMDLINE_LINUX_DEFAULT=\"[^\"]*\)\"/\1 $G_CMD\"/" /etc/default/grub
+        fi
+    else
+        echo "GRUB_CMDLINE_LINUX_DEFAULT=\"$G_CMD\"" >> /etc/default/grub
+    fi
+fi
+
 #==============================================================================
 # REPOSITORY SYNCHRONIZATION
 #==============================================================================
 log_msg "\n${B}>>> [5/8] SYNCHRONIZING REPOSITORIES...${C}"
 
 emerge-webrsync -q
-emerge --noreplace --quiet --getbinpkg \
-    app-eselect/eselect-repository \
-    dev-vcs/git
+emerge --noreplace --quiet --getbinpkg app-eselect/eselect-repository dev-vcs/git
 
-# FIX: Use safe add function — no more exit 250 on re-runs
 repo_add_safe "gentoo-nexus" "git" "${NEXUS_REPO_URL}"
 [[ "${guru_choice,,}" == "y" ]]  && repo_enable_safe "guru"
 [[ "${steam_choice,,}" == "y" ]] && repo_enable_safe "steam-overlay"
@@ -261,16 +276,13 @@ else
     log_msg "${Y}[~] User '${username}' already exists.${C}"
 fi
 
-# Set up doas (sudo alternative)
 echo "permit persist :wheel" > /etc/doas.conf
 chmod 0400 /etc/doas.conf
 
-# OpenRC services
 rc-update add elogind boot  2>/dev/null || true
 rc-update add seatd default 2>/dev/null || true
 rc-update add dbus default  2>/dev/null || true
 
-# FIX: Correct WiFi service activation
 if [[ "${NEED_WIFI}" == "yes" ]]; then
     rc-update add iwd default 2>/dev/null || true
     rc-update add NetworkManager default 2>/dev/null || true
@@ -281,7 +293,6 @@ fi
 #==============================================================================
 log_msg "\n${B}>>> [7/8] EXECUTING BINARY DEPLOYMENT...${C}"
 
-# Core system packages — all pulled from binhost
 INSTALL_LIST=(
     sys-kernel/gentoo-kernel-bin
     sys-kernel/linux-firmware
@@ -299,7 +310,6 @@ INSTALL_LIST=(
     sys-block/zram-init
 )
 
-# Compositor packages
 case $de_choice in
     1) INSTALL_LIST+=( "gui-wm/niri::gentoo-nexus" "sys-apps/xdg-desktop-portal-gnome" "x11-base/xwayland-satellite::gentoo-nexus" ) ;;
     2) INSTALL_LIST+=( "gui-wm/mangowc::gentoo-nexus" "gui-libs/xdg-desktop-portal-wlr" "x11-base/xwayland-satellite::gentoo-nexus" ) ;;
@@ -308,7 +318,6 @@ case $de_choice in
     5) INSTALL_LIST+=( "kde-plasma/plasma-meta" ) ;;
 esac
 
-# Desktop shell
 [[ "$shell_choice" == "1" ]] && INSTALL_LIST+=(
     "gui-wm/dank-material-shell::gentoo-nexus"
     "gui-apps/quickshell"
@@ -318,15 +327,13 @@ esac
     "gui-apps/foot"
 )
 
-# Display manager
 case $dm_choice in
     1) INSTALL_LIST+=( "x11-misc/ly" ) ;;
     2) INSTALL_LIST+=( "x11-misc/sddm" ) ;;
     3) INSTALL_LIST+=( "gui-libs/greetd" "gui-apps/tuigreet" ) ;;
-    4) ;; # TTY autoloign — handled below
+    4) ;; 
 esac
 
-# Optional packages
 [[ "${matugen_choice,,}" == "y" ]]  && INSTALL_LIST+=( "x11-misc/matugen::gentoo-nexus" )
 [[ "${steam_choice,,}" == "y" ]]    && INSTALL_LIST+=( "games-util/steam-launcher" )
 [[ "${games_choice,,}" == "y" ]]    && INSTALL_LIST+=( "games-util/protonplus-bin::gentoo-nexus" "games-util/heroic-games-launcher-bin" )
@@ -334,7 +341,6 @@ esac
 [[ "${rootapp_choice,,}" == "y" ]]  && INSTALL_LIST+=( "app-misc/rootapp-bin::gentoo-nexus" )
 [[ "${NEED_WIFI}" == "yes" ]]       && INSTALL_LIST+=( "net-wireless/iwd" "net-wireless/wpa_supplicant" )
 
-# Common apps
 INSTALL_LIST+=(
     "gui-apps/wl-clipboard"
     "gui-apps/swaync"
@@ -345,17 +351,21 @@ INSTALL_LIST+=(
     "sys-apps/ripgrep"
 )
 
-# FIX: Correct binary-only emerge flags
-# --binpkg-respect-use=n  → accept binaries even if USE doesn't match exactly
-# --getbinpkg             → prefer binaries from binhost
-# --usepkg                → use local binary cache too
-# removed invalid --usepkg-exclude-live=n flag
 BIN_OPTS="--getbinpkg --usepkg --binpkg-respect-use=n --keep-going --autounmask=y --autounmask-write"
 
-# First pass: write autounmask changes
-emerge ${BIN_OPTS} "${INSTALL_LIST[@]}" 2>&1 || true
+# QWEN FIX: Correct autounmask error trap logic
+set +e
+emerge ${BIN_OPTS} "${INSTALL_LIST[@]}"
+AUTOUNMASK_EXIT=$?
+set -e
+
+# Exit code 1 means changes were successfully written to config files
+if [[ $AUTOUNMASK_EXIT -ne 0 ]] && [[ $AUTOUNMASK_EXIT -ne 1 ]]; then
+    log_msg "${R}[!] ERROR: emerge --autounmask-write failed (Exit Code: ${AUTOUNMASK_EXIT})${C}"
+    exit 1
+fi
+
 etc-update --automode -5 2>/dev/null || true
-# Second pass: actually install
 emerge ${BIN_OPTS} --update --newuse "${INSTALL_LIST[@]}"
 
 #==============================================================================
@@ -363,7 +373,6 @@ emerge ${BIN_OPTS} --update --newuse "${INSTALL_LIST[@]}"
 #==============================================================================
 log_msg "\n${B}>>> [8/8] POST-INSTALL CONFIGURATION...${C}"
 
-# ZRAM setup
 mkdir -p /etc/conf.d
 cat > /etc/conf.d/zram-init << EOF
 load_on_start="yes"
@@ -377,7 +386,6 @@ priority0="32767"
 EOF
 rc-update add zram-init boot 2>/dev/null || true
 
-# PipeWire session setup for user
 mkdir -p "/home/${username}/.config/systemd/user"
 cat > "/home/${username}/.config/systemd/user/pipewire.service" << 'EOF'
 [Unit]
@@ -390,34 +398,34 @@ WantedBy=default.target
 EOF
 chown -R "${username}:${username}" "/home/${username}/.config" || true
 
-# Display manager activation
 case $dm_choice in
     1) rc-update add ly default  2>/dev/null || true ;;
     2) rc-update add sddm default 2>/dev/null || true ;;
     3) rc-update add greetd default 2>/dev/null || true ;;
     4)
-        # TTY autologin for user on tty1
         mkdir -p /etc/conf.d
-        sed -i "s/^#*agetty_options_tty1=.*/agetty_options_tty1=\"--autologin ${username}\"/" \
-            /etc/conf.d/agetty.tty1 2>/dev/null || true
+        sed -i "s/^#*agetty_options_tty1=.*/agetty_options_tty1=\"--autologin ${username}\"/" /etc/conf.d/agetty.tty1 2>/dev/null || true
         ;;
 esac
 
-# GRUB installation hint (needs user to know their disk)
-log_msg "${Y}"
-log_msg "[!] IMPORTANT: GRUB is installed but not configured."
-log_msg "    You MUST run these commands before rebooting:"
-log_msg "    1. grub-install --target=x86_64-efi --efi-directory=/boot/efi --bootloader-id=Gentoo"
-log_msg "    2. grub-mkconfig -o /boot/grub/grub.cfg"
-log_msg "    3. dracut --hostonly --kver \$(ls /lib/modules | tail -1)"
-log_msg "${C}"
+# QWEN FIX: Reliable Bootloader EFI Detection
+log_msg "\n${B}>>> BOOTLOADER DEPLOYMENT...${C}"
+if mountpoint -q /boot/efi 2>/dev/null; then
+    if grep -q '/boot/efi.*vfat' /proc/mounts; then
+        log_msg "${B}>>> DETECTED VALID FAT32 EFI PARTITION. DEPLOYING GRUB...${C}"
+        grub-install --target=x86_64-efi --efi-directory=/boot/efi --bootloader-id=Gentoo || log_msg "${Y}[!] grub-install failed. Please run manually.${C}"
+        grub-mkconfig -o /boot/grub/grub.cfg || log_msg "${Y}[!] grub-mkconfig failed. Please run manually.${C}"
+    else
+        log_msg "${Y}[!] /boot/efi mounted but is not FAT32 (vfat). Run grub-install manually.${C}"
+    fi
+else
+    log_msg "${Y}[!] /boot/efi not mounted. Run grub-install and grub-mkconfig manually.${C}"
+fi
 
-# Set locale & timezone
 echo "LANG=en_US.UTF-8" > /etc/locale.conf
 echo "en_US.UTF-8 UTF-8" >> /etc/locale.gen
 locale-gen 2>/dev/null || true
 
-# NetworkManager as default network management
 if [[ "${NEED_WIFI}" == "yes" ]]; then
     mkdir -p /etc/NetworkManager
     cat > /etc/NetworkManager/NetworkManager.conf << 'EOF'
@@ -445,5 +453,5 @@ log_msg "Log saved: ${LOGFILE}"
 log_msg "${Y}Next steps:${C}"
 log_msg "  1. Set password: passwd ${username}"
 log_msg "  2. Set root password: passwd"
-log_msg "  3. Configure GRUB (see instructions above)"
+log_msg "  3. dracut --hostonly --kver \$(ls /lib/modules | tail -1)"
 log_msg "  4. Exit chroot, unmount, reboot"
