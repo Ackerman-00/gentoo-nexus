@@ -1,9 +1,13 @@
+# Copyright 2026 Gentoo Authors
+# Distributed under the terms of the GNU General Public License v2
+
 EAPI=8
 inherit desktop xdg
 
 DESCRIPTION="A complete desktop shell for niri and other Wayland compositors."
 HOMEPAGE="https://github.com/AvengeMedia/DankMaterialShell"
 SRC_URI="https://github.com/AvengeMedia/DankMaterialShell/archive/v${PV}.tar.gz -> ${P}.tar.gz"
+
 LICENSE="GPL-3.0-or-later"
 SLOT="0"
 KEYWORDS="~amd64"
@@ -30,12 +34,16 @@ src_compile() {
     export GOMODCACHE="${WORKDIR}/go-mod"
     export GOPROXY="https://proxy.golang.org,direct"
     export GOFLAGS="-buildvcs=false"
-    # -p 2 limits parallel compilations to avoid OOM on CI runners
-    go build -p 2 -ldflags="-s -w" -o ./dms ./cmd/dms || die
+    go build -p 2 -ldflags="-s -w" -o ./dms ./cmd/dms || die "go build failed"
+
     mkdir -pv completions || die
-    ./dms completion bash > completions/dms || die
-    ./dms completion fish > completions/dms.fish || die
-    ./dms completion zsh > completions/_dms || die
+
+    chmod 755 ./dms
+    chmod o+rx "${WORKDIR}" "${S}" completions
+
+    su portage -s /bin/sh -c "HOME=/tmp ${S}/dms completion bash" > completions/dms     || die "bash completion failed"
+    su portage -s /bin/sh -c "HOME=/tmp ${S}/dms completion fish" > completions/dms.fish || die "fish completion failed"
+    su portage -s /bin/sh -c "HOME=/tmp ${S}/dms completion zsh"  > completions/_dms    || die "zsh completion failed"
 }
 
 src_install() {
