@@ -5,7 +5,7 @@ exec > >(tee -i /var/log/gentoo-nexus-install.log) 2>&1
 #==============================================================================
 # CONFIGURATION & CONSTANTS
 #==============================================================================
-readonly SCRIPT_VERSION="2026.5.7-NEXUS-ULTIMATE"
+readonly SCRIPT_VERSION="2026.5.9-NEXUS-ULTIMATE"
 readonly LOCKFILE="/var/lib/gentoo-nexus-installed"
 readonly LOGFILE="/var/log/gentoo-nexus-install.log"
 readonly NEXUS_REPO_URL="https://github.com/Ackerman-00/gentoo-nexus.git"
@@ -206,7 +206,7 @@ CFLAGS="\${COMMON_FLAGS}"
 CXXFLAGS="\${COMMON_FLAGS}"
 RUSTFLAGS="-C opt-level=2"
 MAKEOPTS="-j$(nproc) -l$(nproc)"
-USE="wayland X vulkan pipewire dbus elogind udev opengl dri gbm vaapi vdpau ffmpeg bluetooth screencast gstreamer minizip${STEAM_USE} -systemd -aqua -cups"
+USE="wayland X vulkan pipewire dbus elogind udev opengl dri gbm vaapi vdpau ffmpeg bluetooth screencast gstreamer minizip${STEAM_USE} -daemon -systemd -aqua -cups"
 VIDEO_CARDS="${V_CARD}"
 ACCEPT_KEYWORDS="~amd64"
 FEATURES="getbinpkg -userfetch -userpriv -usersandbox"
@@ -219,19 +219,21 @@ EOF
 mkdir -p /etc/portage/package.{use,mask,accept_keywords,unmask,license}
 mkdir -p /etc/portage/repos.conf
 
-# ARCHITECT FIX: Ultimate Systemd and Profile Masks
+# ARCHITECT FIX: Aggressive Systemd Masking & Eudev enforcement
 cat > /etc/portage/package.mask/systemd << 'MASK'
 sys-apps/systemd
 sys-apps/gentoo-systemd-integration
 sys-apps/systemd-utils
+sys-apps/systemd-initctl
 MASK
 
-# ARCHITECT FIX: Force Unmask dav1d for ffmpeg
-cat > /etc/portage/package.unmask/dav1d << 'UNMASK'
+# ARCHITECT FIX: Force Unmask dav1d and gtk4-layer-shell
+cat > /etc/portage/package.unmask/overrides << 'UNMASK'
 media-libs/dav1d
+gui-libs/gtk4-layer-shell
 UNMASK
 
-# ARCHITECT FIX: The Final Dependency Cycle & Systemd Overrides
+# ARCHITECT FIX: Break GPM cycle, block systemd, enable introspection
 cat > /etc/portage/package.use/global_overrides << 'USE'
 media-video/pipewire extra sound-server
 media-video/wireplumber extra
@@ -242,7 +244,11 @@ net-dialup/ppp -systemd
 sys-block/zram-init -systemd
 sys-apps/util-linux -systemd
 media-libs/libpulse -systemd
+sys-fs/eudev -systemd
+virtual/udev -systemd
+virtual/libudev -systemd
 sys-libs/ncurses -gpm
+gui-libs/gtk4-layer-shell introspection vala
 USE
 
 cat > /etc/portage/package.use/video_overrides << 'USE'
@@ -257,6 +263,7 @@ gui-wm/mangowc::gentoo-nexus **
 gui-wm/dank-material-shell::gentoo-nexus **
 x11-misc/matugen::gentoo-nexus **
 media-libs/dav1d ~amd64
+gui-libs/gtk4-layer-shell ~amd64
 EOF
 
 if [ -n "$G_CMD" ]; then
@@ -374,6 +381,9 @@ INSTALL_LIST+=(
 )
 
 BIN_OPTS="--getbinpkg --usepkg --binpkg-respect-use=n --keep-going --autounmask=y --autounmask-write --autounmask-keep-masks=n"
+
+# Force udev provider before main install to prevent systemd-utils clash
+emerge --oneshot --quiet sys-fs/eudev virtual/udev || true
 
 set +e
 emerge ${BIN_OPTS} "${INSTALL_LIST[@]}"
