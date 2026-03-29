@@ -5,7 +5,7 @@ exec > >(tee -i /var/log/gentoo-nexus-install.log) 2>&1
 #==============================================================================
 # CONFIGURATION & CONSTANTS
 #==============================================================================
-readonly SCRIPT_VERSION="2026.8.2-NEXUS-STABLE-KERNEL"
+readonly SCRIPT_VERSION="2026.8.3-NEXUS-STABLE-KERNEL"
 readonly LOCKFILE="/var/lib/gentoo-nexus-installed"
 readonly LOGFILE="/var/log/gentoo-nexus-install.log"
 readonly NEXUS_REPO_URL="https://github.com/Ackerman-00/gentoo-nexus.git"
@@ -219,25 +219,23 @@ mkdir -p /etc/portage/profile
 mkdir -p /etc/portage/package.{use,mask,accept_keywords,unmask,license}
 mkdir -p /etc/portage/repos.conf
 
-# ARCHITECT FIX: Systemd Mask
+# ARCHITECT FIX: Only mask the systemd init daemon. DO NOT mask systemd-utils.
 cat > /etc/portage/package.mask/systemd << 'MASK'
 sys-apps/systemd
 sys-apps/gentoo-systemd-integration
 MASK
 
-# ARCHITECT FIX: FFMPEG Version Ceiling (Forces qtmultimedia binhost compatibility)
 cat > /etc/portage/package.mask/ffmpeg << 'MASK'
 >=media-video/ffmpeg-8.0
 MASK
 
+# ARCHITECT FIX: Removed systemd-utils from provided so the compiler can find libudev.so
 cat > /etc/portage/profile/package.provided << 'PROV'
 sys-apps/systemd-299.0
-sys-apps/systemd-utils-299.0
 sys-apps/gentoo-systemd-integration-99.0
 sys-apps/systemd-initctl-99.0
 PROV
 
-# ARCHITECT FIX: Deep Profile Unmasks
 cat > /etc/portage/package.unmask/overrides << 'UNMASK'
 media-libs/dav1d
 media-libs/libdvdnav
@@ -257,6 +255,7 @@ media-libs/libpulse -systemd
 sys-fs/eudev -systemd
 virtual/udev -systemd
 virtual/libudev -systemd
+sys-apps/systemd-utils -systemd
 sys-libs/ncurses -gpm
 sys-kernel/installkernel dracut
 media-libs/libsdl2 -pipewire
@@ -266,7 +265,6 @@ cat > /etc/portage/package.use/video_overrides << 'USE'
 x11-libs/libdrm video_cards_nouveau video_cards_radeon
 USE
 
-# ARCHITECT FIX: Explicit Keyword Overrides for Testing Binaries
 cat > /etc/portage/package.accept_keywords/nexus << 'EOF'
 */*::gentoo-nexus **
 x11-base/xwayland-satellite::gentoo-nexus **
@@ -403,7 +401,8 @@ INSTALL_LIST+=(
 
 BIN_OPTS="--getbinpkg --usepkg --binpkg-respect-use=n --keep-going --autounmask=y --autounmask-write --autounmask-keep-masks=n"
 
-emerge --oneshot --quiet sys-fs/eudev virtual/udev || true
+# ARCHITECT FIX: Sequence udev perfectly so compilers can find the library
+emerge --oneshot --quiet sys-apps/systemd-utils virtual/libudev || true
 
 set +e
 emerge ${BIN_OPTS} "${INSTALL_LIST[@]}"
