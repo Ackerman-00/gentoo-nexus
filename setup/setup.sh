@@ -5,7 +5,7 @@ exec > >(tee -i /var/log/gentoo-nexus-install.log) 2>&1
 #==============================================================================
 # CONFIGURATION & CONSTANTS
 #==============================================================================
-readonly SCRIPT_VERSION="2026.8.4-NEXUS-STABLE-KERNEL"
+readonly SCRIPT_VERSION="2026.9.1-NEXUS-PRAGMATIC"
 readonly LOCKFILE="/var/lib/gentoo-nexus-installed"
 readonly LOGFILE="/var/log/gentoo-nexus-install.log"
 readonly NEXUS_REPO_URL="https://github.com/Ackerman-00/gentoo-nexus.git"
@@ -191,10 +191,10 @@ EOF
 # HARDWARE-SPECIFIC CONFIGURATION
 #==============================================================================
 case $hw_choice in
-    1) ZRAM_SIZE="6144M"; V_CARD="amdgpu radeonsi"; CPU_ARCH="znver3"; NEED_WIFI="no"; G_CMD="" ;;
-    2) ZRAM_SIZE="8192M"; V_CARD="nvidia";           CPU_ARCH="znver4"; NEED_WIFI="no"; G_CMD="nvidia-drm.modeset=1" ;;
-    3) ZRAM_SIZE="4096M"; V_CARD="amdgpu radeonsi"; CPU_ARCH="znver3"; NEED_WIFI="yes"; G_CMD="" ;;
-    4) ZRAM_SIZE="8192M"; V_CARD="intel iris";       CPU_ARCH="skylake"; NEED_WIFI="yes"; G_CMD="i915.enable_psr=0" ;;
+    1) ZRAM_SIZE="6144M"; CPU_ARCH="znver3"; NEED_WIFI="no"; G_CMD=""; LINUX_FW="amd-ucode amdgpu rtl_nic" ;;
+    2) ZRAM_SIZE="8192M"; CPU_ARCH="znver4"; NEED_WIFI="no"; G_CMD="nvidia-drm.modeset=1"; LINUX_FW="amd-ucode nvidia rtl_nic" ;;
+    3) ZRAM_SIZE="4096M"; CPU_ARCH="znver3"; NEED_WIFI="yes"; G_CMD=""; LINUX_FW="amd-ucode amdgpu ath10k ath11k iwlwifi mt76 rtw88 rtw89" ;;
+    4) ZRAM_SIZE="8192M"; CPU_ARCH="skylake"; NEED_WIFI="yes"; G_CMD="i915.enable_psr=0"; LINUX_FW="intel-ucode i915 iwlwifi" ;;
 esac
 
 STEAM_USE=""
@@ -207,7 +207,7 @@ CXXFLAGS="\${COMMON_FLAGS}"
 RUSTFLAGS="-C opt-level=2"
 MAKEOPTS="-j$(nproc) -l$(nproc)"
 USE="wayland X vulkan pipewire dbus elogind udev opengl dri gbm vaapi vdpau ffmpeg bluetooth screencast gstreamer minizip${STEAM_USE} -daemon -systemd -aqua -cups"
-VIDEO_CARDS="${V_CARD}"
+LINUX_FIRMWARE="${LINUX_FW}"
 FEATURES="getbinpkg -userfetch -userpriv -usersandbox"
 ACCEPT_LICENSE="*"
 PKGDIR="/var/cache/binpkgs"
@@ -219,13 +219,12 @@ mkdir -p /etc/portage/profile
 mkdir -p /etc/portage/package.{use,mask,accept_keywords,unmask,license}
 mkdir -p /etc/portage/repos.conf
 
-# ARCHITECT FIX: Systemd Mask
 cat > /etc/portage/package.mask/systemd << 'MASK'
 sys-apps/systemd
 sys-apps/gentoo-systemd-integration
 MASK
 
-# ARCHITECT FIX: FFMPEG Version Ceiling (Forces qtmultimedia binhost compatibility)
+# ARCHITECT FIX: Cap FFMPEG at 7.x to protect qtmultimedia binary compatibility
 cat > /etc/portage/package.mask/ffmpeg << 'MASK'
 >=media-video/ffmpeg-8.0
 MASK
@@ -236,7 +235,6 @@ sys-apps/gentoo-systemd-integration-99.0
 sys-apps/systemd-initctl-99.0
 PROV
 
-# ARCHITECT FIX: Deep Profile Unmasks
 cat > /etc/portage/package.unmask/overrides << 'UNMASK'
 media-libs/dav1d
 media-libs/libdvdnav
@@ -258,7 +256,7 @@ virtual/udev -systemd
 virtual/libudev -systemd
 sys-apps/systemd-utils -systemd
 sys-libs/ncurses -gpm
-sys-kernel/installkernel dracut
+sys-kernel/installkernel dracut grub
 media-libs/libsdl2 -pipewire
 USE
 
@@ -266,7 +264,7 @@ cat > /etc/portage/package.use/video_overrides << 'USE'
 x11-libs/libdrm video_cards_nouveau video_cards_radeon
 USE
 
-# ARCHITECT FIX: Changed libdvd* to ~amd64 to prevent 9999 (git live) builds.
+# ARCHITECT FIX: Hybrid keywords. Unleash Mesa, Rust, and Kernel. Protect everything else.
 cat > /etc/portage/package.accept_keywords/nexus << 'EOF'
 */*::gentoo-nexus **
 x11-base/xwayland-satellite::gentoo-nexus **
@@ -286,6 +284,9 @@ games-util/steam-launcher ~amd64
 games-util/heroic-bin ~amd64
 sys-libs/libudev-compat ~amd64
 app-misc/cliphist ~amd64
+media-libs/mesa ~amd64
+dev-lang/rust ~amd64
+dev-lang/rust-bin ~amd64
 EOF
 
 if [ -n "$G_CMD" ]; then
