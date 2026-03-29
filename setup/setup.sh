@@ -5,7 +5,7 @@ exec > >(tee -i /var/log/gentoo-nexus-install.log) 2>&1
 #==============================================================================
 # CONFIGURATION & CONSTANTS
 #==============================================================================
-readonly SCRIPT_VERSION="2026.5.5-NEXUS-ULTIMATE"
+readonly SCRIPT_VERSION="2026.5.6-NEXUS-ULTIMATE"
 readonly LOCKFILE="/var/lib/gentoo-nexus-installed"
 readonly LOGFILE="/var/log/gentoo-nexus-install.log"
 readonly NEXUS_REPO_URL="https://github.com/Ackerman-00/gentoo-nexus.git"
@@ -225,10 +225,18 @@ sys-apps/systemd
 sys-apps/gentoo-systemd-integration
 MASK
 
-# ARCHITECT FIX: Resolve ffmpeg dependency constraints for Pipewire
-cat > /etc/portage/package.use/audio << 'USE'
+# ARCHITECT FIX: Crush systemd infections and satisfy Pipewire constraints
+cat > /etc/portage/package.use/global_overrides << 'USE'
 media-video/pipewire extra sound-server
 media-video/wireplumber extra
+sys-apps/dbus -systemd
+sys-auth/polkit -systemd
+net-misc/networkmanager -systemd
+USE
+
+# ARCHITECT FIX: Satisfy Steam's libdrm video card requirements
+cat > /etc/portage/package.use/video_overrides << 'USE'
+x11-libs/libdrm video_cards_nouveau video_cards_radeon
 USE
 
 cat > /etc/portage/package.accept_keywords/nexus << 'EOF'
@@ -238,6 +246,7 @@ gui-wm/niri::gentoo-nexus **
 gui-wm/mangowc::gentoo-nexus **
 gui-wm/dank-material-shell::gentoo-nexus **
 x11-misc/matugen::gentoo-nexus **
+media-libs/dav1d ~amd64
 EOF
 
 if [ -n "$G_CMD" ]; then
