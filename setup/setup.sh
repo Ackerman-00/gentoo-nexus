@@ -5,7 +5,7 @@ exec > >(tee -i /var/log/gentoo-nexus-install.log) 2>&1
 #==============================================================================
 # CONFIGURATION & CONSTANTS
 #==============================================================================
-readonly SCRIPT_VERSION="2026.8.1-NEXUS-STABLE-KERNEL"
+readonly SCRIPT_VERSION="2026.8.2-NEXUS-STABLE-KERNEL"
 readonly LOCKFILE="/var/lib/gentoo-nexus-installed"
 readonly LOGFILE="/var/log/gentoo-nexus-install.log"
 readonly NEXUS_REPO_URL="https://github.com/Ackerman-00/gentoo-nexus.git"
@@ -225,6 +225,11 @@ sys-apps/systemd
 sys-apps/gentoo-systemd-integration
 MASK
 
+# ARCHITECT FIX: FFMPEG Version Ceiling (Forces qtmultimedia binhost compatibility)
+cat > /etc/portage/package.mask/ffmpeg << 'MASK'
+>=media-video/ffmpeg-8.0
+MASK
+
 cat > /etc/portage/profile/package.provided << 'PROV'
 sys-apps/systemd-299.0
 sys-apps/systemd-utils-299.0
@@ -232,9 +237,11 @@ sys-apps/gentoo-systemd-integration-99.0
 sys-apps/systemd-initctl-99.0
 PROV
 
+# ARCHITECT FIX: Deep Profile Unmasks
 cat > /etc/portage/package.unmask/overrides << 'UNMASK'
 media-libs/dav1d
 media-libs/libdvdnav
+media-libs/libdvdread
 UNMASK
 
 cat > /etc/portage/package.use/global_overrides << 'USE'
@@ -259,7 +266,7 @@ cat > /etc/portage/package.use/video_overrides << 'USE'
 x11-libs/libdrm video_cards_nouveau video_cards_radeon
 USE
 
-# ARCHITECT FIX: Added kernel and linux-firmware to accept the absolute latest testing binaries
+# ARCHITECT FIX: Explicit Keyword Overrides for Testing Binaries
 cat > /etc/portage/package.accept_keywords/nexus << 'EOF'
 */*::gentoo-nexus **
 x11-base/xwayland-satellite::gentoo-nexus **
@@ -269,8 +276,16 @@ gui-wm/dank-material-shell::gentoo-nexus **
 x11-misc/matugen::gentoo-nexus **
 media-libs/dav1d **
 media-libs/libdvdnav **
+media-libs/libdvdread **
 sys-kernel/gentoo-kernel-bin ~amd64
 sys-kernel/linux-firmware ~amd64
+virtual/dist-kernel ~amd64
+gui-apps/quickshell ~amd64
+net-im/vesktop-bin ~amd64
+games-util/steam-launcher ~amd64
+games-util/heroic-bin ~amd64
+sys-libs/libudev-compat ~amd64
+app-misc/cliphist ~amd64
 EOF
 
 if [ -n "$G_CMD" ]; then
