@@ -5,7 +5,7 @@ exec > >(tee -i /var/log/gentoo-nexus-install.log) 2>&1
 #==============================================================================
 # CONFIGURATION & CONSTANTS
 #==============================================================================
-readonly SCRIPT_VERSION="2026.8.3-NEXUS-STABLE-KERNEL"
+readonly SCRIPT_VERSION="2026.8.4-NEXUS-STABLE-KERNEL"
 readonly LOCKFILE="/var/lib/gentoo-nexus-installed"
 readonly LOGFILE="/var/log/gentoo-nexus-install.log"
 readonly NEXUS_REPO_URL="https://github.com/Ackerman-00/gentoo-nexus.git"
@@ -256,6 +256,7 @@ media-libs/libpulse -systemd
 sys-fs/eudev -systemd
 virtual/udev -systemd
 virtual/libudev -systemd
+sys-apps/systemd-utils -systemd
 sys-libs/ncurses -gpm
 sys-kernel/installkernel dracut
 media-libs/libsdl2 -pipewire
@@ -265,7 +266,7 @@ cat > /etc/portage/package.use/video_overrides << 'USE'
 x11-libs/libdrm video_cards_nouveau video_cards_radeon
 USE
 
-# ARCHITECT FIX: Explicit Keyword Overrides for Testing Binaries
+# ARCHITECT FIX: Changed libdvd* to ~amd64 to prevent 9999 (git live) builds.
 cat > /etc/portage/package.accept_keywords/nexus << 'EOF'
 */*::gentoo-nexus **
 x11-base/xwayland-satellite::gentoo-nexus **
@@ -274,8 +275,8 @@ gui-wm/mangowc::gentoo-nexus **
 gui-wm/dank-material-shell::gentoo-nexus **
 x11-misc/matugen::gentoo-nexus **
 media-libs/dav1d **
-media-libs/libdvdnav **
-media-libs/libdvdread **
+media-libs/libdvdnav ~amd64
+media-libs/libdvdread ~amd64
 sys-kernel/gentoo-kernel-bin ~amd64
 sys-kernel/linux-firmware ~amd64
 virtual/dist-kernel ~amd64
@@ -402,7 +403,6 @@ INSTALL_LIST+=(
 
 BIN_OPTS="--getbinpkg --usepkg --binpkg-respect-use=n --keep-going --autounmask=y --autounmask-write --autounmask-keep-masks=n"
 
-# ARCHITECT FIX: Added ${BIN_OPTS} to explicitly fetch binary systemd-utils and libudev!
 emerge ${BIN_OPTS} --oneshot --quiet sys-apps/systemd-utils virtual/libudev || true
 
 set +e
