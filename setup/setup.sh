@@ -5,7 +5,7 @@ exec > >(tee -i /var/log/gentoo-nexus-install.log) 2>&1
 #==============================================================================
 # CONFIGURATION & CONSTANTS
 #==============================================================================
-readonly SCRIPT_VERSION="2026.5.9-NEXUS-ULTIMATE"
+readonly SCRIPT_VERSION="2026.6.0-NEXUS-ULTIMATE"
 readonly LOCKFILE="/var/lib/gentoo-nexus-installed"
 readonly LOGFILE="/var/log/gentoo-nexus-install.log"
 readonly NEXUS_REPO_URL="https://github.com/Ackerman-00/gentoo-nexus.git"
@@ -216,10 +216,18 @@ DISTDIR="/var/cache/distfiles"
 LC_MESSAGES=C.utf8
 EOF
 
+mkdir -p /etc/portage/profile
 mkdir -p /etc/portage/package.{use,mask,accept_keywords,unmask,license}
 mkdir -p /etc/portage/repos.conf
 
-# ARCHITECT FIX: Aggressive Systemd Masking & Eudev enforcement
+# ARCHITECT FIX: The Ultimate Systemd Kill-Switch (package.provided)
+cat > /etc/portage/profile/package.provided << 'PROV'
+sys-apps/systemd-260.1
+sys-apps/systemd-utils-260.1
+sys-apps/gentoo-systemd-integration-9-r2
+sys-apps/systemd-initctl-4
+PROV
+
 cat > /etc/portage/package.mask/systemd << 'MASK'
 sys-apps/systemd
 sys-apps/gentoo-systemd-integration
@@ -227,13 +235,11 @@ sys-apps/systemd-utils
 sys-apps/systemd-initctl
 MASK
 
-# ARCHITECT FIX: Force Unmask dav1d and gtk4-layer-shell
 cat > /etc/portage/package.unmask/overrides << 'UNMASK'
 media-libs/dav1d
 gui-libs/gtk4-layer-shell
 UNMASK
 
-# ARCHITECT FIX: Break GPM cycle, block systemd, enable introspection
 cat > /etc/portage/package.use/global_overrides << 'USE'
 media-video/pipewire extra sound-server
 media-video/wireplumber extra
@@ -255,6 +261,7 @@ cat > /etc/portage/package.use/video_overrides << 'USE'
 x11-libs/libdrm video_cards_nouveau video_cards_radeon
 USE
 
+# ARCHITECT FIX: Bypass dav1d base profile mask with **
 cat > /etc/portage/package.accept_keywords/nexus << 'EOF'
 */*::gentoo-nexus **
 x11-base/xwayland-satellite::gentoo-nexus **
@@ -262,7 +269,7 @@ gui-wm/niri::gentoo-nexus **
 gui-wm/mangowc::gentoo-nexus **
 gui-wm/dank-material-shell::gentoo-nexus **
 x11-misc/matugen::gentoo-nexus **
-media-libs/dav1d ~amd64
+media-libs/dav1d **
 gui-libs/gtk4-layer-shell ~amd64
 EOF
 
@@ -382,7 +389,6 @@ INSTALL_LIST+=(
 
 BIN_OPTS="--getbinpkg --usepkg --binpkg-respect-use=n --keep-going --autounmask=y --autounmask-write --autounmask-keep-masks=n"
 
-# Force udev provider before main install to prevent systemd-utils clash
 emerge --oneshot --quiet sys-fs/eudev virtual/udev || true
 
 set +e
