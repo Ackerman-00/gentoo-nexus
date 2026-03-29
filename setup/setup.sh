@@ -5,7 +5,7 @@ exec > >(tee -i /var/log/gentoo-nexus-install.log) 2>&1
 #==============================================================================
 # CONFIGURATION & CONSTANTS
 #==============================================================================
-readonly SCRIPT_VERSION="2026.10.0-NEXUS-ULTIMATE"
+readonly SCRIPT_VERSION="2026.10.1-NEXUS-HOTFIX"
 readonly LOCKFILE="/var/lib/gentoo-nexus-installed"
 readonly LOGFILE="/var/log/gentoo-nexus-install.log"
 readonly NEXUS_REPO_URL="https://github.com/Ackerman-00/gentoo-nexus.git"
@@ -104,7 +104,7 @@ repo_enable_safe() {
 #==============================================================================
 clear 2>/dev/null || printf "\033c"
 echo -e "${B}================================================================${C}"
-echo -e "${G}    GENTOO NEXUS ARCHITECT: MASTER DEPLOYMENT (2026.10.0)       ${C}"
+echo -e "${G}    GENTOO NEXUS ARCHITECT: MASTER DEPLOYMENT (2026.10.1)       ${C}"
 echo -e "${B}================================================================${C}"
 echo -e "Version: ${SCRIPT_VERSION}"
 echo -e "Binhost: ${NEXUS_BINHOST}"
@@ -275,9 +275,27 @@ x11-libs/libdrm video_cards_nouveau video_cards_radeon
 USE
 
 # ============================================================================
+# GCC 15 ICE FIX: Reduce optimization for problematic packages
+# This prevents segfaults in template-heavy C++ code (SPIRV-Tools, etc.)
+# References: Gentoo Bug #918234, GCC Bug #113893
+# ============================================================================
+cat > /etc/portage/package.env/gcc-ice-fix << 'EOF'
+dev-util/spirv-tools gcc-ice-fix
+dev-util/vulkan-validation-layers gcc-ice-fix
+media-libs/mesa gcc-ice-fix
+media-libs/rusticl-opencl gcc-ice-fix
+EOF
+
+mkdir -p /etc/portage/env
+cat > /etc/portage/env/gcc-ice-fix << 'EOF'
+CFLAGS="-O1 -march=${CPU_ARCH} -mtune=${CPU_ARCH} -pipe -fno-tree-loop-vectorize"
+CXXFLAGS="-O1 -march=${CPU_ARCH} -mtune=${CPU_ARCH} -pipe -fno-tree-loop-vectorize"
+MAKEOPTS="-j$(nproc)"
+EOF
+
+# ============================================================================
 # ARCHITECT FIX: Hybrid keywords. Unleash Mesa, Rust, and Kernel.
 # libdvd* set to ~amd64 prevents aclocal crash during build
-# mesa_clc added for OpenCL compute support (Gemini v2026.10.0)
 # ============================================================================
 cat > /etc/portage/package.accept_keywords/nexus << 'EOF'
 */*::gentoo-nexus **
@@ -425,6 +443,18 @@ BIN_OPTS="--getbinpkg --usepkg --binpkg-respect-use=n --keep-going --autounmask=
 # ============================================================================
 log_msg "${B}>>> Installing systemd-utils first (udev dependency fix)...${C}"
 emerge ${BIN_OPTS} --oneshot sys-apps/systemd-utils virtual/libudev || true
+
+# ============================================================================
+# GCC 15 ICE WORKAROUND: Install problematic packages with reduced optimization
+# ============================================================================
+log_msg "${B}>>> Installing GCC-ICE-prone packages with reduced optimization...${C}"
+emerge ${BIN_OPTS} --oneshot dev-util/spirv-tools || {
+    log_msg "${Y}[!] spirv-tools failed, trying with -O1...${C}"
+    echo 'CFLAGS="-O1 -pipe"' > /etc/portage/env/spirv-temp
+    echo 'CXXFLAGS="-O1 -pipe"' >> /etc/portage/env/spirv-temp
+    echo "dev-util/spirv-tools spirv-temp" >> /etc/portage/package.env/gcc-ice-fix
+    emerge ${BIN_OPTS} --oneshot dev-util/spirv-tools || true
+}
 
 set +e
 emerge ${BIN_OPTS} "${INSTALL_LIST[@]}"
