@@ -5,7 +5,7 @@ exec > >(tee -i /var/log/gentoo-nexus-install.log) 2>&1
 #==============================================================================
 # CONFIGURATION & CONSTANTS
 #==============================================================================
-readonly SCRIPT_VERSION="2026.6.2-NEXUS-ULTIMATE"
+readonly SCRIPT_VERSION="2026.6.3-NEXUS-ULTIMATE"
 readonly LOCKFILE="/var/lib/gentoo-nexus-installed"
 readonly LOGFILE="/var/log/gentoo-nexus-install.log"
 readonly NEXUS_REPO_URL="https://github.com/Ackerman-00/gentoo-nexus.git"
@@ -220,12 +220,10 @@ mkdir -p /etc/portage/profile
 mkdir -p /etc/portage/package.{use,mask,accept_keywords,unmask,license}
 mkdir -p /etc/portage/repos.conf
 
-# ARCHITECT FIX: FFMPEG Version Ceiling
+# ARCHITECT FIX: FFMPEG Ceiling and Systemd Mask (allowing systemd-utils)
 cat > /etc/portage/package.mask/systemd << 'MASK'
 sys-apps/systemd
 sys-apps/gentoo-systemd-integration
-sys-apps/systemd-utils
-sys-apps/systemd-initctl
 >=media-video/ffmpeg-7.0
 MASK
 
@@ -236,12 +234,12 @@ sys-apps/gentoo-systemd-integration-9-r2
 sys-apps/systemd-initctl-4
 PROV
 
+# ARCHITECT FIX: Unmask dav1d explicitly
 cat > /etc/portage/package.unmask/overrides << 'UNMASK'
 media-libs/dav1d
-gui-libs/gtk4-layer-shell
 UNMASK
 
-# ARCHITECT FIX: Added installkernel dracut and libsdl2 -pipewire (circle breaker)
+# ARCHITECT FIX: Installkernel dracut, libsdl2 circle breaker, and GPM block. Removed gtk4-layer-shell since swaync is gone.
 cat > /etc/portage/package.use/global_overrides << 'USE'
 media-video/pipewire extra sound-server
 media-video/wireplumber extra
@@ -256,7 +254,6 @@ sys-fs/eudev -systemd
 virtual/udev -systemd
 virtual/libudev -systemd
 sys-libs/ncurses -gpm
-gui-libs/gtk4-layer-shell introspection vala
 sys-kernel/installkernel dracut
 media-libs/libsdl2 -pipewire
 USE
@@ -273,7 +270,6 @@ gui-wm/mangowc::gentoo-nexus **
 gui-wm/dank-material-shell::gentoo-nexus **
 x11-misc/matugen::gentoo-nexus **
 media-libs/dav1d **
-gui-libs/gtk4-layer-shell ~amd64
 EOF
 
 if [ -n "$G_CMD" ]; then
@@ -380,9 +376,9 @@ esac
 [[ "${rootapp_choice,,}" == "y" ]]  && INSTALL_LIST+=( "app-misc/rootapp-bin::gentoo-nexus" )
 [[ "${NEED_WIFI}" == "yes" ]]       && INSTALL_LIST+=( "net-wireless/iwd" "net-wireless/wpa_supplicant" )
 
+# ARCHITECT FIX: swaync is completely removed from the install list.
 INSTALL_LIST+=(
     "gui-apps/wl-clipboard"
-    "gui-apps/swaync"
     "app-misc/cliphist"
     "media-sound/cava"
     "gui-apps/foot"
@@ -390,6 +386,7 @@ INSTALL_LIST+=(
     "sys-apps/ripgrep"
 )
 
+# ARCHITECT FIX: STRICT BINARY MODE (--usepkgonly) 
 BIN_OPTS="--getbinpkg --usepkgonly --binpkg-respect-use=n --keep-going --autounmask=y --autounmask-write --autounmask-keep-masks=n"
 
 emerge --oneshot --quiet sys-fs/eudev virtual/udev || true
