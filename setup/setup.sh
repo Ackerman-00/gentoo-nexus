@@ -5,7 +5,7 @@ exec > >(tee -i /var/log/gentoo-nexus-install.log) 2>&1
 #==============================================================================
 # CONFIGURATION & CONSTANTS
 #==============================================================================
-readonly SCRIPT_VERSION="2026.10.4-NEXUS-ULTIMATE-FIXED"
+readonly SCRIPT_VERSION="2026.10.7-NEXUS-AUDITED"
 readonly LOCKFILE="/var/lib/gentoo-nexus-installed"
 readonly LOGFILE="/var/log/gentoo-nexus-install.log"
 readonly NEXUS_REPO_URL="https://github.com/Ackerman-00/gentoo-nexus.git"
@@ -104,7 +104,7 @@ repo_enable_safe() {
 #==============================================================================
 clear 2>/dev/null || printf "\033c"
 echo -e "${B}================================================================${C}"
-echo -e "${G}    GENTOO NEXUS ARCHITECT: MASTER DEPLOYMENT (2026.10.4)       ${C}"
+echo -e "${G}    GENTOO NEXUS ARCHITECT: MASTER DEPLOYMENT (2026.10.7)       ${C}"
 echo -e "${B}================================================================${C}"
 echo -e "Version: ${SCRIPT_VERSION}"
 echo -e "Binhost: ${NEXUS_BINHOST}"
@@ -116,7 +116,7 @@ echo -e "Log: ${LOGFILE}\n"
 log_msg "${B}>>> [1/8] HARDWARE & SOFTWARE TARGETS${C}"
 echo "1) Desktop (Ryzen 5 5600G - Zen 3 | AMD GPU)"
 echo "2) Desktop (Ryzen 7 7700  - Zen 4 | RTX 5060)"
-echo "3) Laptop  (Ryzen 3 7320U - Zen 3 | AMD GPU | WiFi)"
+echo "3) Laptop  (Ryzen 3 7320U - Zen 2 | AMD GPU | WiFi)"
 echo "4) Laptop  (HP EliteBook  - Skylake | Intel Iris | WiFi)"
 get_choice "Hardware Target [1-4]:" "^[1-4]$" hw_choice
 
@@ -124,7 +124,7 @@ echo -e "${Y}Note: Username must be lowercase (e.g. 'ackerman')${C}"
 get_choice "Enter primary username:" "^[a-z_][a-z0-9_-]{1,31}$" username
 
 get_choice "Enable GURU overlay? [y/n]:" "^[yYnN]$" guru_choice
-get_choice "Enable Steam natively (32-bit multilib)? [y/n]:" "^[yYnN]$" steam_choice
+get_choice "Enable Steam natively (32-bit multilib via stable Gentoo)? [y/n]:" "^[yYnN]$" steam_choice
 get_choice "Enable Heroic & ProtonPlus? [y/n]:" "^[yYnN]$" games_choice
 get_choice "Enable Vesktop? [y/n]:" "^[yYnN]$" vesktop_choice
 get_choice "Enable RootApp? [y/n]:" "^[yYnN]$" rootapp_choice
@@ -138,11 +138,19 @@ echo "4) GNOME"
 echo "5) KDE Plasma"
 get_choice "Wayland Compositor [1-5]:" "^[1-5]$" de_choice
 
-log_msg "\n${B}>>> [3/8] DESKTOP SHELL & GREETER${C}"
-echo "1) dank-material-shell (Nexus)"
-echo "2) None"
-get_choice "Desktop Shell [1-2]:" "^[1-2]$" shell_choice
+# Logic: Only ask for Desktop Shell if the user chose a minimal Wayland Compositor (1, 2, or 3)
+shell_choice="3" # Default to None
+if [[ "$de_choice" =~ ^[1-3]$ ]]; then
+    log_msg "\n${B}>>> [3/8] DESKTOP SHELL & GREETER${C}"
+    echo "1) noctalia-shell (Nexus)"
+    echo "2) dank-material-shell (Nexus)"
+    echo "3) None"
+    get_choice "Desktop Shell [1-3]:" "^[1-3]$" shell_choice
+else
+    log_msg "\n${Y}>>> [3/8] Skipping Desktop Shell (Integrated within GNOME/KDE)${C}"
+fi
 
+log_msg "\n${B}>>> DISPLAY MANAGER${C}"
 echo "1) ly (TUI, lightweight)"
 echo "2) sddm"
 echo "3) greetd + tuigreet"
@@ -173,7 +181,7 @@ fi
 
 mkdir -p /etc/portage/binrepos.conf
 
-# ARCHITECT FIX: Priority 100 for Nexus ensures your UI packages are checked FIRST.
+# Priority 100 ensures your Custom Kernel and UI packages are checked FIRST.
 cat > /etc/portage/binrepos.conf/nexus.conf << EOF
 [gentoo-nexus-sf]
 priority = 100
@@ -181,7 +189,7 @@ sync-uri = ${NEXUS_BINHOST}
 verify-signature = false
 EOF
 
-# Fallback to Gentoo mirror
+# Priority 1 handles 32-bit Steam Mesa dependencies flawlessly from Gentoo
 cat > /etc/portage/binrepos.conf/gentoo.conf << EOF
 [gentoo]
 priority = 1
@@ -194,8 +202,8 @@ EOF
 #==============================================================================
 case $hw_choice in
     1) ZRAM_SIZE="6144M"; CPU_ARCH="znver3"; NEED_WIFI="no"; G_CMD=""; LINUX_FW="amd-ucode amdgpu rtl_nic" ;;
-    2) ZRAM_SIZE="8192M"; CPU_ARCH="znver4"; NEED_WIFI="no"; G_CMD="nvidia-drm.modeset=1"; LINUX_FW="amd-ucode nvidia rtl_nic" ;;
-    3) ZRAM_SIZE="4096M"; CPU_ARCH="znver3"; NEED_WIFI="yes"; G_CMD=""; LINUX_FW="amd-ucode amdgpu ath10k ath11k iwlwifi mt76 rtw88 rtw89" ;;
+    2) ZRAM_SIZE="8192M"; CPU_ARCH="znver4"; NEED_WIFI="no"; G_CMD="nouveau.modeset=1"; LINUX_FW="amd-ucode nvidia rtl_nic" ;;
+    3) ZRAM_SIZE="4096M"; CPU_ARCH="znver2"; NEED_WIFI="yes"; G_CMD=""; LINUX_FW="amd-ucode amdgpu ath10k ath11k iwlwifi mt76 rtw88 rtw89" ;;
     4) ZRAM_SIZE="8192M"; CPU_ARCH="skylake"; NEED_WIFI="yes"; G_CMD="i915.enable_psr=0"; LINUX_FW="intel-ucode i915 iwlwifi" ;;
 esac
 
@@ -209,8 +217,8 @@ CXXFLAGS="\${COMMON_FLAGS}"
 RUSTFLAGS="-C opt-level=2"
 MAKEOPTS="-j$(nproc) -l$(nproc)"
 USE="wayland X vulkan pipewire dbus elogind udev opengl dri gbm vaapi vdpau ffmpeg bluetooth screencast gstreamer minizip${STEAM_USE} -daemon -systemd -aqua -cups"
-# Broad Video Card support ensures Mesa Binary matches Gentoo Mirrors 1:1
-VIDEO_CARDS="amdgpu radeonsi intel iris nvidia"
+# Open-Source Native: Matches your Custom Nexus Kernel perfectly
+VIDEO_CARDS="amdgpu radeonsi intel iris nouveau"
 LINUX_FIRMWARE="${LINUX_FW}"
 FEATURES="getbinpkg -userfetch -userpriv -usersandbox"
 ACCEPT_LICENSE="*"
@@ -241,10 +249,6 @@ sys-apps/systemd
 sys-apps/gentoo-systemd-integration
 MASK
 
-cat > /etc/portage/package.mask/ffmpeg << 'MASK'
->=media-video/ffmpeg-8.0
-MASK
-
 cat > /etc/portage/profile/package.provided << 'PROV'
 sys-apps/systemd-299.0
 sys-apps/gentoo-systemd-integration-99.0
@@ -258,9 +262,9 @@ media-libs/libdvdread
 UNMASK
 
 #==============================================================================
-# GCC 15 ICE WORKAROUND (Critical Compiler Fix)
+# GCC 15 ICE WORKAROUND
 #==============================================================================
-log_msg "${B}>>> Applying GCC 15 ICE workarounds for problematic packages...${C}"
+log_msg "${B}>>> Applying GCC 15 ICE workarounds...${C}"
 
 cat > /etc/portage/env/gcc-ice-safe << 'EOF'
 CFLAGS="-O1 -pipe -fno-tree-loop-vectorize -fno-tree-slp-vectorize"
@@ -292,10 +296,11 @@ media-libs/libpulse -systemd
 sys-fs/eudev -systemd
 virtual/udev -systemd
 virtual/libudev -systemd
-sys-apps/systemd-utils -systemd
 sys-libs/ncurses -gpm
-sys-kernel/installkernel dracut grub
 media-libs/libsdl2 -pipewire
+# Match the Custom Binary Kernel configuration exactly
+sys-kernel/gentoo-kernel savedconfig initramfs
+sys-kernel/installkernel dracut grub
 USE
 
 cat > /etc/portage/package.use/video_overrides << 'USE'
@@ -307,12 +312,12 @@ cat > /etc/portage/package.accept_keywords/nexus << 'EOF'
 x11-base/xwayland-satellite::gentoo-nexus **
 gui-wm/niri::gentoo-nexus **
 gui-wm/mangowc::gentoo-nexus **
+gui-wm/noctalia-shell::gentoo-nexus **
 gui-wm/dank-material-shell::gentoo-nexus **
 x11-misc/matugen::gentoo-nexus **
 media-libs/dav1d **
 media-libs/libdvdnav ~amd64
 media-libs/libdvdread ~amd64
-sys-kernel/gentoo-kernel-bin ~amd64
 sys-kernel/linux-firmware ~amd64
 virtual/dist-kernel ~amd64
 gui-apps/quickshell ~amd64
@@ -321,10 +326,10 @@ games-util/steam-launcher ~amd64
 games-util/heroic-bin ~amd64
 sys-libs/libudev-compat ~amd64
 app-misc/cliphist ~amd64
-media-libs/mesa ~amd64
-dev-util/mesa_clc ~amd64
 dev-lang/rust ~amd64
 dev-lang/rust-bin ~amd64
+# Crucial: Unmask gentoo-kernel so it matches the cloud binary, but NOT Mesa (keep Mesa stable)
+sys-kernel/gentoo-kernel ~amd64
 EOF
 
 if [ -n "$G_CMD" ]; then
@@ -384,7 +389,7 @@ fi
 log_msg "\n${B}>>> [7/8] EXECUTING BINARY DEPLOYMENT...${C}"
 
 INSTALL_LIST=(
-    sys-kernel/gentoo-kernel-bin
+    sys-kernel/gentoo-kernel
     sys-kernel/linux-firmware
     sys-kernel/dracut
     sys-boot/grub
@@ -408,13 +413,11 @@ case $de_choice in
     5) INSTALL_LIST+=( "kde-plasma/plasma-meta" ) ;;
 esac
 
-[[ "$shell_choice" == "1" ]] && INSTALL_LIST+=(
-    "gui-wm/dank-material-shell::gentoo-nexus"
-    "gui-apps/quickshell"
-    "x11-misc/matugen::gentoo-nexus"
-    "app-misc/dgop::gentoo-nexus"
-    "sys-apps/danksearch::gentoo-nexus"
-)
+case $shell_choice in
+    1) INSTALL_LIST+=( "gui-wm/noctalia-shell::gentoo-nexus" "gui-apps/quickshell::gentoo-nexus" ) ;;
+    2) INSTALL_LIST+=( "gui-wm/dank-material-shell::gentoo-nexus" "gui-apps/quickshell::gentoo-nexus" "app-misc/dgop::gentoo-nexus" "sys-apps/danksearch::gentoo-nexus" ) ;;
+    3) ;; # None
+esac
 
 case $dm_choice in
     1) INSTALL_LIST+=( "x11-misc/ly" ) ;;
@@ -430,10 +433,11 @@ esac
 [[ "${rootapp_choice,,}" == "y" ]]  && INSTALL_LIST+=( "app-misc/rootapp-bin::gentoo-nexus" )
 [[ "${NEED_WIFI}" == "yes" ]]       && INSTALL_LIST+=( "net-wireless/iwd" "net-wireless/wpa_supplicant" )
 
+# Architect Append: Forced ::gentoo-nexus to pull from your cloud index instead of upstream source
 INSTALL_LIST+=(
     "gui-apps/wl-clipboard"
-    "app-misc/cliphist"
-    "media-sound/cava"
+    "app-misc/cliphist::gentoo-nexus"
+    "media-sound/cava::gentoo-nexus"
     "x11-terms/alacritty"
     "x11-terms/kitty"
     "app-editors/nano"
@@ -552,5 +556,5 @@ log_msg "Log saved: ${LOGFILE}"
 log_msg "${Y}Next steps:${C}"
 log_msg "  1. Set password: passwd ${username}"
 log_msg "  2. Set root password: passwd"
-log_msg "  3. dracut --hostonly --kver \$(ls /lib/modules | tail -1)"
+log_msg "  3. dracut --hostonly --kver \$(ls /lib/modules | tail -1) (if needed)"
 log_msg "  4. Exit chroot, unmount, reboot"
