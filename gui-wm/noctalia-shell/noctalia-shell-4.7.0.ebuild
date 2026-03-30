@@ -2,7 +2,7 @@
 # Distributed under the terms of the GNU General Public License v2
 
 EAPI=8
-EGIT_COMMIT="c879d0864ba3"
+EGIT_COMMIT="6d3ca588965b"
 
 PYTHON_COMPAT=( python3_{12..14} )
 
