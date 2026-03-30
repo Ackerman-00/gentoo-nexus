@@ -5,7 +5,7 @@ exec > >(tee -i /var/log/gentoo-nexus-install.log) 2>&1
 #==============================================================================
 # CONFIGURATION & CONSTANTS
 #==============================================================================
-readonly SCRIPT_VERSION="2026.10.7-NEXUS-AUDITED"
+readonly SCRIPT_VERSION="2026.10.8-NEXUS-AUDITED"
 readonly LOCKFILE="/var/lib/gentoo-nexus-installed"
 readonly LOGFILE="/var/log/gentoo-nexus-install.log"
 readonly NEXUS_REPO_URL="https://github.com/Ackerman-00/gentoo-nexus.git"
@@ -104,7 +104,7 @@ repo_enable_safe() {
 #==============================================================================
 clear 2>/dev/null || printf "\033c"
 echo -e "${B}================================================================${C}"
-echo -e "${G}    GENTOO NEXUS ARCHITECT: MASTER DEPLOYMENT (2026.10.7)       ${C}"
+echo -e "${G}    GENTOO NEXUS ARCHITECT: MASTER DEPLOYMENT (2026.10.8)       ${C}"
 echo -e "${B}================================================================${C}"
 echo -e "Version: ${SCRIPT_VERSION}"
 echo -e "Binhost: ${NEXUS_BINHOST}"
@@ -160,14 +160,20 @@ get_choice "Display Manager [1-4]:" "^[1-4]$" dm_choice
 [[ "${vesktop_choice,,}" == "y" ]] && guru_choice="y"
 
 #==============================================================================
-# [4/8] NETWORK & BINHOST ARCHITECTURE
+# [4/8] NETWORK & REPOSITORY INITIALIZATION
 #==============================================================================
-log_msg "\n${B}>>> [4/8] INITIALIZING BINHOSTS & PROFILE...${C}"
+log_msg "\n${B}>>> [4/8] INITIALIZING NETWORK & REPOSITORIES...${C}"
 if ! ping -c 1 -W 5 1.1.1.1 &>/dev/null; then
     log_msg "${R}[!] ERROR: No network. Check DNS resolution in chroot.${C}"
     exit 1
 fi
 log_msg "${G}[✓] Network connectivity verified.${C}"
+
+# Architect Fix: Sync the Gentoo tree FIRST before trying to set the profile
+log_msg "${Y}>>> Syncing main Gentoo repository...${C}"
+mkdir -p /etc/portage/repos.conf
+mkdir -p /var/db/repos/gentoo
+emerge-webrsync -q
 
 eselect profile set default/linux/amd64/23.0/desktop
 eselect news read all >/dev/null 2>&1 || true
@@ -239,7 +245,6 @@ mkdir -p /etc/portage/package.unmask
 mkdir -p /etc/portage/package.license
 mkdir -p /etc/portage/package.env
 mkdir -p /etc/portage/env
-mkdir -p /etc/portage/repos.conf
 
 #==============================================================================
 # SYSTEMD MASKING & PACKAGE PROVIDED
@@ -345,11 +350,10 @@ if [ -n "$G_CMD" ]; then
 fi
 
 #==============================================================================
-# [5/8] REPOSITORY SYNCHRONIZATION
+# [5/8] OVERLAY SYNCHRONIZATION
 #==============================================================================
-log_msg "\n${B}>>> [5/8] SYNCHRONIZING REPOSITORIES...${C}"
+log_msg "\n${B}>>> [5/8] SYNCHRONIZING OVERLAYS...${C}"
 
-emerge-webrsync -q
 emerge --noreplace --quiet --getbinpkg app-eselect/eselect-repository dev-vcs/git
 
 repo_add_safe "gentoo-nexus" "git" "${NEXUS_REPO_URL}"
