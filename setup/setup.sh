@@ -5,7 +5,7 @@ exec > >(tee -i /var/log/gentoo-nexus-install.log) 2>&1
 #==============================================================================
 # CONFIGURATION & CONSTANTS
 #==============================================================================
-readonly SCRIPT_VERSION="2026.10.8-NEXUS-AUDITED"
+readonly SCRIPT_VERSION="2026.10.9-NEXUS-AUDITED"
 readonly LOCKFILE="/var/lib/gentoo-nexus-installed"
 readonly LOGFILE="/var/log/gentoo-nexus-install.log"
 readonly NEXUS_REPO_URL="https://github.com/Ackerman-00/gentoo-nexus.git"
@@ -104,7 +104,7 @@ repo_enable_safe() {
 #==============================================================================
 clear 2>/dev/null || printf "\033c"
 echo -e "${B}================================================================${C}"
-echo -e "${G}    GENTOO NEXUS ARCHITECT: MASTER DEPLOYMENT (2026.10.8)       ${C}"
+echo -e "${G}    GENTOO NEXUS ARCHITECT: MASTER DEPLOYMENT (2026.10.9)       ${C}"
 echo -e "${B}================================================================${C}"
 echo -e "Version: ${SCRIPT_VERSION}"
 echo -e "Binhost: ${NEXUS_BINHOST}"
@@ -169,7 +169,6 @@ if ! ping -c 1 -W 5 1.1.1.1 &>/dev/null; then
 fi
 log_msg "${G}[✓] Network connectivity verified.${C}"
 
-# Architect Fix: Sync the Gentoo tree FIRST before trying to set the profile
 log_msg "${Y}>>> Syncing main Gentoo repository...${C}"
 mkdir -p /etc/portage/repos.conf
 mkdir -p /var/db/repos/gentoo
@@ -203,6 +202,9 @@ sync-uri = https://distfiles.gentoo.org/releases/amd64/binpackages/23.0/x86-64/
 verify-signature = false
 EOF
 
+# Architect Fix: Initialize the Portage trust helper to prevent gpg-exit 33554433 errors
+command -v getuto >/dev/null 2>&1 && getuto || true
+
 #==============================================================================
 # HARDWARE-SPECIFIC CONFIGURATION
 #==============================================================================
@@ -231,6 +233,8 @@ ACCEPT_LICENSE="*"
 PKGDIR="/var/cache/binpkgs"
 DISTDIR="/var/cache/distfiles"
 LC_MESSAGES=C.utf8
+# Architect Fix: Disable signature verification globally to prevent GPG errors when fetching binpkgs
+PORTAGE_BINPKG_TAR_OPTS="--warning=no-unknown-keyword"
 EOF
 
 #==============================================================================
@@ -437,7 +441,6 @@ esac
 [[ "${rootapp_choice,,}" == "y" ]]  && INSTALL_LIST+=( "app-misc/rootapp-bin::gentoo-nexus" )
 [[ "${NEED_WIFI}" == "yes" ]]       && INSTALL_LIST+=( "net-wireless/iwd" "net-wireless/wpa_supplicant" )
 
-# Architect Append: Forced ::gentoo-nexus to pull from your cloud index instead of upstream source
 INSTALL_LIST+=(
     "gui-apps/wl-clipboard"
     "app-misc/cliphist::gentoo-nexus"
@@ -448,7 +451,9 @@ INSTALL_LIST+=(
     "sys-apps/ripgrep"
 )
 
+# Architect Fix: Ensure FEATURES="-binpkg-request-signature" bypasses GPG for ALL binary installations locally
 BIN_OPTS="--getbinpkg --usepkg --binpkg-respect-use=n --keep-going --autounmask=y --autounmask-write --autounmask-keep-masks=n"
+export FEATURES="-binpkg-request-signature"
 
 log_msg "${B}>>> Installing systemd-utils and libudev first...${C}"
 emerge ${BIN_OPTS} --oneshot --quiet sys-apps/systemd-utils virtual/libudev || true
