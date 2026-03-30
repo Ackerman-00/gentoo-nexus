@@ -329,7 +329,6 @@ jobs:
           
           emerge --unmerge --quiet sys-libs/gpm 2>/dev/null || true
           
-          # Architect Fix: Explicitly create the env directory to prevent bash redirection crashes
           mkdir -p /etc/portage/{repos.conf,binrepos.conf,env,package.{accept_keywords,license,use,mask,env}}
           mkdir -p /overlay/{distfiles,job_out}
           mkdir -p /etc/portage/savedconfig/sys-kernel/
@@ -371,7 +370,9 @@ jobs:
           CXXFLAGS="${COMMON_FLAGS}"
           RUSTFLAGS="-C target-cpu=x86-64-v3 -C opt-level=2"
           USE="wayland X vulkan pipewire dbus elogind udev opengl dri gbm vaapi vdpau ffmpeg bluetooth screencast gstreamer minizip -daemon -systemd -aqua -cups"
-          VIDEO_CARDS="amdgpu radeonsi intel iris nouveau virgl"
+          
+          # Architect Fix: Added "radeon" to perfectly satisfy legacy x11-drivers/xf86-video-ati DRM requirements
+          VIDEO_CARDS="amdgpu radeon radeonsi intel iris nouveau virgl"
           LINUX_FIRMWARE="amd-ucode intel-ucode amdgpu nvidia i915 rtl_nic ath10k ath11k iwlwifi mt76 rtw88 rtw89"
           FEATURES="-userfetch -userpriv -usersandbox -ipc-sandbox -network-sandbox -pid-sandbox getbinpkg buildpkg parallel-install"
           EMERGE_DEFAULT_OPTS="--getbinpkg --usepkg --binpkg-respect-use=y --binpkg-changed-deps=y --autounmask=y --autounmask-write --autounmask-backtrack=y --keep-going --quiet --update"
@@ -406,6 +407,7 @@ jobs:
           sys-libs/gpm
           MASK
 
+          # Architect Fix: Break the ffmpeg <-> pipewire <-> libsdl2 circular dependency by disabling ffmpeg's sdl plugin (only used for ffplay)
           cat > /etc/portage/package.use/global << 'USE'
           */* -systemd -gpm
           sys-libs/ncurses -abi_x86_32
@@ -416,6 +418,7 @@ jobs:
           sys-kernel/installkernel dracut grub
           llvm-core/llvm xml zstd static-analyzer
           llvm-core/clang extra xml static-analyzer
+          media-video/ffmpeg -sdl
           USE
 
           echo ">>> Wiring Binhosts..."
@@ -477,7 +480,7 @@ jobs:
           done
 
           readarray -t MASTER_LIST < <(printf '%s\n' "${MASTER_LIST[@]}" | sort -u)
-          
+
           EXCLUDES="--usepkg-exclude sys-auth/polkit --usepkg-exclude dev-libs/libei --usepkg-exclude media-video/wireplumber --usepkg-exclude media-libs/libpulse --usepkg-exclude sys-apps/accountsservice --usepkg-exclude sys-auth/elogind"
 
           echo ">>> Updating Dependency Graph & Compiling Ecosystem..."
@@ -486,7 +489,6 @@ jobs:
               rm -f /etc/portage/binrepos.conf/nexus.conf
           fi
 
-          # Architect Fix: Extended loop to ensure deep 32-bit dependency resolution settles
           for i in 1 2 3 4; do
               emerge $EXCLUDES --deep --newuse "${MASTER_LIST[@]}" 2>&1 && break || true
               etc-update --automode -5 2>/dev/null || true
