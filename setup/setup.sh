@@ -1,15 +1,21 @@
 #!/bin/bash
+# GENTOO NEXUS ARCHITECT - MASTER DEPLOYMENT ENGINE (2026.10.19-PRO)
+# Fully Audited for AMD/Intel Architectures, Portage Substitution, and Binhost Priority
+
 set -eo pipefail
 exec > >(tee -i /var/log/gentoo-nexus-install.log) 2>&1
 
 #==============================================================================
 # CONFIGURATION & CONSTANTS
 #==============================================================================
-readonly SCRIPT_VERSION="2026.10.11-NEXUS-AUDITED"
+readonly SCRIPT_VERSION="2026.10.19-NEXUS-PRO"
 readonly LOCKFILE="/var/lib/gentoo-nexus-installed"
 readonly LOGFILE="/var/log/gentoo-nexus-install.log"
 readonly NEXUS_REPO_URL="https://github.com/Ackerman-00/gentoo-nexus.git"
 readonly NEXUS_BINHOST="https://gentoo-nexus.sourceforge.io/"
+
+# Evaluate CPU Cores once to prevent Portage 'bad substitution' errors
+CORES=$(nproc)
 
 #==============================================================================
 # COLOR CODES
@@ -104,7 +110,7 @@ repo_enable_safe() {
 #==============================================================================
 clear 2>/dev/null || printf "\033c"
 echo -e "${B}================================================================${C}"
-echo -e "${G}    GENTOO NEXUS ARCHITECT: MASTER DEPLOYMENT (2026.10.11)      ${C}"
+echo -e "${G}    GENTOO NEXUS ARCHITECT: MASTER DEPLOYMENT (2026.10.19)      ${C}"
 echo -e "${B}================================================================${C}"
 echo -e "Version: ${SCRIPT_VERSION}"
 echo -e "Binhost: ${NEXUS_BINHOST}"
@@ -208,22 +214,24 @@ command -v getuto >/dev/null 2>&1 && getuto || true
 #==============================================================================
 # HARDWARE-SPECIFIC CONFIGURATION
 #==============================================================================
+# Architect Fix: AMD systems use linux-firmware for microcode. Intel uses intel-microcode.
 case $hw_choice in
-    1) ZRAM_SIZE="6144M"; CPU_ARCH="znver3"; NEED_WIFI="no"; G_CMD=""; LINUX_FW="amd-ucode amdgpu rtl_nic"; UCODE="sys-firmware/amd-ucode" ;;
-    2) ZRAM_SIZE="8192M"; CPU_ARCH="znver4"; NEED_WIFI="no"; G_CMD="nouveau.modeset=1"; LINUX_FW="amd-ucode nvidia rtl_nic"; UCODE="sys-firmware/amd-ucode" ;;
-    3) ZRAM_SIZE="4096M"; CPU_ARCH="znver2"; NEED_WIFI="yes"; G_CMD=""; LINUX_FW="amd-ucode amdgpu ath10k ath11k iwlwifi mt76 rtw88 rtw89"; UCODE="sys-firmware/amd-ucode" ;;
+    1) ZRAM_SIZE="6144M"; CPU_ARCH="znver3"; NEED_WIFI="no"; G_CMD=""; LINUX_FW="amd-ucode amdgpu rtl_nic"; UCODE="" ;;
+    2) ZRAM_SIZE="8192M"; CPU_ARCH="znver4"; NEED_WIFI="no"; G_CMD="nouveau.modeset=1"; LINUX_FW="amd-ucode nvidia rtl_nic"; UCODE="" ;;
+    3) ZRAM_SIZE="4096M"; CPU_ARCH="znver2"; NEED_WIFI="yes"; G_CMD=""; LINUX_FW="amd-ucode amdgpu ath10k ath11k iwlwifi mt76 rtw88 rtw89"; UCODE="" ;;
     4) ZRAM_SIZE="8192M"; CPU_ARCH="skylake"; NEED_WIFI="yes"; G_CMD="i915.enable_psr=0"; LINUX_FW="intel-ucode i915 iwlwifi"; UCODE="sys-firmware/intel-microcode" ;;
 esac
 
 STEAM_USE=""
 [[ "${steam_choice,,}" == "y" ]] && STEAM_USE=" abi_x86_32"
 
+# Architect Fix: Injecting ${CORES} cleanly prevents substitution errors in portage.
 cat > /etc/portage/make.conf << EOF
 COMMON_FLAGS="-O2 -march=${CPU_ARCH} -mtune=${CPU_ARCH} -pipe"
 CFLAGS="\${COMMON_FLAGS}"
 CXXFLAGS="\${COMMON_FLAGS}"
 RUSTFLAGS="-C opt-level=2"
-MAKEOPTS="-j$(nproc) -l$(nproc)"
+MAKEOPTS="-j${CORES} -l${CORES}"
 USE="wayland X vulkan pipewire dbus elogind udev opengl dri gbm vaapi vdpau ffmpeg bluetooth screencast gstreamer minizip${STEAM_USE} -daemon -systemd -aqua -cups"
 # Open-Source Native: Matches your Custom Nexus Kernel perfectly
 VIDEO_CARDS="amdgpu radeonsi intel iris nouveau"
@@ -275,10 +283,11 @@ UNMASK
 #==============================================================================
 log_msg "${B}>>> Applying GCC 15 ICE workarounds...${C}"
 
-cat > /etc/portage/env/gcc-ice-safe << 'EOF'
+# Architect Fix: Unquoted EOF with explicit ${CORES} injection prevents bad substitution.
+cat > /etc/portage/env/gcc-ice-safe << EOF
 CFLAGS="-O1 -pipe -fno-tree-loop-vectorize -fno-tree-slp-vectorize"
 CXXFLAGS="-O1 -pipe -fno-tree-loop-vectorize -fno-tree-slp-vectorize"
-MAKEOPTS="-j$(nproc)"
+MAKEOPTS="-j${CORES}"
 EOF
 
 cat > /etc/portage/package.env/gcc-ice-packages << 'EOF'
@@ -318,12 +327,12 @@ USE
 
 cat > /etc/portage/package.accept_keywords/nexus << 'EOF'
 */*::gentoo-nexus **
-x11-base/xwayland-satellite::gentoo-nexus **
-gui-wm/niri::gentoo-nexus **
-gui-wm/mangowc::gentoo-nexus **
-gui-wm/noctalia-shell::gentoo-nexus **
-gui-wm/dank-material-shell::gentoo-nexus **
-x11-misc/matugen::gentoo-nexus **
+x11-base/xwayland-satellite **
+gui-wm/niri **
+gui-wm/mangowc **
+gui-wm/noctalia-shell **
+gui-wm/dank-material-shell **
+x11-misc/matugen **
 media-libs/dav1d **
 media-libs/libdvdnav ~amd64
 media-libs/libdvdread ~amd64
@@ -373,7 +382,6 @@ eselect news read all >/dev/null 2>&1 || true
 log_msg "\n${B}>>> [6/8] EXECUTING BINARY DEPLOYMENT...${C}"
 
 INSTALL_LIST=(
-    ${UCODE}
     sys-kernel/gentoo-kernel
     sys-kernel/linux-firmware
     sys-kernel/dracut
@@ -390,17 +398,19 @@ INSTALL_LIST=(
     sys-block/zram-init
 )
 
+[[ -n "${UCODE}" ]] && INSTALL_LIST+=( "${UCODE}" )
+
 case $de_choice in
-    1) INSTALL_LIST+=( "gui-wm/niri::gentoo-nexus" "sys-apps/xdg-desktop-portal-gnome" "x11-base/xwayland-satellite::gentoo-nexus" ) ;;
-    2) INSTALL_LIST+=( "gui-wm/mangowc::gentoo-nexus" "gui-libs/xdg-desktop-portal-wlr" "x11-base/xwayland-satellite::gentoo-nexus" ) ;;
+    1) INSTALL_LIST+=( "gui-wm/niri" "sys-apps/xdg-desktop-portal-gnome" "x11-base/xwayland-satellite" ) ;;
+    2) INSTALL_LIST+=( "gui-wm/mangowc" "gui-libs/xdg-desktop-portal-wlr" "x11-base/xwayland-satellite" ) ;;
     3) INSTALL_LIST+=( "gui-wm/hyprland" "gui-libs/xdg-desktop-portal-hyprland" ) ;;
     4) INSTALL_LIST+=( "gnome-base/gnome-light" ) ;;
     5) INSTALL_LIST+=( "kde-plasma/plasma-meta" ) ;;
 esac
 
 case $shell_choice in
-    1) INSTALL_LIST+=( "gui-wm/noctalia-shell::gentoo-nexus" "gui-apps/quickshell::gentoo-nexus" ) ;;
-    2) INSTALL_LIST+=( "gui-wm/dank-material-shell::gentoo-nexus" "gui-apps/quickshell::gentoo-nexus" "app-misc/dgop::gentoo-nexus" "sys-apps/danksearch::gentoo-nexus" ) ;;
+    1) INSTALL_LIST+=( "gui-wm/noctalia-shell" "gui-apps/quickshell" ) ;;
+    2) INSTALL_LIST+=( "gui-wm/dank-material-shell" "gui-apps/quickshell" "app-misc/dgop" "sys-apps/danksearch" ) ;;
     3) ;; # None
 esac
 
@@ -411,18 +421,18 @@ case $dm_choice in
     4) ;; 
 esac
 
-[[ "${matugen_choice,,}" == "y" ]]  && INSTALL_LIST+=( "x11-misc/matugen::gentoo-nexus" )
+[[ "${matugen_choice,,}" == "y" ]]  && INSTALL_LIST+=( "x11-misc/matugen" )
 [[ "${steam_choice,,}" == "y" ]]    && INSTALL_LIST+=( "games-util/steam-launcher" )
-[[ "${games_choice,,}" == "y" ]]    && INSTALL_LIST+=( "games-util/protonplus-bin::gentoo-nexus" "games-util/heroic-bin" )
+[[ "${games_choice,,}" == "y" ]]    && INSTALL_LIST+=( "games-util/protonplus-bin" "games-util/heroic-bin" )
 [[ "${vesktop_choice,,}" == "y" ]]  && INSTALL_LIST+=( "net-im/vesktop-bin" )
-[[ "${rootapp_choice,,}" == "y" ]]  && INSTALL_LIST+=( "app-misc/rootapp-bin::gentoo-nexus" )
+[[ "${rootapp_choice,,}" == "y" ]]  && INSTALL_LIST+=( "app-misc/rootapp-bin" )
 [[ "${NEED_WIFI}" == "yes" ]]       && INSTALL_LIST+=( "net-wireless/iwd" "net-wireless/wpa_supplicant" )
 
-# Architect Append: Forced ::gentoo-nexus to pull from your cloud index instead of upstream source
+# Architect Fix: Removed ::gentoo-nexus strict binding to allow standard ebuild resolution matching your binhost
 INSTALL_LIST+=(
     "gui-apps/wl-clipboard"
-    "app-misc/cliphist::gentoo-nexus"
-    "media-sound/cava::gentoo-nexus"
+    "app-misc/cliphist"
+    "media-sound/cava"
     "x11-terms/alacritty"
     "x11-terms/kitty"
     "app-editors/nano"
@@ -457,7 +467,7 @@ etc-update --automode -5 2>/dev/null || true
 emerge ${BIN_OPTS} --update --newuse "${INSTALL_LIST[@]}" || true
 
 #==============================================================================
-# [7/8] USER & SERVICE SETUP (Architect Fix: Moved to AFTER package install)
+# [7/8] USER & SERVICE SETUP
 #==============================================================================
 log_msg "\n${B}>>> [7/8] USER & SERVICE SETUP...${C}"
 
@@ -496,7 +506,7 @@ unload_on_stop="yes"
 num_devices="1"
 type0="swap"
 size0="${ZRAM_SIZE}"
-max_comp_streams0="$(nproc)"
+max_comp_streams0="${CORES}"
 comp_algorithm0="lz4"
 priority0="32767"
 EOF
