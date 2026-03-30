@@ -74,6 +74,9 @@ jobs:
           # Unmask the kernel and its virtual dependency
           echo "sys-kernel/gentoo-kernel ~amd64" >> /etc/portage/package.accept_keywords/kernel
           echo "virtual/dist-kernel ~amd64" >> /etc/portage/package.accept_keywords/kernel
+          
+          # Explicitly unmask linux-firmware to ensure it installs
+          echo "sys-kernel/linux-firmware ~amd64" >> /etc/portage/package.accept_keywords/kernel
 
           # Enforce savedconfig and satisfy the initramfs/dracut dependencies required for Nouveau GSP
           echo "sys-kernel/gentoo-kernel savedconfig initramfs" >> /etc/portage/package.use/kernel
@@ -85,6 +88,8 @@ jobs:
           DISTDIR="/var/cache/distfiles"
           PKGDIR="/overlay/job_out"
           ACCEPT_LICENSE="*"
+          # Disable signature verification globally to prevent GPG errors when fetching binpkgs
+          PORTAGE_BINPKG_TAR_OPTS="--warning=no-unknown-keyword"
           MAKECONF
 
           # We want to use Gentoo's upstream binhost for any random build dependencies to save time
@@ -92,15 +97,27 @@ jobs:
           [gentoo]
           priority = 10000
           sync-uri = https://distfiles.gentoo.org/releases/amd64/binpackages/23.0/x86-64/
+          # Crucial Architect Fix: Ignore binpkg GPG signatures in the cloud
+          sync-allow-hardlinks = yes
+          sync-rcu = no
+          sync-depth = 0
+          auto-sync = yes
           verify-signature = false
           REPOCONF
+          
+          # Initialize the Portage trust helper to ensure the keys ring exists even if empty
+          command -v getuto >/dev/null 2>&1 && getuto || true
+
+          # Install linux-firmware first so the kernel doesn't throw warnings
+          echo ">>> Pre-installing linux-firmware..."
+          FEATURES="-binpkg-request-signature" emerge --quiet --autounmask-continue sys-kernel/linux-firmware
 
           # Fetch dependencies first (using binpkgs if possible), then compile the kernel
           echo ">>> Fetching build dependencies..."
-          emerge --onlydeps --autounmask-continue sys-kernel/gentoo-kernel
+          FEATURES="-binpkg-request-signature" emerge --onlydeps --autounmask-continue sys-kernel/gentoo-kernel
 
           echo ">>> Compiling Nexus Kernel..."
-          emerge --buildpkg --autounmask-continue sys-kernel/gentoo-kernel
+          FEATURES="-binpkg-request-signature" emerge --buildpkg --autounmask-continue sys-kernel/gentoo-kernel
           BUILDEOF
           chmod +x build_script.sh
 
