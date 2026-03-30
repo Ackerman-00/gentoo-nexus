@@ -5,7 +5,7 @@ exec > >(tee -i /var/log/gentoo-nexus-install.log) 2>&1
 #==============================================================================
 # CONFIGURATION & CONSTANTS
 #==============================================================================
-readonly SCRIPT_VERSION="2026.10.9-NEXUS-AUDITED"
+readonly SCRIPT_VERSION="2026.10.11-NEXUS-AUDITED"
 readonly LOCKFILE="/var/lib/gentoo-nexus-installed"
 readonly LOGFILE="/var/log/gentoo-nexus-install.log"
 readonly NEXUS_REPO_URL="https://github.com/Ackerman-00/gentoo-nexus.git"
@@ -104,7 +104,7 @@ repo_enable_safe() {
 #==============================================================================
 clear 2>/dev/null || printf "\033c"
 echo -e "${B}================================================================${C}"
-echo -e "${G}    GENTOO NEXUS ARCHITECT: MASTER DEPLOYMENT (2026.10.9)       ${C}"
+echo -e "${G}    GENTOO NEXUS ARCHITECT: MASTER DEPLOYMENT (2026.10.11)      ${C}"
 echo -e "${B}================================================================${C}"
 echo -e "Version: ${SCRIPT_VERSION}"
 echo -e "Binhost: ${NEXUS_BINHOST}"
@@ -209,10 +209,10 @@ command -v getuto >/dev/null 2>&1 && getuto || true
 # HARDWARE-SPECIFIC CONFIGURATION
 #==============================================================================
 case $hw_choice in
-    1) ZRAM_SIZE="6144M"; CPU_ARCH="znver3"; NEED_WIFI="no"; G_CMD=""; LINUX_FW="amd-ucode amdgpu rtl_nic" ;;
-    2) ZRAM_SIZE="8192M"; CPU_ARCH="znver4"; NEED_WIFI="no"; G_CMD="nouveau.modeset=1"; LINUX_FW="amd-ucode nvidia rtl_nic" ;;
-    3) ZRAM_SIZE="4096M"; CPU_ARCH="znver2"; NEED_WIFI="yes"; G_CMD=""; LINUX_FW="amd-ucode amdgpu ath10k ath11k iwlwifi mt76 rtw88 rtw89" ;;
-    4) ZRAM_SIZE="8192M"; CPU_ARCH="skylake"; NEED_WIFI="yes"; G_CMD="i915.enable_psr=0"; LINUX_FW="intel-ucode i915 iwlwifi" ;;
+    1) ZRAM_SIZE="6144M"; CPU_ARCH="znver3"; NEED_WIFI="no"; G_CMD=""; LINUX_FW="amd-ucode amdgpu rtl_nic"; UCODE="sys-firmware/amd-ucode" ;;
+    2) ZRAM_SIZE="8192M"; CPU_ARCH="znver4"; NEED_WIFI="no"; G_CMD="nouveau.modeset=1"; LINUX_FW="amd-ucode nvidia rtl_nic"; UCODE="sys-firmware/amd-ucode" ;;
+    3) ZRAM_SIZE="4096M"; CPU_ARCH="znver2"; NEED_WIFI="yes"; G_CMD=""; LINUX_FW="amd-ucode amdgpu ath10k ath11k iwlwifi mt76 rtw88 rtw89"; UCODE="sys-firmware/amd-ucode" ;;
+    4) ZRAM_SIZE="8192M"; CPU_ARCH="skylake"; NEED_WIFI="yes"; G_CMD="i915.enable_psr=0"; LINUX_FW="intel-ucode i915 iwlwifi"; UCODE="sys-firmware/intel-microcode" ;;
 esac
 
 STEAM_USE=""
@@ -368,35 +368,12 @@ emaint sync -a 2>/dev/null || true
 eselect news read all >/dev/null 2>&1 || true
 
 #==============================================================================
-# [6/8] USER & SERVICE SETUP
+# [6/8] PACKAGE INSTALLATION
 #==============================================================================
-log_msg "\n${B}>>> [6/8] USER & SERVICE SETUP...${C}"
-
-if ! id "${username}" &>/dev/null; then
-    useradd -m -G wheel,audio,video,portage,input,seat,plugdev -s /bin/bash "${username}"
-    log_msg "${G}[✓] User '${username}' created.${C}"
-else
-    log_msg "${Y}[~] User '${username}' already exists.${C}"
-fi
-
-echo "permit persist :wheel" > /etc/doas.conf
-chmod 0400 /etc/doas.conf
-
-rc-update add elogind boot  2>/dev/null || true
-rc-update add seatd default 2>/dev/null || true
-rc-update add dbus default  2>/dev/null || true
-
-if [[ "${NEED_WIFI}" == "yes" ]]; then
-    rc-update add iwd default 2>/dev/null || true
-    rc-update add NetworkManager default 2>/dev/null || true
-fi
-
-#==============================================================================
-# [7/8] PACKAGE INSTALLATION
-#==============================================================================
-log_msg "\n${B}>>> [7/8] EXECUTING BINARY DEPLOYMENT...${C}"
+log_msg "\n${B}>>> [6/8] EXECUTING BINARY DEPLOYMENT...${C}"
 
 INSTALL_LIST=(
+    ${UCODE}
     sys-kernel/gentoo-kernel
     sys-kernel/linux-firmware
     sys-kernel/dracut
@@ -441,6 +418,7 @@ esac
 [[ "${rootapp_choice,,}" == "y" ]]  && INSTALL_LIST+=( "app-misc/rootapp-bin::gentoo-nexus" )
 [[ "${NEED_WIFI}" == "yes" ]]       && INSTALL_LIST+=( "net-wireless/iwd" "net-wireless/wpa_supplicant" )
 
+# Architect Append: Forced ::gentoo-nexus to pull from your cloud index instead of upstream source
 INSTALL_LIST+=(
     "gui-apps/wl-clipboard"
     "app-misc/cliphist::gentoo-nexus"
@@ -479,7 +457,34 @@ etc-update --automode -5 2>/dev/null || true
 emerge ${BIN_OPTS} --update --newuse "${INSTALL_LIST[@]}" || true
 
 #==============================================================================
-# POST-INSTALL CONFIGURATION
+# [7/8] USER & SERVICE SETUP (Architect Fix: Moved to AFTER package install)
+#==============================================================================
+log_msg "\n${B}>>> [7/8] USER & SERVICE SETUP...${C}"
+
+if ! id "${username}" &>/dev/null; then
+    useradd -m -G wheel,audio,video,portage,input,seat,plugdev -s /bin/bash "${username}" || {
+        log_msg "${Y}[!] Primary useradd failed. Trying fallback without dynamic groups...${C}"
+        useradd -m -G wheel,audio,video,portage,input -s /bin/bash "${username}" || true
+    }
+    log_msg "${G}[✓] User '${username}' created.${C}"
+else
+    log_msg "${Y}[~] User '${username}' already exists.${C}"
+fi
+
+echo "permit persist :wheel" > /etc/doas.conf
+chmod 0400 /etc/doas.conf
+
+rc-update add elogind boot  2>/dev/null || true
+rc-update add seatd default 2>/dev/null || true
+rc-update add dbus default  2>/dev/null || true
+
+if [[ "${NEED_WIFI}" == "yes" ]]; then
+    rc-update add iwd default 2>/dev/null || true
+    rc-update add NetworkManager default 2>/dev/null || true
+fi
+
+#==============================================================================
+# [8/8] POST-INSTALL CONFIGURATION
 #==============================================================================
 log_msg "\n${B}>>> [8/8] POST-INSTALL CONFIGURATION...${C}"
 
