@@ -49,7 +49,6 @@ jobs:
         env:
           GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
         run: |
-          # Apply Gentoo 2026 Ebuild Hotfixes (Preserved from user check-updates.yml)
           find . -path ./cache -prune -o -type f -name '*.ebuild' -exec sed -i 's/LLVM_COMPAT=( {18..21} )/LLVM_COMPAT=( {18..22} )/g' {} + || true
           find . -path ./cache -prune -o -type f -name '*.ebuild' -exec sed -i 's/gui-libs\/display-info/media-libs\/libdisplay-info/g' {} + || true
           find . -path ./cache -prune -o -type f -name '*.ebuild' -exec sed -i 's/media-libs\/mesa\[gbm\]/media-libs\/mesa/g' {} + || true
@@ -102,7 +101,6 @@ jobs:
               
               ver = None
               if os.path.exists("squashfs-root"):
-                  # 🚀 UI FIX: Using a for-loop to completely avoid bracket indexing!
                   for d_file in Path("squashfs-root").glob("*.desktop"):
                       txt = d_file.read_text(encoding="utf-8")
                       m = re.search(r'^X-AppImage-Version=(.+)', txt, re.M | re.I)
@@ -123,7 +121,6 @@ jobs:
           for ebuild_path in Path('.').rglob('*.ebuild'):
               if 'cache' in ebuild_path.parts or 'job_out' in ebuild_path.parts: continue
               pkg_dir = ebuild_path.parent
-              # Tuple unpacking to avoid brackets
               *parent_parts, cat_name, pkg_name = pkg_dir.parts
               pkg_cat_name = f"{cat_name}/{pkg_name}"
               
@@ -266,8 +263,6 @@ jobs:
           rm -rf /var/db/repos/gentoo/*
           emerge-webrsync -q
           eselect news read all >/dev/null 2>&1 || true
-          
-          # Preserved from user's check-updates.yml
           emerge --unmerge --quiet sys-libs/gpm 2>/dev/null || true
           
           mkdir -p /etc/portage/repos.conf
@@ -311,7 +306,7 @@ jobs:
           fi
 
       # =====================================================================
-      # PHASE 5: THE UNIVERSAL FACTORY BUILD (Merged with manual-build.yml)
+      # PHASE 5: THE UNIVERSAL FACTORY BUILD
       # =====================================================================
       - name: Execute Universal Factory Build
         id: build_universe
@@ -332,13 +327,11 @@ jobs:
           command -v getuto >/dev/null 2>&1 && getuto || true
           eselect profile set default/linux/amd64/23.0/desktop
           
-          # Preserved from manual-build.yml
           emerge --unmerge --quiet sys-libs/gpm 2>/dev/null || true
           
           mkdir -p /etc/portage/{repos.conf,binrepos.conf,package.{accept_keywords,license,use,mask,env}}
           mkdir -p /overlay/{distfiles,job_out}
 
-          # Inject Nexus God Config for the Kernel if present
           if [ -f /overlay/kernel-config/nexus-config-master ]; then
               mkdir -p /etc/portage/savedconfig/sys-kernel/
               cp /overlay/kernel-config/nexus-config-master /etc/portage/savedconfig/sys-kernel/gentoo-kernel
@@ -363,7 +356,6 @@ jobs:
           REPOCONF
 
           echo ">>> Applying GURU-specific ebuild hotfixes..."
-          # Preserved from manual-build.yml - Fixes broken mesa dependencies inside GURU
           for pkg in gui-libs/wlroots gui-libs/scenefx; do
             if [ -d "/var/db/repos/guru/$pkg" ]; then
               sed -i 's/media-libs\/mesa\/\[gbm\]/media-libs\/mesa/g' "/var/db/repos/guru/$pkg"/*.ebuild 2>/dev/null || true
@@ -371,18 +363,16 @@ jobs:
             fi
           done
 
-          echo ">>> Configuring Universal Make.conf (x86-64-v3 + 32-bit multilib)..."
+          echo ">>> Configuring Universal Make.conf (x86-64-v3)..."
+          # Architect Fix: Removed global abi_x86_32 to prevent database/library conflicts
           cat > /etc/portage/make.conf << 'MAKECONF'
           COMMON_FLAGS="-O2 -march=x86-64-v3 -pipe"
           CFLAGS="${COMMON_FLAGS}"
           CXXFLAGS="${COMMON_FLAGS}"
           RUSTFLAGS="-C target-cpu=x86-64-v3 -C opt-level=2"
-          MAKEOPTS="-j$(nproc) -l$(nproc)"
-          USE="wayland X vulkan pipewire dbus elogind udev opengl dri gbm vaapi vdpau ffmpeg bluetooth screencast gstreamer minizip abi_x86_32 -daemon -systemd -aqua -cups"
+          USE="wayland X vulkan pipewire dbus elogind udev opengl dri gbm vaapi vdpau ffmpeg bluetooth screencast gstreamer minizip -daemon -systemd -aqua -cups"
           VIDEO_CARDS="amdgpu radeonsi intel iris nouveau virgl"
           LINUX_FIRMWARE="amd-ucode intel-ucode amdgpu nvidia i915 rtl_nic ath10k ath11k iwlwifi mt76 rtw88 rtw89"
-          
-          # Preserved exact FEATURES and EMERGE_DEFAULT_OPTS from manual-build.yml
           FEATURES="-userfetch -userpriv -usersandbox -ipc-sandbox -network-sandbox -pid-sandbox getbinpkg buildpkg parallel-install"
           EMERGE_DEFAULT_OPTS="--getbinpkg --usepkg --binpkg-respect-use=y --binpkg-changed-deps=y --autounmask=y --autounmask-write --autounmask-backtrack=y --keep-going --quiet --update"
           DISTDIR="/var/cache/distfiles"
@@ -392,7 +382,22 @@ jobs:
           PORTAGE_BINPKG_TAR_OPTS="--warning=no-unknown-keyword"
           MAKECONF
 
-          # Preserved exact Maskings from manual-build.yml
+          # Architect Fix: Safely calculate CPU cores and cleanly append it to make.conf
+          CORES=$(nproc)
+          echo "MAKEOPTS=\"-j${CORES} -l${CORES}\"" >> /etc/portage/make.conf
+
+          echo ">>> Applying GCC ICE Workarounds..."
+          cat > /etc/portage/env/gcc-ice-safe << 'EOF'
+          CFLAGS="-O1 -pipe -fno-tree-loop-vectorize -fno-tree-slp-vectorize"
+          CXXFLAGS="-O1 -pipe -fno-tree-loop-vectorize -fno-tree-slp-vectorize"
+          EOF
+          echo "MAKEOPTS=\"-j${CORES}\"" >> /etc/portage/env/gcc-ice-safe
+
+          cat > /etc/portage/package.env/gcc-ice-packages << 'EOF'
+          dev-util/spirv-tools gcc-ice-safe
+          media-libs/mesa gcc-ice-safe
+          EOF
+
           cat > /etc/portage/package.mask/systemd << 'MASK'
           sys-apps/systemd
           sys-apps/gentoo-systemd-integration
@@ -402,7 +407,6 @@ jobs:
           sys-libs/gpm
           MASK
 
-          # Preserved exact global USE flags from manual-build.yml
           cat > /etc/portage/package.use/global << 'USE'
           */* -systemd -gpm
           sys-libs/ncurses -abi_x86_32
@@ -411,6 +415,8 @@ jobs:
           media-video/wireplumber extra
           sys-kernel/gentoo-kernel savedconfig initramfs
           sys-kernel/installkernel dracut grub
+          llvm-core/llvm xml zstd static-analyzer
+          llvm-core/clang extra xml static-analyzer
           USE
 
           echo ">>> Wiring Binhosts..."
@@ -428,9 +434,9 @@ jobs:
           verify-signature = false
           REPOCONF
 
-          # Preserved Accept Keywords logic
-          echo "*/*::gentoo-nexus ~amd64" >> /etc/portage/package.accept_keywords/nexus
-          echo "*/*::guru ~amd64" >> /etc/portage/package.accept_keywords/guru
+          # Architect Fix: Ensure Live Ebuilds (9999) have ** keyword permissions
+          echo "*/*::gentoo-nexus **" >> /etc/portage/package.accept_keywords/nexus
+          echo "*/*::guru **" >> /etc/portage/package.accept_keywords/guru
           echo "*/* *" >> /etc/portage/package.license/all
 
           echo ">>> Shielding gentoo-nexus packages from Guru overrides..."
@@ -440,8 +446,6 @@ jobs:
             echo "$cat_pkg::guru" >> /etc/portage/package.mask/guru_shield
           done
 
-          # Create the Master Ecosystem List
-          # This acts exactly like @world but ensures your core packages are always validated together
           MASTER_LIST=(
               sys-kernel/gentoo-kernel
               sys-kernel/linux-firmware
@@ -467,7 +471,6 @@ jobs:
               sys-apps/ripgrep
           )
 
-          # Dynamically load EVERYTHING in your overlay to the master evaluation list
           echo ">>> Dynamically discovering all custom packages in the overlay..."
           for ebuild in /overlay/*/*/*.ebuild; do
               [ -e "$ebuild" ] || continue
@@ -475,11 +478,8 @@ jobs:
               MASTER_LIST+=("$cat_pkg")
           done
 
-          # Remove duplicates from the array
           readarray -t MASTER_LIST < <(printf '%s\n' "${MASTER_LIST[@]}" | sort -u)
           
-          # Preserved Package Exclusions from manual-build.yml
-          # Ensures these specific packages are built locally rather than pulled from upstream Gentoo
           EXCLUDES="--usepkg-exclude sys-auth/polkit --usepkg-exclude dev-libs/libei --usepkg-exclude media-video/wireplumber --usepkg-exclude media-libs/libpulse --usepkg-exclude sys-apps/accountsservice --usepkg-exclude sys-auth/elogind"
 
           echo ">>> Updating Dependency Graph & Compiling Ecosystem..."
@@ -488,12 +488,13 @@ jobs:
               rm -f /etc/portage/binrepos.conf/nexus.conf
           fi
 
-          # The Ultimate Fix: Emerge the entire MASTER_LIST together.
-          # Because your EMERGE_DEFAULT_OPTS contains '--usepkg --getbinpkg', Portage will SKIP
-          # anything that is already compiled on SourceForge. It will ONLY compile the packages
-          # that your Python scraper just updated, while perfectly resolving LLVM/Mesa slots globally!
-          emerge $EXCLUDES --deep --newuse "${MASTER_LIST[@]}" 2>&1 || true
-          for i in 1 2 3; do etc-update --automode -5 2>/dev/null || break; done
+          # Architect Fix: Enhanced 3-pass loop to aggressively hammer through any cascading USE/Dependency changes
+          for i in 1 2 3; do
+              emerge $EXCLUDES --deep --newuse "${MASTER_LIST[@]}" 2>&1 && break || true
+              etc-update --automode -5 2>/dev/null || true
+          done
+
+          # Final Execution Pass
           emerge $EXCLUDES --deep --newuse "${MASTER_LIST[@]}"
           
           BUILDEOF
@@ -513,7 +514,6 @@ jobs:
           SF_USERNAME: ${{ secrets.SF_USERNAME }}
           SF_SSH_KEY: ${{ secrets.SF_SSH_KEY }}
         run: |
-          # If job_out is empty (nothing was updated/built), skip deployment.
           if [ -z "$(ls -A job_out/ 2>/dev/null)" ]; then
             echo "No new packages built. Skipping deployment."
             exit 0
@@ -528,7 +528,6 @@ jobs:
           #!/bin/bash
           set -euo pipefail
           
-          # Exact Python script logic preserved to merge indexes perfectly
           python3 << 'PYEOF'
           import urllib.request
           import os
