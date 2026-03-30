@@ -1,0 +1,197 @@
+name: Nexus Kernel Factory
+
+on:
+  schedule:
+    - cron: '0 2 * * *'
+  workflow_dispatch:
+    inputs:
+      force_rebuild:
+        description: 'Force a rebuild even if the latest version is already on SourceForge'
+        required: false
+        type: boolean
+        default: false
+
+concurrency:
+  group: build-nexus-kernel
+  cancel-in-progress: false
+
+permissions:
+  contents: write
+
+jobs:
+  build-and-deploy-kernel:
+    runs-on: ubuntu-latest
+    timeout-minutes: 360 # Kernels take time, give it the full 6 hours just in case
+    steps:
+      - name: Checkout Repository
+        uses: actions/checkout@v4
+
+      - name: Build Kernel Binary
+        id: build_kernel
+        run: |
+          mkdir -p job_out /tmp/distfiles
+          chmod 777 /tmp/distfiles
+
+          cat > build_script.sh << 'BUILDEOF'
+          #!/bin/bash
+          set -euo pipefail
+          
+          mkdir -p /var/db/repos/gentoo
+          rm -rf /var/db/repos/gentoo/*
+          echo ">>> Syncing Official Gentoo Tree..."
+          emerge-webrsync -q
+          eselect news read all >/dev/null 2>&1 || true
+          
+          # Detect the absolute latest ~amd64 kernel version
+          LATEST_EBUILD=$(ls -1v /var/db/repos/gentoo/sys-kernel/gentoo-kernel/*.ebuild | tail -n 1)
+          VER=$(basename "${LATEST_EBUILD}" | sed -E "s/^gentoo-kernel-//; s/\.ebuild$//")
+          echo ">>> Latest Upstream Kernel is: ${VER}"
+
+          # Check SourceForge to see if we already built this version
+          BINHOST="https://gentoo-nexus.sourceforge.io/Packages"
+          HTTP_STATUS=$(curl -sL -o /tmp/sf_packages.txt -w "%{http_code}" --connect-timeout 15 --retry 3 "$BINHOST" || echo "000")
+          
+          FORCE_REBUILD="${{ github.event.inputs.force_rebuild }}"
+          if [ "$FORCE_REBUILD" != "true" ] && [ "$HTTP_STATUS" -eq 200 ]; then
+             if grep -q "^CPV: sys-kernel/gentoo-kernel-${VER}$" /tmp/sf_packages.txt; then
+                 echo "✅ Binary for sys-kernel/gentoo-kernel-${VER} already exists. Skipping!"
+                 touch /overlay/SKIP_DEPLOY
+                 exit 0
+             fi
+          fi
+          
+          echo "🚀 Proceeding to build sys-kernel/gentoo-kernel-${VER}..."
+
+          # Set up Portage paths and configs
+          mkdir -p /etc/portage/{repos.conf,binrepos.conf,package.{accept_keywords,license,use,mask}}
+          mkdir -p /etc/portage/savedconfig/sys-kernel/
+          mkdir -p /overlay/{distfiles,job_out}
+
+          # Inject the Universal Nexus God Config
+          cp /overlay/kernel-config/nexus-config-master /etc/portage/savedconfig/sys-kernel/gentoo-kernel
+          echo ">>> Nexus God Config injected successfully."
+
+          # Unmask the kernel and enforce savedconfig
+          echo "sys-kernel/gentoo-kernel ~amd64" >> /etc/portage/package.accept_keywords/kernel
+          echo "sys-kernel/gentoo-kernel savedconfig" >> /etc/portage/package.use/kernel
+
+          cat > /etc/portage/make.conf << 'MAKECONF'
+          FEATURES="-userfetch -userpriv -usersandbox -ipc-sandbox -network-sandbox -pid-sandbox getbinpkg buildpkg"
+          EMERGE_DEFAULT_OPTS="--getbinpkg --usepkg --binpkg-respect-use=y --binpkg-changed-deps=y --autounmask=y --autounmask-write --autounmask-backtrack=y --keep-going --quiet --update"
+          DISTDIR="/var/cache/distfiles"
+          PKGDIR="/overlay/job_out"
+          ACCEPT_LICENSE="*"
+          MAKECONF
+
+          # We want to use Gentoo's upstream binhost for any random build dependencies to save time
+          cat > /etc/portage/binrepos.conf/gentoo.conf << 'REPOCONF'
+          [gentoo]
+          priority = 10000
+          sync-uri = https://distfiles.gentoo.org/releases/amd64/binpackages/23.0/x86-64/
+          verify-signature = false
+          REPOCONF
+
+          # Fetch dependencies first (using binpkgs if possible), then compile the kernel
+          echo ">>> Fetching build dependencies..."
+          emerge --onlydeps sys-kernel/gentoo-kernel
+
+          echo ">>> Compiling Nexus Kernel..."
+          emerge --buildpkg sys-kernel/gentoo-kernel
+          BUILDEOF
+          chmod +x build_script.sh
+
+          docker run --rm --privileged \
+            -v "${{ github.workspace }}:/overlay" \
+            -v "/tmp/distfiles:/var/cache/distfiles" \
+            gentoo/stage3:amd64-desktop-openrc bash /overlay/build_script.sh
+
+          if [ -f SKIP_DEPLOY ]; then
+            echo "skip=true" >> "$GITHUB_OUTPUT"
+          else
+            echo "skip=false" >> "$GITHUB_OUTPUT"
+          fi
+
+      - name: Deploy Additively to SourceForge
+        if: steps.build_kernel.outputs.skip == 'false'
+        env:
+          SF_USERNAME: ${{ secrets.SF_USERNAME }}
+          SF_SSH_KEY: ${{ secrets.SF_SSH_KEY }}
+        run: |
+          mkdir -p ~/.ssh && chmod 700 ~/.ssh
+          echo "$SF_SSH_KEY" > ~/.ssh/id_ed25519
+          chmod 600 ~/.ssh/id_ed25519
+          ssh-keyscan -t rsa,ecdsa,ed25519 web.sourceforge.net >> ~/.ssh/known_hosts
+          
+          cat > deploy_script.sh << 'EOF'
+          #!/bin/bash
+          set -euo pipefail
+          
+          python3 << 'PYEOF'
+          import urllib.request
+          import os
+
+          def parse_blocks(text):
+              blocks = dict()
+              current_block = list()
+              current_cpv = None
+              for line in text.splitlines(True):
+                  if line.startswith('PACKAGES:') or line.startswith('PKGDIR:'): continue
+                  if line.startswith('CPV:'): 
+                      _, cpv_val = line.split(':', 1)
+                      current_cpv = cpv_val.strip()
+                  current_block.append(line)
+                  if line.strip() == '':
+                      if current_cpv: blocks[current_cpv] = "".join(current_block).strip() + "\n\n"
+                      current_block = list()
+                      current_cpv = None
+              if current_cpv: blocks[current_cpv] = "".join(current_block).strip() + "\n\n"
+              return blocks
+
+          # Load local block (The newly compiled kernel)
+          local_blocks = dict()
+          if os.path.exists('/overlay/job_out/Packages'):
+              with open('/overlay/job_out/Packages', 'r', encoding='utf-8') as f:
+                  local_blocks = parse_blocks(f.read())
+
+          # Load server block (The existing repository containing niri, mesa, etc.)
+          server_blocks = dict()
+          try:
+              req = urllib.request.urlopen("https://gentoo-nexus.sourceforge.io/Packages", timeout=15)
+              server_blocks = parse_blocks(req.read().decode('utf-8'))
+          except Exception as e:
+              print("Notice: Server index missing or unreachable. Starting fresh.")
+
+          # Architect Fix: Bulletproof text-merge based on CPV matching
+          final_blocks = server_blocks.copy()
+          
+          # Merge logic: Strip out old kernels, add the new one, preserve all other packages
+          for cpv, block_text in local_blocks.items():
+              pkg_name = "/".join(cpv.split("-")[:-1]) if "-" in cpv else cpv 
+              keys_to_remove = [k for k in final_blocks.keys() if k.startswith(pkg_name + "-")]
+              for k in keys_to_remove:
+                  del final_blocks[k]
+              
+              final_blocks[cpv] = block_text
+
+          # Write merged index
+          with open('/overlay/job_out/Packages', 'w', encoding='utf-8') as f:
+              f.write("PKGDIR: .\nPACKAGES:\n\n")
+              for cpv in sorted(final_blocks.keys()):
+                  f.write(final_blocks.get(cpv))
+
+          # Write HTML
+          html = "<!DOCTYPE html><html><head><title>Gentoo Nexus Binhost</title><style>body { font-family: monospace; background: #1a1a1a; color: #e0e0e0; padding: 2em; } a { color: #66d9ef; }</style></head><body><h1>Gentoo Nexus Binhost</h1>"
+          html += "<p>Last Updated: " + os.popen("date -u '+%Y-%m-%d %H:%M:%S UTC'").read().strip() + "</p><pre>\n"
+          for cpv in sorted(final_blocks.keys()):
+              html += f"{cpv}\n"
+          html += "</pre></body></html>"
+          
+          with open('/overlay/job_out/index.html', 'w', encoding='utf-8') as f:
+              f.write(html)
+          PYEOF
+          EOF
+          chmod +x deploy_script.sh
+          docker run --rm -v "${{ github.workspace }}:/overlay" -w /overlay gentoo/stage3:amd64-desktop-openrc bash /overlay/deploy_script.sh
+
+          echo ">>> Deploying Kernel additively (NO --delete) to preserve existing files..."
+          rsync -avz -e "ssh -o StrictHostKeyChecking=no" job_out/ $SF_USERNAME@web.sourceforge.net:/home/project-web/gentoo-nexus/htdocs/
