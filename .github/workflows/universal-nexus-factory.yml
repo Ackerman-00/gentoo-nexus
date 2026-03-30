@@ -370,7 +370,9 @@ jobs:
           CXXFLAGS="${COMMON_FLAGS}"
           RUSTFLAGS="-C target-cpu=x86-64-v3 -C opt-level=2"
           USE="wayland X vulkan pipewire dbus elogind udev opengl dri gbm vaapi vdpau ffmpeg bluetooth screencast gstreamer minizip -daemon -systemd -aqua -cups"
-          VIDEO_CARDS="amdgpu radeonsi intel iris nouveau virgl"
+          
+          # Architect Fix: Added "radeon" to perfectly satisfy legacy x11-drivers/xf86-video-ati DRM requirements
+          VIDEO_CARDS="amdgpu radeon radeonsi intel iris nouveau virgl"
           LINUX_FIRMWARE="amd-ucode intel-ucode amdgpu nvidia i915 rtl_nic ath10k ath11k iwlwifi mt76 rtw88 rtw89"
           FEATURES="-userfetch -userpriv -usersandbox -ipc-sandbox -network-sandbox -pid-sandbox getbinpkg buildpkg parallel-install"
           EMERGE_DEFAULT_OPTS="--getbinpkg --usepkg --binpkg-respect-use=y --binpkg-changed-deps=y --autounmask=y --autounmask-write --autounmask-backtrack=y --keep-going --quiet --update"
@@ -405,6 +407,7 @@ jobs:
           sys-libs/gpm
           MASK
 
+          # Architect Fix: Break the ffmpeg <-> pipewire <-> libsdl2 circular dependency by disabling ffmpeg's sdl plugin
           cat > /etc/portage/package.use/global << 'USE'
           */* -systemd -gpm
           sys-libs/ncurses -abi_x86_32
@@ -415,6 +418,8 @@ jobs:
           sys-kernel/installkernel dracut grub
           llvm-core/llvm xml zstd static-analyzer
           llvm-core/clang extra xml static-analyzer
+          media-video/ffmpeg -sdl
+          media-libs/libsdl2 -pipewire
           USE
 
           echo ">>> Wiring Binhosts..."
@@ -473,7 +478,6 @@ jobs:
               [ -e "$ebuild" ] || continue
               cat_pkg=$(echo "$ebuild" | awk -F'/' '{print $(NF-2)"/"$(NF-1)}')
               
-              # Architect Fix: Exclude mutually exclusive forks from the parallel master list
               if [[ "$cat_pkg" != "gui-apps/quickshell" && "$cat_pkg" != "gui-apps/noctalia-qs" && "$cat_pkg" != "gui-wm/noctalia-shell" && "$cat_pkg" != "gui-wm/dank-material-shell" ]]; then
                   MASTER_LIST+=("$cat_pkg")
               fi
@@ -497,12 +501,10 @@ jobs:
           # Final Execution Pass for the core ecosystem
           emerge $EXCLUDES --deep --newuse "${MASTER_LIST[@]}"
           
-          # Architect Fix: Sequentially build mutually exclusive shells to prevent soft-blocks
           echo ">>> Compiling Conflicting Ecosystem 1: Dank Material Shell & Quickshell..."
           emerge $EXCLUDES --deep --newuse gui-wm/dank-material-shell gui-apps/quickshell || true
           
           echo ">>> Unmerging quickshell to clear the block for noctalia-qs..."
-          # Unmerging removes it from the live container, but the .gpkg.tar safely remains in job_out!
           emerge --unmerge --quiet gui-apps/quickshell gui-wm/dank-material-shell || true
 
           echo ">>> Compiling Conflicting Ecosystem 2: Noctalia Shell & Noctalia-QS..."
