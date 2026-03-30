@@ -71,9 +71,13 @@ jobs:
           cp /overlay/kernel-config/nexus-config-master /etc/portage/savedconfig/sys-kernel/gentoo-kernel
           echo ">>> Nexus God Config injected successfully."
 
-          # Unmask the kernel and enforce savedconfig
+          # Unmask the kernel and its virtual dependency
           echo "sys-kernel/gentoo-kernel ~amd64" >> /etc/portage/package.accept_keywords/kernel
-          echo "sys-kernel/gentoo-kernel savedconfig" >> /etc/portage/package.use/kernel
+          echo "virtual/dist-kernel ~amd64" >> /etc/portage/package.accept_keywords/kernel
+
+          # Enforce savedconfig and satisfy the initramfs/dracut dependencies required for Nouveau GSP
+          echo "sys-kernel/gentoo-kernel savedconfig initramfs" >> /etc/portage/package.use/kernel
+          echo "sys-kernel/installkernel dracut" >> /etc/portage/package.use/kernel
 
           cat > /etc/portage/make.conf << 'MAKECONF'
           FEATURES="-userfetch -userpriv -usersandbox -ipc-sandbox -network-sandbox -pid-sandbox getbinpkg buildpkg"
@@ -93,10 +97,10 @@ jobs:
 
           # Fetch dependencies first (using binpkgs if possible), then compile the kernel
           echo ">>> Fetching build dependencies..."
-          emerge --onlydeps sys-kernel/gentoo-kernel
+          emerge --onlydeps --autounmask-continue sys-kernel/gentoo-kernel
 
           echo ">>> Compiling Nexus Kernel..."
-          emerge --buildpkg sys-kernel/gentoo-kernel
+          emerge --buildpkg --autounmask-continue sys-kernel/gentoo-kernel
           BUILDEOF
           chmod +x build_script.sh
 
