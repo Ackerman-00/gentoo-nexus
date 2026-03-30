@@ -1,5 +1,5 @@
 #!/bin/bash
-# GENTOO NEXUS ARCHITECT - MASTER DEPLOYMENT ENGINE (2026.10.19-PRO)
+# GENTOO NEXUS ARCHITECT - MASTER DEPLOYMENT ENGINE (2026.10.20-PRO)
 # Fully Audited for AMD/Intel Architectures, Portage Substitution, and Binhost Priority
 
 set -eo pipefail
@@ -8,7 +8,7 @@ exec > >(tee -i /var/log/gentoo-nexus-install.log) 2>&1
 #==============================================================================
 # CONFIGURATION & CONSTANTS
 #==============================================================================
-readonly SCRIPT_VERSION="2026.10.19-NEXUS-PRO"
+readonly SCRIPT_VERSION="2026.10.20-NEXUS-PRO"
 readonly LOCKFILE="/var/lib/gentoo-nexus-installed"
 readonly LOGFILE="/var/log/gentoo-nexus-install.log"
 readonly NEXUS_REPO_URL="https://github.com/Ackerman-00/gentoo-nexus.git"
@@ -110,7 +110,7 @@ repo_enable_safe() {
 #==============================================================================
 clear 2>/dev/null || printf "\033c"
 echo -e "${B}================================================================${C}"
-echo -e "${G}    GENTOO NEXUS ARCHITECT: MASTER DEPLOYMENT (2026.10.19)      ${C}"
+echo -e "${G}    GENTOO NEXUS ARCHITECT: MASTER DEPLOYMENT (2026.10.20)      ${C}"
 echo -e "${B}================================================================${C}"
 echo -e "Version: ${SCRIPT_VERSION}"
 echo -e "Binhost: ${NEXUS_BINHOST}"
@@ -226,6 +226,7 @@ STEAM_USE=""
 [[ "${steam_choice,,}" == "y" ]] && STEAM_USE=" abi_x86_32"
 
 # Architect Fix: Injecting ${CORES} cleanly prevents substitution errors in portage.
+# Architect Fix: Disabled sandboxing features to prevent EPERM errors in Podman/Docker tests
 cat > /etc/portage/make.conf << EOF
 COMMON_FLAGS="-O2 -march=${CPU_ARCH} -mtune=${CPU_ARCH} -pipe"
 CFLAGS="\${COMMON_FLAGS}"
@@ -236,7 +237,7 @@ USE="wayland X vulkan pipewire dbus elogind udev opengl dri gbm vaapi vdpau ffmp
 # Open-Source Native: Matches your Custom Nexus Kernel perfectly
 VIDEO_CARDS="amdgpu radeonsi intel iris nouveau"
 LINUX_FIRMWARE="${LINUX_FW}"
-FEATURES="getbinpkg -userfetch -userpriv -usersandbox"
+FEATURES="getbinpkg -userfetch -userpriv -usersandbox -ipc-sandbox -pid-sandbox -network-sandbox"
 ACCEPT_LICENSE="*"
 PKGDIR="/var/cache/binpkgs"
 DISTDIR="/var/cache/distfiles"
@@ -325,6 +326,7 @@ cat > /etc/portage/package.use/video_overrides << 'USE'
 x11-libs/libdrm video_cards_nouveau video_cards_radeon
 USE
 
+# Architect Fix: Hardcode all required ~amd64 flags to prevent autounmask blockers
 cat > /etc/portage/package.accept_keywords/nexus << 'EOF'
 */*::gentoo-nexus **
 x11-base/xwayland-satellite **
@@ -332,21 +334,30 @@ gui-wm/niri **
 gui-wm/mangowc **
 gui-wm/noctalia-shell **
 gui-wm/dank-material-shell **
+gui-apps/noctalia-qs **
+gui-apps/quickshell **
+app-misc/dgop **
+sys-apps/danksearch **
 x11-misc/matugen **
+x11-misc/ly ~amd64
+app-misc/brightnessctl ~amd64
+dev-libs/linux-syscall-support ~amd64
+dev-embedded/libdisasm ~amd64
+dev-util/breakpad ~amd64
+games-util/game-device-udev-rules ~amd64
 media-libs/dav1d **
 media-libs/libdvdnav ~amd64
 media-libs/libdvdread ~amd64
 sys-kernel/linux-firmware ~amd64
 virtual/dist-kernel ~amd64
-gui-apps/quickshell ~amd64
 net-im/vesktop-bin ~amd64
 games-util/steam-launcher ~amd64
 games-util/heroic-bin ~amd64
+games-util/protonplus-bin ~amd64
 sys-libs/libudev-compat ~amd64
 app-misc/cliphist ~amd64
 dev-lang/rust ~amd64
 dev-lang/rust-bin ~amd64
-# Crucial: Unmask gentoo-kernel so it matches the cloud binary, but NOT Mesa (keep Mesa stable)
 sys-kernel/gentoo-kernel ~amd64
 EOF
 
@@ -408,8 +419,9 @@ case $de_choice in
     5) INSTALL_LIST+=( "kde-plasma/plasma-meta" ) ;;
 esac
 
+# Architect Fix: Strictly separated quickshell vs noctalia-qs to prevent soft-blocks.
 case $shell_choice in
-    1) INSTALL_LIST+=( "gui-wm/noctalia-shell" "gui-apps/quickshell" ) ;;
+    1) INSTALL_LIST+=( "gui-wm/noctalia-shell" "gui-apps/noctalia-qs" ) ;;
     2) INSTALL_LIST+=( "gui-wm/dank-material-shell" "gui-apps/quickshell" "app-misc/dgop" "sys-apps/danksearch" ) ;;
     3) ;; # None
 esac
@@ -428,7 +440,6 @@ esac
 [[ "${rootapp_choice,,}" == "y" ]]  && INSTALL_LIST+=( "app-misc/rootapp-bin" )
 [[ "${NEED_WIFI}" == "yes" ]]       && INSTALL_LIST+=( "net-wireless/iwd" "net-wireless/wpa_supplicant" )
 
-# Architect Fix: Removed ::gentoo-nexus strict binding to allow standard ebuild resolution matching your binhost
 INSTALL_LIST+=(
     "gui-apps/wl-clipboard"
     "app-misc/cliphist"
@@ -440,7 +451,7 @@ INSTALL_LIST+=(
 )
 
 # Architect Fix: Ensure FEATURES="-binpkg-request-signature" bypasses GPG for ALL binary installations locally
-BIN_OPTS="--getbinpkg --usepkg --binpkg-respect-use=n --keep-going --autounmask=y --autounmask-write --autounmask-keep-masks=n"
+BIN_OPTS="--getbinpkg --usepkg --keep-going --autounmask=y --autounmask-write --autounmask-keep-masks=n"
 export FEATURES="-binpkg-request-signature"
 
 log_msg "${B}>>> Installing systemd-utils and libudev first...${C}"
