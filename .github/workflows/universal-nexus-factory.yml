@@ -329,11 +329,12 @@ jobs:
           
           emerge --unmerge --quiet sys-libs/gpm 2>/dev/null || true
           
-          mkdir -p /etc/portage/{repos.conf,binrepos.conf,package.{accept_keywords,license,use,mask,env}}
+          # Architect Fix: Explicitly create the env directory to prevent bash redirection crashes
+          mkdir -p /etc/portage/{repos.conf,binrepos.conf,env,package.{accept_keywords,license,use,mask,env}}
           mkdir -p /overlay/{distfiles,job_out}
+          mkdir -p /etc/portage/savedconfig/sys-kernel/
 
           if [ -f /overlay/kernel-config/nexus-config-master ]; then
-              mkdir -p /etc/portage/savedconfig/sys-kernel/
               cp /overlay/kernel-config/nexus-config-master /etc/portage/savedconfig/sys-kernel/gentoo-kernel
           fi
 
@@ -364,7 +365,6 @@ jobs:
           done
 
           echo ">>> Configuring Universal Make.conf (x86-64-v3)..."
-          # Architect Fix: Removed global abi_x86_32 to prevent database/library conflicts
           cat > /etc/portage/make.conf << 'MAKECONF'
           COMMON_FLAGS="-O2 -march=x86-64-v3 -pipe"
           CFLAGS="${COMMON_FLAGS}"
@@ -382,7 +382,6 @@ jobs:
           PORTAGE_BINPKG_TAR_OPTS="--warning=no-unknown-keyword"
           MAKECONF
 
-          # Architect Fix: Safely calculate CPU cores and cleanly append it to make.conf
           CORES=$(nproc)
           echo "MAKEOPTS=\"-j${CORES} -l${CORES}\"" >> /etc/portage/make.conf
 
@@ -434,7 +433,6 @@ jobs:
           verify-signature = false
           REPOCONF
 
-          # Architect Fix: Ensure Live Ebuilds (9999) have ** keyword permissions
           echo "*/*::gentoo-nexus **" >> /etc/portage/package.accept_keywords/nexus
           echo "*/*::guru **" >> /etc/portage/package.accept_keywords/guru
           echo "*/* *" >> /etc/portage/package.license/all
@@ -488,13 +486,12 @@ jobs:
               rm -f /etc/portage/binrepos.conf/nexus.conf
           fi
 
-          # Architect Fix: Enhanced 3-pass loop to aggressively hammer through any cascading USE/Dependency changes
-          for i in 1 2 3; do
+          # Architect Fix: Extended loop to ensure deep 32-bit dependency resolution settles
+          for i in 1 2 3 4; do
               emerge $EXCLUDES --deep --newuse "${MASTER_LIST[@]}" 2>&1 && break || true
               etc-update --automode -5 2>/dev/null || true
           done
 
-          # Final Execution Pass
           emerge $EXCLUDES --deep --newuse "${MASTER_LIST[@]}"
           
           BUILDEOF
