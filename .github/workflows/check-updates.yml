@@ -1,0 +1,547 @@
+name: Check Updates & Compile Overlay
+
+on:
+  schedule:
+    - cron: '0 2 * * *'
+  workflow_dispatch:
+
+concurrency:
+  group: check-updates-nexus
+  cancel-in-progress: false
+
+permissions:
+  contents: write
+  actions: write
+
+jobs:
+  scan-patch-and-build:
+    runs-on: ubuntu-latest
+    timeout-minutes: 360
+    steps:
+      - name: Checkout Repository
+        uses: actions/checkout@v4
+        with:
+          token: ${{ secrets.GITHUB_TOKEN }}
+          fetch-depth: 0
+
+      - name: Set up Python
+        uses: actions/setup-python@v5
+        with:
+          python-version: '3.11'
+
+      - name: Install System Dependencies
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y squashfs-tools xvfb jq
+          pip install requests packaging
+
+      # =====================================================================
+      # PHASE 1: DEEP UPSTREAM SCAN & EBUILD PATCHING
+      # =====================================================================
+      - name: Deep Upstream Scan & Ebuild Patching
+        id: scan
+        env:
+          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+        run: |
+          find . -path ./cache -prune -o -type f -name '*.ebuild' -exec sed -i 's/LLVM_COMPAT=( {18..21} )/LLVM_COMPAT=( {18..22} )/g' {} + || true
+          find . -path ./cache -prune -o -type f -name '*.ebuild' -exec sed -i 's/gui-libs\/display-info/media-libs\/libdisplay-info/g' {} + || true
+          find . -path ./cache -prune -o -type f -name '*.ebuild' -exec sed -i 's/media-libs\/mesa\[gbm\]/media-libs\/mesa/g' {} + || true
+          find . -path ./cache -prune -o -type f -name '*.ebuild' -exec sed -i 's/media-libs\/mesa\[gbm(+)\]/media-libs\/mesa/g' {} + || true
+          find . -path ./cache -prune -o -type f -name '*.ebuild' -exec sed -i 's/mesa\[gbm\]/mesa/g' {} + || true
+          find . -path ./cache -prune -o -type f -name '*.ebuild' -exec sed -i 's/mesa\[gbm(+)\]/mesa/g' {} + || true
+          find gui-wm/mangowc -type f -name '*.ebuild' -exec sed -i 's/mangowm\/mangowc/mangowm\/mango/g' {} + || true
+
+          python3 << 'EOF'
+          import os, re, requests, subprocess, stat, shutil
+          from pathlib import Path
+          from packaging.version import parse as parse_version
+
+          updated_atoms = set()
+          gh_token = os.environ.get('GITHUB_TOKEN')
+          hdrs = {"Authorization": f"token {gh_token}"} if gh_token else dict()
+
+          def get_latest_github_release(repo):
+              try:
+                  r = requests.get(f"https://api.github.com/repos/{repo}/releases/latest", headers=hdrs, timeout=15)
+                  if r.status_code == 200:
+                      tag = r.json().get("tag_name", "").lstrip("v")
+                      if tag and re.match(r'^[0-9]', tag): return tag
+                  r2 = requests.get(f"https://api.github.com/repos/{repo}/tags", headers=hdrs, timeout=15)
+                  if r2.status_code == 200:
+                      for tag in r2.json():
+                          name = tag.get("name", "").lstrip("v")
+                          if re.match(r'^[0-9]', name): return name
+              except Exception: pass
+              return None
+
+          def get_latest_commit(repo_url):
+              try:
+                  out = subprocess.check_output(["git", "ls-remote", repo_url, "HEAD"], timeout=30, stderr=subprocess.DEVNULL).decode()
+                  m = re.search(r"([a-f0-9]{40})", out)
+                  if m: return m.group(1)
+              except Exception: pass
+              return None
+
+          def get_rootapp_version():
+              print("    -> Downloading AppImage to detect version...")
+              appimage = "/tmp/Root.AppImage"
+              subprocess.run(["wget", "-qO", appimage, "https://installer.rootapp.com/installer/Linux/X64/Root.AppImage"])
+              if not os.path.exists(appimage): 
+                  print("    ❌ Failed to download Root.AppImage")
+                  return None
+              
+              os.chmod(appimage, stat.S_IRWXU)
+              subprocess.run([appimage, "--appimage-extract"], stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL)
+              
+              ver = None
+              if os.path.exists("squashfs-root"):
+                  for d_file in Path("squashfs-root").glob("*.desktop"):
+                      txt = d_file.read_text(encoding="utf-8")
+                      m = re.search(r'^X-AppImage-Version=(.+)', txt, re.M | re.I)
+                      if m: ver = m.group(1).strip()
+                      break
+                  
+                  if ver in (None, "1.0", "1.0.0"):
+                      print("    -> Desktop file empty, running Xvfb fallback...")
+                      os.system("xvfb-run -a ./squashfs-root/AppRun > /tmp/startup.log 2>&1 & sleep 5 && pkill -f AppRun || true")
+                      if os.path.exists("/tmp/startup.log"):
+                          log = Path("/tmp/startup.log").read_text(encoding="utf-8")
+                          m = re.search(r'Root Version:\s*([0-9]+\.[0-9]+\.[0-9]+)', log, re.I)
+                          if m: ver = m.group(1)
+                  shutil.rmtree("squashfs-root", ignore_errors=True)
+              os.remove(appimage)
+              return ver
+
+          for ebuild_path in Path('.').rglob('*.ebuild'):
+              if 'cache' in ebuild_path.parts or 'job_out' in ebuild_path.parts: continue
+              pkg_dir = ebuild_path.parent
+              *parent_parts, cat_name, pkg_name = pkg_dir.parts
+              pkg_cat_name = f"{cat_name}/{pkg_name}"
+              
+              content = ebuild_path.read_text(encoding="utf-8")
+              is_live = ebuild_path.name.endswith('-9999.ebuild') or 'git-r3' in content
+              
+              print(f"\n🔍 Scanning {pkg_cat_name} (Live: {is_live})...")
+
+              if pkg_name == "rootapp-bin":
+                  new_ver = get_rootapp_version()
+                  if new_ver:
+                      curr_ver_m = re.search(r'-([0-9][0-9.]*(?:_p[0-9]+)?(?:-r[0-9]+)?)\.ebuild$', ebuild_path.name)
+                      curr_ver = curr_ver_m.group(1) if curr_ver_m else None
+                      print(f"    -> Current: {curr_ver} | Found Upstream: {new_ver}")
+                      if curr_ver and new_ver != curr_ver:
+                          new_path = pkg_dir / f"{pkg_name}-{new_ver}.ebuild"
+                          ebuild_path.rename(new_path)
+                          updated_atoms.add(pkg_cat_name)
+                          print(f"    ✅ Bumping to {new_ver}")
+                      else:
+                          print("    ✅ Up to date.")
+                  continue
+
+              repo_m = re.search(r'https://github\.com/([A-Za-z0-9_.-]+/[A-Za-z0-9_.-]+?)(?:\.git|/archive|/releases|/tarball|"\s|\n)', content)
+              if not repo_m:
+                  continue
+                  
+              repo = repo_m.group(1)
+              if repo.endswith('.git'): repo = repo[:-4]
+
+              if is_live:
+                  repo_url = f"https://github.com/{repo}.git"
+                  new_commit = get_latest_commit(repo_url)
+                  if new_commit:
+                      new_content = content
+                      short_commit = new_commit[:12]
+                      
+                      if "EGIT_COMMIT=" in new_content:
+                          new_content = re.sub(r'(EGIT_COMMIT=["\']?)[a-fA-F0-9]{7,40}(["\']?)', r"\g<1>" + short_commit + r"\2", new_content)
+                      else:
+                          new_content = re.sub(r"(^EAPI=.*)", r'\1\nEGIT_COMMIT="' + short_commit + '"', new_content, count=1, flags=re.MULTILINE)
+                      
+                      if "_commit=" in new_content:
+                          new_content = re.sub(r'(_commit=["\']?)[a-fA-F0-9]{7,40}(["\']?)', r"\g<1>" + new_commit + r"\2", new_content)
+
+                      if new_content != content:
+                          ebuild_path.write_text(new_content, encoding="utf-8")
+                          updated_atoms.add(pkg_cat_name)
+                          print(f"    ✅ Updated commit hash to {short_commit}")
+                      else:
+                          print("    ✅ Up to date.")
+              else:
+                  curr_ver_m = re.search(r'-([0-9][0-9.]*(?:_p[0-9]+)?(?:-r[0-9]+)?)\.ebuild$', ebuild_path.name)
+                  if not curr_ver_m: continue
+                  curr_ver = curr_ver_m.group(1)
+                  
+                  latest_ver = get_latest_github_release(repo)
+                  if latest_ver:
+                      if pkg_name == "mangowc" and latest_ver.startswith("12."): latest_ver = "0." + latest_ver
+                      try:
+                          is_newer = parse_version(latest_ver) > parse_version(curr_ver)
+                      except:
+                          is_newer = (latest_ver != curr_ver)
+                      
+                      if is_newer:
+                          new_path = pkg_dir / f"{pkg_name}-{latest_ver}.ebuild"
+                          ebuild_path.rename(new_path)
+                          updated_atoms.add(pkg_cat_name)
+                          print(f"    ✅ Bumping to {latest_ver}")
+                      else:
+                          print("    ✅ Up to date.")
+
+          if updated_atoms:
+              Path('changed_packages.txt').write_text('\n'.join(updated_atoms) + '\n', encoding="utf-8")
+          EOF
+
+      # =====================================================================
+      # PHASE 2: STRICT BINHOST AUDIT
+      # =====================================================================
+      - name: Strict Binhost Audit
+        run: |
+          BINHOST_URL="https://gentoo-nexus.sourceforge.io/Packages"
+          echo ">>> Auditing ebuilds against SourceForge..."
+          HTTP_STATUS=$(curl -sL -o sf_packages.txt -w "%{http_code}" --connect-timeout 15 --retry 3 "$BINHOST_URL" || echo "000")
+          
+          if [ "$HTTP_STATUS" -eq 200 ]; then
+              echo "✅ Index fetched successfully."
+          elif [ "$HTTP_STATUS" -eq 404 ]; then
+              echo "⚠️ Index not found (404). Assuming empty binhost."
+              touch sf_packages.txt
+          else
+              echo "🚨 FATAL: SourceForge connection failed (HTTP $HTTP_STATUS). Aborting."
+              exit 1
+          fi
+          
+          for ebuild in */*/*.ebuild; do
+              [ -e "$ebuild" ] || continue
+              pkg_dir=$(dirname "$ebuild")
+              CATEGORY=$(dirname "$pkg_dir")
+              EBUILD_NAME=$(basename "$ebuild" .ebuild)
+              CPV="${CATEGORY}/${EBUILD_NAME}"
+              if ! grep -q "^CPV: $CPV$" sf_packages.txt; then
+                  echo "$pkg_dir" >> changed_packages.txt
+              fi
+          done
+
+          if [ -f changed_packages.txt ] && [ -s changed_packages.txt ]; then
+              sort -u changed_packages.txt > changed_packages_unique.txt
+              mv changed_packages_unique.txt changed_packages.txt
+              echo "updates_found=true" >> "$GITHUB_OUTPUT"
+          else
+              echo "updates_found=false" >> "$GITHUB_OUTPUT"
+          fi
+
+      # =====================================================================
+      # PHASE 3: GENERATE MANIFESTS
+      # =====================================================================
+      - name: Generate Manifests
+        if: steps.scan.outputs.updates_found == 'true' || hashFiles('changed_packages.txt') != ''
+        run: |
+          mkdir -p /tmp/gentoo-tree /tmp/distfiles
+          chmod 777 /tmp/distfiles
+          
+          cat > manifest_script.sh << 'EOF'
+          #!/bin/bash
+          set -euo pipefail
+          mkdir -p /var/db/repos/gentoo
+          rm -rf /var/db/repos/gentoo/*
+          emerge-webrsync -q
+          eselect news read all >/dev/null 2>&1 || true
+          emerge --unmerge --quiet sys-libs/gpm 2>/dev/null || true
+          
+          mkdir -p /etc/portage/repos.conf
+          cat > /etc/portage/repos.conf/gentoo-nexus.conf << 'REPOCONF'
+          [gentoo-nexus]
+          location = /overlay
+          masters = gentoo
+          REPOCONF
+
+          cat >> /etc/portage/make.conf << 'MAKECONF'
+          FEATURES="-sandbox -usersandbox -ipc-sandbox -network-sandbox -pid-sandbox"
+          DISTDIR="/var/cache/distfiles"
+          MAKECONF
+
+          while IFS= read -r pkg; do
+            [ -z "$pkg" ] && continue
+            ebuild $(ls -1v /overlay/$pkg/*.ebuild | tail -n 1) manifest 2>&1 || true
+          done < /overlay/changed_packages.txt
+          EOF
+          chmod +x manifest_script.sh
+
+          docker run --rm --privileged \
+            -v "${{ github.workspace }}:/overlay" \
+            -v "/tmp/gentoo-tree:/var/db/repos/gentoo" \
+            -v "/tmp/distfiles:/var/cache/distfiles" \
+            gentoo/stage3:amd64-desktop-openrc bash /overlay/manifest_script.sh
+
+      # =====================================================================
+      # PHASE 4: COMMIT UPDATES TO GITHUB
+      # =====================================================================
+      - name: Commit Updates to GitHub
+        if: steps.scan.outputs.updates_found == 'true' || hashFiles('changed_packages.txt') != ''
+        run: |
+          git config user.name "github-actions[bot]"
+          git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
+          git add .
+          if ! git diff --cached --quiet; then
+            git commit -m "bot: auto-update ebuilds and manifests"
+            git pull --rebase origin "${GITHUB_REF_NAME}"
+            git push origin HEAD:"${GITHUB_REF_NAME}"
+          fi
+
+      # =====================================================================
+      # PHASE 5: COMPILE *ONLY* THE UPDATED CUSTOM PACKAGES
+      # =====================================================================
+      - name: Compile Updated Packages
+        if: steps.scan.outputs.updates_found == 'true' || hashFiles('changed_packages.txt') != ''
+        run: |
+          mkdir -p job_out /tmp/distfiles
+          chmod 777 /tmp/distfiles
+
+          cat > build_script.sh << 'BUILDEOF'
+          #!/bin/bash
+          set -euo pipefail
+          
+          echo ">>> Initializing Gentoo Stage3 Container..."
+          mkdir -p /var/db/repos/gentoo
+          rm -rf /var/db/repos/gentoo/*
+          emerge-webrsync -q
+          eselect news read all >/dev/null 2>&1 || true
+          command -v getuto >/dev/null 2>&1 && getuto || true
+          eselect profile set default/linux/amd64/23.0/desktop
+          
+          emerge --unmerge --quiet sys-libs/gpm 2>/dev/null || true
+          
+          # Fix: Create portage env directory natively
+          mkdir -p /etc/portage/{repos.conf,binrepos.conf,env,package.{accept_keywords,license,use,mask,env}}
+          mkdir -p /overlay/{distfiles,job_out}
+          mkdir -p /etc/portage/savedconfig/sys-kernel/
+
+          if [ -f /overlay/kernel-config/nexus-config-master ]; then
+              cp /overlay/kernel-config/nexus-config-master /etc/portage/savedconfig/sys-kernel/gentoo-kernel
+          fi
+
+          echo ">>> Configuring Repository Overlays..."
+          emerge --noreplace --quiet dev-lang/go dev-lang/rust-bin app-eselect/eselect-repository dev-vcs/git
+          eselect repository enable guru 2>/dev/null || true
+          emaint sync -r guru 2>/dev/null || true
+
+          cat > /etc/portage/repos.conf/gentoo-nexus.conf << 'REPOCONF'
+          [gentoo-nexus]
+          location = /overlay
+          masters = gentoo
+          priority = 9999
+          REPOCONF
+
+          cat > /etc/portage/repos.conf/guru.conf << 'REPOCONF'
+          [guru]
+          location = /var/db/repos/guru
+          masters = gentoo
+          REPOCONF
+
+          echo ">>> Applying GURU-specific ebuild hotfixes..."
+          for pkg in gui-libs/wlroots gui-libs/scenefx; do
+            if [ -d "/var/db/repos/guru/$pkg" ]; then
+              sed -i 's/media-libs\/mesa\/\[gbm\]/media-libs\/mesa/g' "/var/db/repos/guru/$pkg"/*.ebuild 2>/dev/null || true
+              sed -i 's/media-libs\/mesa\/\[gbm(+)\]/media-libs\/mesa/g' "/var/db/repos/guru/$pkg"/*.ebuild 2>/dev/null || true
+            fi
+          done
+
+          echo ">>> Configuring Universal Make.conf (x86-64-v3)..."
+          cat > /etc/portage/make.conf << 'MAKECONF'
+          COMMON_FLAGS="-O2 -march=x86-64-v3 -pipe"
+          CFLAGS="${COMMON_FLAGS}"
+          CXXFLAGS="${COMMON_FLAGS}"
+          RUSTFLAGS="-C target-cpu=x86-64-v3 -C opt-level=2"
+          USE="wayland X vulkan pipewire dbus elogind udev opengl dri gbm vaapi vdpau ffmpeg bluetooth screencast gstreamer minizip -daemon -systemd -aqua -cups"
+          VIDEO_CARDS="amdgpu radeon radeonsi intel iris nouveau virgl"
+          LINUX_FIRMWARE="amd-ucode intel-ucode amdgpu nvidia i915 rtl_nic ath10k ath11k iwlwifi mt76 rtw88 rtw89"
+          FEATURES="-userfetch -userpriv -usersandbox -ipc-sandbox -network-sandbox -pid-sandbox getbinpkg buildpkg parallel-install"
+          EMERGE_DEFAULT_OPTS="--getbinpkg --usepkg --binpkg-respect-use=y --binpkg-changed-deps=y --autounmask=y --autounmask-write --autounmask-backtrack=y --keep-going --quiet --update"
+          DISTDIR="/var/cache/distfiles"
+          PKGDIR="/overlay/job_out"
+          EGIT_CLONE_TYPE="single"
+          ACCEPT_LICENSE="*"
+          PORTAGE_BINPKG_TAR_OPTS="--warning=no-unknown-keyword"
+          MAKECONF
+
+          CORES=$(nproc)
+          echo "MAKEOPTS=\"-j${CORES} -l${CORES}\"" >> /etc/portage/make.conf
+
+          echo ">>> Applying GCC ICE Workarounds..."
+          cat > /etc/portage/env/gcc-ice-safe << 'EOF'
+          CFLAGS="-O1 -pipe -fno-tree-loop-vectorize -fno-tree-slp-vectorize"
+          CXXFLAGS="-O1 -pipe -fno-tree-loop-vectorize -fno-tree-slp-vectorize"
+          EOF
+          echo "MAKEOPTS=\"-j${CORES}\"" >> /etc/portage/env/gcc-ice-safe
+
+          cat > /etc/portage/package.env/gcc-ice-packages << 'EOF'
+          dev-util/spirv-tools gcc-ice-safe
+          media-libs/mesa gcc-ice-safe
+          EOF
+
+          cat > /etc/portage/package.mask/systemd << 'MASK'
+          sys-apps/systemd
+          sys-apps/gentoo-systemd-integration
+          MASK
+
+          cat > /etc/portage/package.mask/gpm << 'MASK'
+          sys-libs/gpm
+          MASK
+
+          # Fix: Mask broken GURU live ly build
+          cat > /etc/portage/package.mask/ly_fixes << 'MASK'
+          x11-misc/ly::guru
+          =x11-misc/ly-9999**
+          MASK
+
+          cat > /etc/portage/package.use/global << 'USE'
+          */* -systemd -gpm
+          sys-libs/ncurses -abi_x86_32
+          sys-libs/zlib minizip
+          media-video/pipewire extra sound-server
+          media-video/wireplumber extra
+          sys-kernel/gentoo-kernel savedconfig initramfs
+          sys-kernel/installkernel dracut grub
+          llvm-core/llvm xml zstd static-analyzer
+          llvm-core/clang extra xml static-analyzer
+          media-video/ffmpeg -sdl
+          media-libs/libsdl2 -pipewire
+          USE
+
+          echo ">>> Wiring Binhosts..."
+          cat > /etc/portage/binrepos.conf/gentoo.conf << 'REPOCONF'
+          [gentoo]
+          priority = 10000
+          sync-uri = https://distfiles.gentoo.org/releases/amd64/binpackages/23.0/x86-64/
+          verify-signature = false
+          REPOCONF
+
+          cat > /etc/portage/binrepos.conf/nexus.conf << 'REPOCONF'
+          [gentoo-nexus-sf]
+          priority = 9999
+          sync-uri = https://gentoo-nexus.sourceforge.io/
+          verify-signature = false
+          REPOCONF
+
+          echo "*/*::gentoo-nexus **" >> /etc/portage/package.accept_keywords/nexus
+          echo "*/*::guru **" >> /etc/portage/package.accept_keywords/guru
+          echo "*/* *" >> /etc/portage/package.license/all
+
+          echo ">>> Shielding gentoo-nexus packages from Guru overrides..."
+          for pkg in /overlay/*/*/*.ebuild; do
+            [ -e "$pkg" ] || continue
+            cat_pkg=$(echo "$pkg" | awk -F'/' '{print $(NF-2)"/"$(NF-1)}')
+            echo "$cat_pkg::guru" >> /etc/portage/package.mask/guru_shield
+          done
+
+          EXCLUDES="--usepkg-exclude sys-auth/polkit --usepkg-exclude dev-libs/libei --usepkg-exclude media-video/wireplumber --usepkg-exclude media-libs/libpulse --usepkg-exclude sys-apps/accountsservice --usepkg-exclude sys-auth/elogind"
+
+          echo ">>> Compiling Updated Overlay Packages Sequentially..."
+          # We build sequentially AND unmerge immediately to prevent mutually exclusive blocks (like noctalia vs quickshell)
+          while IFS= read -r pkg; do
+              [ -z "$pkg" ] && continue
+              echo "=================================================="
+              echo "🚀 Compiling $pkg"
+              echo "=================================================="
+              
+              for i in 1 2 3 4; do
+                  emerge $EXCLUDES --deep --newuse "$pkg" 2>&1 && break || true
+                  etc-update --automode -5 2>/dev/null || true
+              done
+
+              emerge $EXCLUDES --deep --newuse "$pkg" || true
+              emerge --unmerge --quiet "$pkg" || true
+          done < /overlay/changed_packages.txt
+          
+          BUILDEOF
+          chmod +x build_script.sh
+
+          docker run --rm --privileged \
+            -v "${{ github.workspace }}:/overlay" \
+            -v "/tmp/distfiles:/var/cache/distfiles" \
+            gentoo/stage3:amd64-desktop-openrc bash /overlay/build_script.sh
+
+      # =====================================================================
+      # PHASE 6: MERGE INDEX & DEPLOY TO SOURCEFORGE
+      # =====================================================================
+      - name: Deploy Additively to SourceForge
+        if: steps.scan.outputs.updates_found == 'true' || hashFiles('changed_packages.txt') != ''
+        env:
+          SF_USERNAME: ${{ secrets.SF_USERNAME }}
+          SF_SSH_KEY: ${{ secrets.SF_SSH_KEY }}
+        run: |
+          if [ -z "$(ls -A job_out/ 2>/dev/null)" ]; then
+            echo "No new packages built. Skipping deployment."
+            exit 0
+          fi
+
+          mkdir -p ~/.ssh && chmod 700 ~/.ssh
+          echo "$SF_SSH_KEY" > ~/.ssh/id_ed25519
+          chmod 600 ~/.ssh/id_ed25519
+          ssh-keyscan -t rsa,ecdsa,ed25519 web.sourceforge.net >> ~/.ssh/known_hosts
+          
+          cat > deploy_script.sh << 'EOF'
+          #!/bin/bash
+          set -euo pipefail
+          
+          python3 << 'PYEOF'
+          import urllib.request
+          import os
+
+          def parse_blocks(text):
+              blocks = dict()
+              current_block = list()
+              current_cpv = None
+              for line in text.splitlines(True):
+                  if line.startswith('PACKAGES:') or line.startswith('PKGDIR:'): continue
+                  if line.startswith('CPV:'): 
+                      _, cpv_val = line.split(':', 1)
+                      current_cpv = cpv_val.strip()
+                  current_block.append(line)
+                  if line.strip() == '':
+                      if current_cpv: blocks[current_cpv] = "".join(current_block).strip() + "\n\n"
+                      current_block = list()
+                      current_cpv = None
+              if current_cpv: blocks[current_cpv] = "".join(current_block).strip() + "\n\n"
+              return blocks
+
+          local_blocks = dict()
+          if os.path.exists('/overlay/job_out/Packages'):
+              with open('/overlay/job_out/Packages', 'r', encoding='utf-8') as f:
+                  local_blocks = parse_blocks(f.read())
+
+          server_blocks = dict()
+          try:
+              req = urllib.request.urlopen("https://gentoo-nexus.sourceforge.io/Packages", timeout=15)
+              server_blocks = parse_blocks(req.read().decode('utf-8'))
+          except Exception as e:
+              print("Notice: Server index missing or unreachable. Starting fresh.")
+
+          final_blocks = server_blocks.copy()
+          
+          for cpv, block_text in local_blocks.items():
+              pkg_name = "/".join(cpv.split("-")[:-1]) if "-" in cpv else cpv 
+              keys_to_remove = [k for k in final_blocks.keys() if k.startswith(pkg_name + "-")]
+              for k in keys_to_remove:
+                  del final_blocks[k]
+              final_blocks[cpv] = block_text
+
+          with open('/overlay/job_out/Packages', 'w', encoding='utf-8') as f:
+              f.write("PKGDIR: .\nPACKAGES:\n\n")
+              for cpv in sorted(final_blocks.keys()):
+                  f.write(final_blocks.get(cpv))
+
+          html = "<!DOCTYPE html><html><head><title>Gentoo Nexus Binhost</title><style>body { font-family: monospace; background: #1a1a1a; color: #e0e0e0; padding: 2em; } a { color: #66d9ef; }</style></head><body><h1>Gentoo Nexus Binhost</h1>"
+          html += "<p>Last Updated: " + os.popen("date -u '+%Y-%m-%d %H:%M:%S UTC'").read().strip() + "</p><pre>\n"
+          for cpv in sorted(final_blocks.keys()):
+              html += f"{cpv}\n"
+          html += "</pre></body></html>"
+          
+          with open('/overlay/job_out/index.html', 'w', encoding='utf-8') as f:
+              f.write(html)
+          PYEOF
+          EOF
+          chmod +x deploy_script.sh
+          docker run --rm -v "${{ github.workspace }}:/overlay" -w /overlay gentoo/stage3:amd64-desktop-openrc bash /overlay/deploy_script.sh
+
+          echo ">>> Deploying updated packages additively to SourceForge..."
+          rsync -avz -e "ssh -o StrictHostKeyChecking=no" job_out/ $SF_USERNAME@web.sourceforge.net:/home/project-web/gentoo-nexus/htdocs/

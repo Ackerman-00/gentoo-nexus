@@ -1,32 +1,73 @@
-name: Universal Nexus Factory (Core OS Builder)
+name: Manual Build (The Sniper)
 
 on:
-  schedule:
-    - cron: '0 4 * * *' # Runs 2 hours after check-updates
   workflow_dispatch:
     inputs:
+      atom:
+        description: 'Package atom to build (e.g. gui-wm/niri)'
+        required: true
+        type: string
       force_rebuild:
-        description: 'Force rebuild of base OS packages (Ignore SourceForge Binhost)'
+        description: 'Force rebuild even if binary exists on SourceForge'
         required: false
         type: boolean
         default: false
 
 concurrency:
-  group: build-nexus-core-os
+  group: build-${{ github.event.inputs.atom }}
   cancel-in-progress: false
 
 permissions:
   contents: write
 
 jobs:
-  build-base-system:
+  build-and-deploy:
     runs-on: ubuntu-latest
-    timeout-minutes: 720
+    timeout-minutes: 360
     steps:
-      - name: Checkout Repository
+      - name: Checkout
         uses: actions/checkout@v4
 
-      - name: Execute Core System Factory Build
+      - name: Check SourceForge Binhost Status
+        id: check_bin
+        run: |
+          PKG="${{ github.event.inputs.atom }}"
+          BINHOST="https://gentoo-nexus.sourceforge.io/Packages"
+
+          if [ "${{ github.event.inputs.force_rebuild }}" = "true" ]; then
+            echo "skip=false" >> "$GITHUB_OUTPUT"
+            exit 0
+          fi
+
+          EBUILD_FILE=$(ls -1v "${PKG}"/*.ebuild 2>/dev/null | tail -n 1)
+          if [ -z "$EBUILD_FILE" ]; then
+            echo "skip=false" >> "$GITHUB_OUTPUT"
+            exit 0
+          fi
+          
+          PN=$(basename "${PKG}")
+          VER=$(basename "${EBUILD_FILE}" | sed -E "s/^${PN}-//; s/\.ebuild$//")
+          
+          HTTP_STATUS=$(curl -sL -o sf_packages.txt -w "%{http_code}" --connect-timeout 15 --retry 3 "$BINHOST" || echo "000")
+          
+          if [ "$HTTP_STATUS" -eq 200 ]; then
+            if grep -q "^CPV: ${PKG}-${VER}$" sf_packages.txt; then
+              echo "✅ Binary for ${PKG}-${VER} exists. Skipping!"
+              echo "skip=true" >> "$GITHUB_OUTPUT"
+            else
+              echo "🚀 No binary found. Proceeding to build."
+              echo "skip=false" >> "$GITHUB_OUTPUT"
+            fi
+          elif [ "$HTTP_STATUS" -eq 404 ]; then
+            echo "🚀 Index is 404 (Empty Binhost). Proceeding to build."
+            echo "skip=false" >> "$GITHUB_OUTPUT"
+          else
+             echo "🚨 SourceForge timeout ($HTTP_STATUS). Skipping to prevent damage."
+             echo "skip=true" >> "$GITHUB_OUTPUT"
+          fi
+
+      - name: Build Binary Package
+        if: steps.check_bin.outputs.skip == 'false'
         run: |
           mkdir -p job_out /tmp/distfiles
           chmod 777 /tmp/distfiles
@@ -166,49 +207,22 @@ jobs:
             echo "$cat_pkg::guru" >> /etc/portage/package.mask/guru_shield
           done
 
-          # CORE SYSTEM PACKAGES - Ignored by check-updates, handled strictly here
-          BASE_LIST=(
-              sys-kernel/gentoo-kernel
-              sys-kernel/linux-firmware
-              sys-firmware/intel-microcode
-              sys-kernel/dracut
-              sys-boot/grub
-              sys-boot/efibootmgr
-              sys-auth/elogind
-              sys-auth/seatd
-              media-video/pipewire
-              media-video/wireplumber
-              net-misc/networkmanager
-              sys-power/upower
-              app-misc/jq
-              sys-block/zram-init
-              x11-misc/ly
-              x11-misc/sddm
-              gui-libs/greetd
-              gui-apps/tuigreet
-              x11-terms/alacritty
-              x11-terms/kitty
-              app-editors/nano
-              sys-apps/ripgrep
-              media-libs/mesa
-              media-libs/vulkan-loader
-              dev-util/spirv-tools
-          )
-
           EXCLUDES="--usepkg-exclude sys-auth/polkit --usepkg-exclude dev-libs/libei --usepkg-exclude media-video/wireplumber --usepkg-exclude media-libs/libpulse --usepkg-exclude sys-apps/accountsservice --usepkg-exclude sys-auth/elogind"
 
-          echo ">>> Updating Dependency Graph & Compiling Core Upstream Packages..."
+          TARGET_PKG="${{ github.event.inputs.atom }}"
+
+          echo ">>> Updating Dependency Graph & Compiling Target..."
           FORCE_REBUILD="${{ github.event.inputs.force_rebuild }}"
           if [ "$FORCE_REBUILD" == "true" ]; then
               rm -f /etc/portage/binrepos.conf/nexus.conf
           fi
 
           for i in 1 2 3 4; do
-              emerge $EXCLUDES --deep --newuse "${BASE_LIST[@]}" 2>&1 && break || true
+              emerge $EXCLUDES --deep --newuse "$TARGET_PKG" 2>&1 && break || true
               etc-update --automode -5 2>/dev/null || true
           done
 
-          emerge $EXCLUDES --deep --newuse "${BASE_LIST[@]}"
+          emerge $EXCLUDES --deep --newuse "$TARGET_PKG"
           
           BUILDEOF
           chmod +x build_script.sh
@@ -219,12 +233,13 @@ jobs:
             gentoo/stage3:amd64-desktop-openrc bash /overlay/build_script.sh
 
       - name: Deploy Additively to SourceForge
+        if: steps.check_bin.outputs.skip == 'false'
         env:
           SF_USERNAME: ${{ secrets.SF_USERNAME }}
           SF_SSH_KEY: ${{ secrets.SF_SSH_KEY }}
         run: |
           if [ -z "$(ls -A job_out/ 2>/dev/null)" ]; then
-            echo "No new core packages built. Skipping deployment."
+            echo "No new packages built. Skipping deployment."
             exit 0
           fi
 
