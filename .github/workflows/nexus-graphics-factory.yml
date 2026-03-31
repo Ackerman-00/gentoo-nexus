@@ -71,7 +71,7 @@ jobs:
           VIDEO_CARDS="amdgpu radeon radeonsi intel iris nouveau virgl"
           LINUX_FIRMWARE="amd-ucode intel-ucode amdgpu nvidia i915 rtl_nic ath10k ath11k iwlwifi mt76 rtw88 rtw89"
           FEATURES="-userfetch -userpriv -usersandbox -ipc-sandbox -network-sandbox -pid-sandbox getbinpkg buildpkg parallel-install"
-          EMERGE_DEFAULT_OPTS="--getbinpkg --usepkg --binpkg-respect-use=y --binpkg-changed-deps=y --autounmask=y --autounmask-write --autounmask-backtrack=y --keep-going --quiet --update"
+          EMERGE_DEFAULT_OPTS="--getbinpkg --usepkg --binpkg-respect-use=y --binpkg-changed-deps=n --autounmask=y --autounmask-write --autounmask-backtrack=y --keep-going --quiet --update"
           DISTDIR="/var/cache/distfiles"
           PKGDIR="/overlay/job_out"
           EGIT_CLONE_TYPE="single"
@@ -105,7 +105,6 @@ jobs:
 
           cat > /etc/portage/package.use/global << 'USE'
           */* -systemd -gpm
-          sys-libs/ncurses -abi_x86_32
           sys-libs/zlib minizip
           media-video/pipewire extra sound-server
           media-video/wireplumber extra
@@ -283,13 +282,14 @@ jobs:
 
           cat > /etc/portage/package.accept_keywords/steam << 'EOF'
           */*::steam-overlay **
-          games-util/game-device-udev-rules ~amd64
-          sys-libs/libudev-compat ~amd64
+          games-util/game-device-udev-rules **
+          sys-libs/libudev-compat **
           EOF
 
-          echo "media-libs/mesa ~amd64 **" >> /etc/portage/package.accept_keywords/nexus
-          echo "media-libs/vulkan-loader ~amd64 **" >> /etc/portage/package.accept_keywords/nexus
-          echo "dev-util/spirv-tools ~amd64 **" >> /etc/portage/package.accept_keywords/nexus
+          # Architect Fix: Strictly ** to guarantee 9999 packages build smoothly
+          echo "media-libs/mesa **" >> /etc/portage/package.accept_keywords/nexus
+          echo "media-libs/vulkan-loader **" >> /etc/portage/package.accept_keywords/nexus
+          echo "dev-util/spirv-tools **" >> /etc/portage/package.accept_keywords/nexus
 
           # GRAPHICS & STEAM PACKAGES ONLY
           BASE_LIST=(
