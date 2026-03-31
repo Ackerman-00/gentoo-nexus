@@ -164,7 +164,7 @@ jobs:
 
           cat > /etc/portage/package.mask/ly_fixes << 'MASK'
           x11-misc/ly::guru
-          =x11-misc/ly-9999**
+          =x11-misc/ly-9999
           MASK
 
           cat > /etc/portage/package.use/global << 'USE'
@@ -199,6 +199,13 @@ jobs:
           echo "*/*::gentoo-nexus **" >> /etc/portage/package.accept_keywords/nexus
           echo "*/*::guru **" >> /etc/portage/package.accept_keywords/guru
           echo "*/* *" >> /etc/portage/package.license/all
+
+          echo "sys-kernel/gentoo-kernel ~amd64 **" >> /etc/portage/package.accept_keywords/nexus
+          echo "virtual/dist-kernel ~amd64 **" >> /etc/portage/package.accept_keywords/nexus
+          echo "sys-kernel/linux-firmware ~amd64 **" >> /etc/portage/package.accept_keywords/nexus
+          echo "media-libs/mesa ~amd64 **" >> /etc/portage/package.accept_keywords/nexus
+          echo "media-libs/vulkan-loader ~amd64 **" >> /etc/portage/package.accept_keywords/nexus
+          echo "dev-util/spirv-tools ~amd64 **" >> /etc/portage/package.accept_keywords/nexus
 
           echo ">>> Shielding gentoo-nexus packages from Guru overrides..."
           for pkg in /overlay/*/*/*.ebuild; do

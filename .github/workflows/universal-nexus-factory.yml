@@ -2,7 +2,7 @@ name: Universal Nexus Factory (Core OS Builder)
 
 on:
   schedule:
-    - cron: '0 4 * * *' # Runs 2 hours after check-updates
+    - cron: '0 4 * * *' # Runs daily to check for Gentoo upstream core updates
   workflow_dispatch:
     inputs:
       force_rebuild:
@@ -21,7 +21,7 @@ permissions:
 jobs:
   build-base-system:
     runs-on: ubuntu-latest
-    timeout-minutes: 720
+    timeout-minutes: 720 # 12 Hours max to allow for Kernel + Mesa compilation
     steps:
       - name: Checkout Repository
         uses: actions/checkout@v4
@@ -45,6 +45,7 @@ jobs:
           
           emerge --unmerge --quiet sys-libs/gpm 2>/dev/null || true
           
+          # Architect Fix: Proper env directory creation to avoid GCC sandbox crashes
           mkdir -p /etc/portage/{repos.conf,binrepos.conf,env,package.{accept_keywords,license,use,mask,env}}
           mkdir -p /overlay/{distfiles,job_out}
           mkdir -p /etc/portage/savedconfig/sys-kernel/
@@ -86,6 +87,8 @@ jobs:
           CXXFLAGS="${COMMON_FLAGS}"
           RUSTFLAGS="-C target-cpu=x86-64-v3 -C opt-level=2"
           USE="wayland X vulkan pipewire dbus elogind udev opengl dri gbm vaapi vdpau ffmpeg bluetooth screencast gstreamer minizip -daemon -systemd -aqua -cups"
+          
+          # Architect Fix: Include legacy radeon to satisfy libdrm DRM requirements
           VIDEO_CARDS="amdgpu radeon radeonsi intel iris nouveau virgl"
           LINUX_FIRMWARE="amd-ucode intel-ucode amdgpu nvidia i915 rtl_nic ath10k ath11k iwlwifi mt76 rtw88 rtw89"
           FEATURES="-userfetch -userpriv -usersandbox -ipc-sandbox -network-sandbox -pid-sandbox getbinpkg buildpkg parallel-install"
@@ -123,9 +126,10 @@ jobs:
 
           cat > /etc/portage/package.mask/ly_fixes << 'MASK'
           x11-misc/ly::guru
-          =x11-misc/ly-9999**
+          =x11-misc/ly-9999
           MASK
 
+          # Architect Fix: Break ffmpeg/sdl2 circular dependency loop
           cat > /etc/portage/package.use/global << 'USE'
           */* -systemd -gpm
           sys-libs/ncurses -abi_x86_32
@@ -159,6 +163,14 @@ jobs:
           echo "*/*::guru **" >> /etc/portage/package.accept_keywords/guru
           echo "*/* *" >> /etc/portage/package.license/all
 
+          # Architect Fix: Force Mesa 26 and Kernel 6.19+ unmasking
+          echo "sys-kernel/gentoo-kernel ~amd64 **" >> /etc/portage/package.accept_keywords/nexus
+          echo "virtual/dist-kernel ~amd64 **" >> /etc/portage/package.accept_keywords/nexus
+          echo "sys-kernel/linux-firmware ~amd64 **" >> /etc/portage/package.accept_keywords/nexus
+          echo "media-libs/mesa ~amd64 **" >> /etc/portage/package.accept_keywords/nexus
+          echo "media-libs/vulkan-loader ~amd64 **" >> /etc/portage/package.accept_keywords/nexus
+          echo "dev-util/spirv-tools ~amd64 **" >> /etc/portage/package.accept_keywords/nexus
+
           echo ">>> Shielding gentoo-nexus packages from Guru overrides..."
           for pkg in /overlay/*/*/*.ebuild; do
             [ -e "$pkg" ] || continue
@@ -167,17 +179,22 @@ jobs:
           done
 
           # CORE SYSTEM PACKAGES - Ignored by check-updates, handled strictly here
+          # Including steam-launcher to force 32-bit mesa multilib resolution natively
           BASE_LIST=(
               sys-kernel/gentoo-kernel
               sys-kernel/linux-firmware
               sys-firmware/intel-microcode
+              media-libs/mesa
+              media-libs/vulkan-loader
+              dev-util/spirv-tools
+              games-util/steam-launcher
+              media-video/pipewire
+              media-video/wireplumber
               sys-kernel/dracut
               sys-boot/grub
               sys-boot/efibootmgr
               sys-auth/elogind
               sys-auth/seatd
-              media-video/pipewire
-              media-video/wireplumber
               net-misc/networkmanager
               sys-power/upower
               app-misc/jq
@@ -190,9 +207,6 @@ jobs:
               x11-terms/kitty
               app-editors/nano
               sys-apps/ripgrep
-              media-libs/mesa
-              media-libs/vulkan-loader
-              dev-util/spirv-tools
           )
 
           EXCLUDES="--usepkg-exclude sys-auth/polkit --usepkg-exclude dev-libs/libei --usepkg-exclude media-video/wireplumber --usepkg-exclude media-libs/libpulse --usepkg-exclude sys-apps/accountsservice --usepkg-exclude sys-auth/elogind"
@@ -208,6 +222,7 @@ jobs:
               etc-update --automode -5 2>/dev/null || true
           done
 
+          # Emerge utilizing the SourceForge binhost for speed unless a version bump occurred
           emerge $EXCLUDES --deep --newuse "${BASE_LIST[@]}"
           
           BUILDEOF
