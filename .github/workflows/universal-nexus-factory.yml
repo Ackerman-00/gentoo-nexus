@@ -49,6 +49,7 @@ jobs:
         env:
           GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
         run: |
+          # User's brilliant ebuild hotfixes for LLVM 22, Display-info, Mesa GBM, and MangoWC
           find . -path ./cache -prune -o -type f -name '*.ebuild' -exec sed -i 's/LLVM_COMPAT=( {18..21} )/LLVM_COMPAT=( {18..22} )/g' {} + || true
           find . -path ./cache -prune -o -type f -name '*.ebuild' -exec sed -i 's/gui-libs\/display-info/media-libs\/libdisplay-info/g' {} + || true
           find . -path ./cache -prune -o -type f -name '*.ebuild' -exec sed -i 's/media-libs\/mesa\[gbm\]/media-libs\/mesa/g' {} + || true
@@ -407,6 +408,12 @@ jobs:
           sys-libs/gpm
           MASK
 
+          # Architect Fix: Mask broken GURU ly-9999 to use Gentoo's stable, functional Ly
+          cat > /etc/portage/package.mask/ly_fixes << 'MASK'
+          x11-misc/ly::guru
+          =x11-misc/ly-9999**
+          MASK
+
           # Architect Fix: Break the ffmpeg <-> pipewire <-> libsdl2 circular dependency by disabling ffmpeg's sdl plugin
           cat > /etc/portage/package.use/global << 'USE'
           */* -systemd -gpm
@@ -500,7 +507,7 @@ jobs:
 
           # Final Execution Pass for the core ecosystem
           emerge $EXCLUDES --deep --newuse "${MASTER_LIST[@]}"
-          
+
           echo ">>> Compiling Conflicting Ecosystem 1: Dank Material Shell & Quickshell..."
           emerge $EXCLUDES --deep --newuse gui-wm/dank-material-shell gui-apps/quickshell || true
           
