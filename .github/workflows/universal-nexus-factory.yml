@@ -124,8 +124,8 @@ jobs:
           sys-libs/gpm
           MASK
 
+          # Architect Fix: Ly is only in GURU! Mask only the broken live build to force stable 1.3.2
           cat > /etc/portage/package.mask/ly_fixes << 'MASK'
-          x11-misc/ly::guru
           =x11-misc/ly-9999
           MASK
 
