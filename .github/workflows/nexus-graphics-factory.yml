@@ -2,7 +2,7 @@ name: Nexus Factory (Graphics & Steam Builder)
 
 on:
   schedule:
-    - cron: '0 6 * * *' # Runs 2 hours after the Core OS Builder
+    - cron: '0 6 * * *' 
   workflow_dispatch:
     inputs:
       force_rebuild:
@@ -70,8 +70,11 @@ jobs:
           USE="wayland X vulkan pipewire dbus elogind udev opengl dri gbm vaapi vdpau ffmpeg bluetooth screencast gstreamer minizip -daemon -systemd -aqua -cups"
           VIDEO_CARDS="amdgpu radeon radeonsi intel iris nouveau virgl"
           LINUX_FIRMWARE="amd-ucode intel-ucode amdgpu nvidia i915 rtl_nic ath10k ath11k iwlwifi mt76 rtw88 rtw89"
-          FEATURES="-userfetch -userpriv -usersandbox -ipc-sandbox -network-sandbox -pid-sandbox getbinpkg buildpkg parallel-install"
+          FEATURES="-userfetch -userpriv -usersandbox -ipc-sandbox -network-sandbox -pid-sandbox getbinpkg buildpkg parallel-install -binpkg-request-signature"
+          
+          # Architect Fix: Changed deps=n to force binary pulling
           EMERGE_DEFAULT_OPTS="--getbinpkg --usepkg --binpkg-respect-use=y --binpkg-changed-deps=n --autounmask=y --autounmask-write --autounmask-backtrack=y --keep-going --quiet --update"
+          
           DISTDIR="/var/cache/distfiles"
           PKGDIR="/overlay/job_out"
           EGIT_CLONE_TYPE="single"
