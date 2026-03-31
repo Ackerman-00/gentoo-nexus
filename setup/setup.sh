@@ -1,5 +1,5 @@
 #!/bin/bash
-# GENTOO NEXUS ARCHITECT - MASTER DEPLOYMENT ENGINE (2026.10.20-PRO)
+# GENTOO NEXUS ARCHITECT - MASTER DEPLOYMENT ENGINE (2026.10.27-PRO)
 # Fully Audited for AMD/Intel Architectures, Portage Substitution, and Binhost Priority
 
 set -eo pipefail
@@ -8,7 +8,7 @@ exec > >(tee -i /var/log/gentoo-nexus-install.log) 2>&1
 #==============================================================================
 # CONFIGURATION & CONSTANTS
 #==============================================================================
-readonly SCRIPT_VERSION="2026.10.20-NEXUS-PRO"
+readonly SCRIPT_VERSION="2026.10.27-NEXUS-PRO"
 readonly LOCKFILE="/var/lib/gentoo-nexus-installed"
 readonly LOGFILE="/var/log/gentoo-nexus-install.log"
 readonly NEXUS_REPO_URL="https://github.com/Ackerman-00/gentoo-nexus.git"
@@ -110,7 +110,7 @@ repo_enable_safe() {
 #==============================================================================
 clear 2>/dev/null || printf "\033c"
 echo -e "${B}================================================================${C}"
-echo -e "${G}    GENTOO NEXUS ARCHITECT: MASTER DEPLOYMENT (2026.10.20)      ${C}"
+echo -e "${G}    GENTOO NEXUS ARCHITECT: MASTER DEPLOYMENT (2026.10.27)      ${C}"
 echo -e "${B}================================================================${C}"
 echo -e "Version: ${SCRIPT_VERSION}"
 echo -e "Binhost: ${NEXUS_BINHOST}"
@@ -200,7 +200,7 @@ sync-uri = ${NEXUS_BINHOST}
 verify-signature = false
 EOF
 
-# Priority 1 handles 32-bit Steam Mesa dependencies flawlessly from Gentoo
+# Priority 1 handles any generic dependencies flawlessly from Gentoo Official
 cat > /etc/portage/binrepos.conf/gentoo.conf << EOF
 [gentoo]
 priority = 1
@@ -208,13 +208,12 @@ sync-uri = https://distfiles.gentoo.org/releases/amd64/binpackages/23.0/x86-64/
 verify-signature = false
 EOF
 
-# Architect Fix: Initialize the Portage trust helper to prevent gpg-exit 33554433 errors
+# Initialize the Portage trust helper to prevent gpg-exit 33554433 errors
 command -v getuto >/dev/null 2>&1 && getuto || true
 
 #==============================================================================
 # HARDWARE-SPECIFIC CONFIGURATION
 #==============================================================================
-# Architect Fix: AMD systems use linux-firmware for microcode. Intel uses intel-microcode.
 case $hw_choice in
     1) ZRAM_SIZE="6144M"; CPU_ARCH="znver3"; NEED_WIFI="no"; G_CMD=""; LINUX_FW="amd-ucode amdgpu rtl_nic"; UCODE="" ;;
     2) ZRAM_SIZE="8192M"; CPU_ARCH="znver4"; NEED_WIFI="no"; G_CMD="nouveau.modeset=1"; LINUX_FW="amd-ucode nvidia rtl_nic"; UCODE="" ;;
@@ -222,34 +221,27 @@ case $hw_choice in
     4) ZRAM_SIZE="8192M"; CPU_ARCH="skylake"; NEED_WIFI="yes"; G_CMD="i915.enable_psr=0"; LINUX_FW="intel-ucode i915 iwlwifi"; UCODE="sys-firmware/intel-microcode" ;;
 esac
 
-STEAM_USE=""
-[[ "${steam_choice,,}" == "y" ]] && STEAM_USE=" abi_x86_32"
-
-# Architect Fix: Injecting ${CORES} cleanly prevents substitution errors in portage.
-# Architect Fix: Disabled sandboxing features to prevent EPERM errors in Podman/Docker tests
+# Architect Fix: Removed global STEAM_USE injection to maintain 100% parity with Factory Binhost USE flags.
 cat > /etc/portage/make.conf << EOF
 COMMON_FLAGS="-O2 -march=${CPU_ARCH} -mtune=${CPU_ARCH} -pipe"
 CFLAGS="\${COMMON_FLAGS}"
 CXXFLAGS="\${COMMON_FLAGS}"
 RUSTFLAGS="-C opt-level=2"
 MAKEOPTS="-j${CORES} -l${CORES}"
-USE="wayland X vulkan pipewire dbus elogind udev opengl dri gbm vaapi vdpau ffmpeg bluetooth screencast gstreamer minizip${STEAM_USE} -daemon -systemd -aqua -cups"
-# Open-Source Native: Matches your Custom Nexus Kernel perfectly
-VIDEO_CARDS="amdgpu radeonsi intel iris nouveau"
+USE="wayland X vulkan pipewire dbus elogind udev opengl dri gbm vaapi vdpau ffmpeg bluetooth screencast gstreamer minizip -daemon -systemd -aqua -cups"
+VIDEO_CARDS="amdgpu radeon radeonsi intel iris nouveau virgl"
 LINUX_FIRMWARE="${LINUX_FW}"
-FEATURES="getbinpkg -userfetch -userpriv -usersandbox -ipc-sandbox -pid-sandbox -network-sandbox"
+FEATURES="getbinpkg -userfetch -userpriv -usersandbox -ipc-sandbox -pid-sandbox -network-sandbox parallel-install"
 ACCEPT_LICENSE="*"
 PKGDIR="/var/cache/binpkgs"
 DISTDIR="/var/cache/distfiles"
 LC_MESSAGES=C.utf8
-# Architect Fix: Disable signature verification globally to prevent GPG errors when fetching binpkgs
 PORTAGE_BINPKG_TAR_OPTS="--warning=no-unknown-keyword"
 EOF
 
 #==============================================================================
-# PORTAGE DIRECTORY STRUCTURE
+# PORTAGE MASKING & CONFIG
 #==============================================================================
-log_msg "${B}>>> Creating Portage configuration directories...${C}"
 mkdir -p /etc/portage/profile
 mkdir -p /etc/portage/package.use
 mkdir -p /etc/portage/package.mask
@@ -259,9 +251,6 @@ mkdir -p /etc/portage/package.license
 mkdir -p /etc/portage/package.env
 mkdir -p /etc/portage/env
 
-#==============================================================================
-# SYSTEMD MASKING & PACKAGE PROVIDED
-#==============================================================================
 cat > /etc/portage/package.mask/systemd << 'MASK'
 sys-apps/systemd
 sys-apps/gentoo-systemd-integration
@@ -284,7 +273,6 @@ UNMASK
 #==============================================================================
 log_msg "${B}>>> Applying GCC 15 ICE workarounds...${C}"
 
-# Architect Fix: Unquoted EOF with explicit ${CORES} injection prevents bad substitution.
 cat > /etc/portage/env/gcc-ice-safe << EOF
 CFLAGS="-O1 -pipe -fno-tree-loop-vectorize -fno-tree-slp-vectorize"
 CXXFLAGS="-O1 -pipe -fno-tree-loop-vectorize -fno-tree-slp-vectorize"
@@ -316,17 +304,162 @@ sys-fs/eudev -systemd
 virtual/udev -systemd
 virtual/libudev -systemd
 sys-libs/ncurses -gpm
+media-video/ffmpeg -sdl
 media-libs/libsdl2 -pipewire
-# Match the Custom Binary Kernel configuration exactly
 sys-kernel/gentoo-kernel savedconfig initramfs
 sys-kernel/installkernel dracut grub
 USE
 
-cat > /etc/portage/package.use/video_overrides << 'USE'
-x11-libs/libdrm video_cards_nouveau video_cards_radeon
+if [[ "${steam_choice,,}" == "y" ]]; then
+    # Architect Fix: Massive Gentoo Wiki 32-bit Map. Applied locally to match factory logic.
+    cat > /etc/portage/package.use/steam << 'USE'
+app-accessibility/at-spi2-core abi_x86_32
+app-arch/bzip2 abi_x86_32
+app-arch/lz4 abi_x86_32
+app-arch/xz-utils abi_x86_32
+app-arch/zstd abi_x86_32
+app-crypt/p11-kit abi_x86_32
+dev-db/sqlite abi_x86_32
+dev-lang/rust abi_x86_32
+dev-lang/rust-bin abi_x86_32
+dev-libs/dbus-glib abi_x86_32
+dev-libs/elfutils abi_x86_32
+dev-libs/expat abi_x86_32
+dev-libs/fribidi abi_x86_32
+dev-libs/glib abi_x86_32
+dev-libs/gmp abi_x86_32
+dev-libs/icu abi_x86_32
+dev-libs/json-glib abi_x86_32
+dev-libs/leancrypto abi_x86_32
+dev-libs/libevdev abi_x86_32
+dev-libs/libffi abi_x86_32
+dev-libs/libgcrypt abi_x86_32
+dev-libs/libgpg-error abi_x86_32
+dev-libs/libgudev abi_x86_32
+dev-libs/libgusb abi_x86_32
+dev-libs/libpcre2 abi_x86_32
+dev-libs/libtasn1 abi_x86_32
+dev-libs/libunistring abi_x86_32
+dev-libs/libusb abi_x86_32
+dev-libs/libxml2 abi_x86_32
+dev-libs/lzo abi_x86_32
+dev-libs/nettle abi_x86_32
+dev-libs/nspr abi_x86_32
+dev-libs/nss abi_x86_32
+dev-libs/openssl abi_x86_32
+dev-libs/wayland abi_x86_32
+dev-util/glslang abi_x86_32
+dev-util/spirv-tools abi_x86_32
+dev-util/sysprof-capture abi_x86_32
+dev-util/vulkan-utility-libraries abi_x86_32
+gnome-base/librsvg abi_x86_32
+gui-libs/libdecor abi_x86_32
+llvm-core/clang abi_x86_32
+llvm-core/llvm abi_x86_32
+media-gfx/graphite2 abi_x86_32
+media-libs/alsa-lib abi_x86_32
+media-libs/flac abi_x86_32
+media-libs/fontconfig abi_x86_32
+media-libs/freetype abi_x86_32
+media-libs/glu abi_x86_32
+media-libs/harfbuzz abi_x86_32
+media-libs/lcms abi_x86_32
+media-libs/libdisplay-info abi_x86_32
+media-libs/libepoxy abi_x86_32
+media-libs/libglvnd abi_x86_32
+media-libs/libjpeg-turbo abi_x86_32
+media-libs/libogg abi_x86_32
+media-libs/libpng abi_x86_32
+media-libs/libpulse abi_x86_32
+media-libs/libsdl2 abi_x86_32
+media-libs/libsndfile abi_x86_32
+media-libs/libva abi_x86_32
+media-libs/libvorbis abi_x86_32
+media-libs/libwebp abi_x86_32
+media-libs/mesa abi_x86_32
+media-libs/openal abi_x86_32
+media-libs/opus abi_x86_32
+media-libs/tiff abi_x86_32
+media-libs/vulkan-layers abi_x86_32
+media-libs/vulkan-loader abi_x86_32 layers
+media-sound/lame abi_x86_32
+media-sound/mpg123-base abi_x86_32
+media-video/pipewire abi_x86_32
+net-dns/c-ares abi_x86_32
+net-dns/libidn2 abi_x86_32
+net-libs/gnutls abi_x86_32
+net-libs/libasyncns abi_x86_32
+net-libs/libndp abi_x86_32
+net-libs/libpsl abi_x86_32
+net-libs/nghttp2 abi_x86_32
+net-libs/nghttp3 abi_x86_32
+net-libs/ngtcp2 abi_x86_32
+net-misc/curl abi_x86_32
+net-misc/networkmanager abi_x86_32
+net-print/cups abi_x86_32
+sys-apps/dbus abi_x86_32
+sys-apps/lm-sensors abi_x86_32
+sys-apps/systemd abi_x86_32
+sys-apps/systemd-utils abi_x86_32
+sys-apps/util-linux abi_x86_32
+sys-libs/gdbm abi_x86_32
+sys-libs/gpm abi_x86_32
+sys-libs/libcap abi_x86_32
+sys-libs/libudev-compat abi_x86_32
+sys-libs/ncurses abi_x86_32
+sys-libs/pam abi_x86_32
+sys-libs/readline abi_x86_32
+sys-libs/zlib abi_x86_32
+virtual/glu abi_x86_32
+virtual/libelf abi_x86_32
+virtual/libiconv abi_x86_32
+virtual/libintl abi_x86_32
+virtual/libudev abi_x86_32
+virtual/libusb abi_x86_32
+virtual/opengl abi_x86_32
+virtual/zlib abi_x86_32
+x11-libs/cairo abi_x86_32
+x11-libs/extest abi_x86_32
+x11-libs/gdk-pixbuf abi_x86_32
+x11-libs/gtk+ abi_x86_32
+x11-libs/libdrm abi_x86_32
+x11-libs/libICE abi_x86_32
+x11-libs/libpciaccess abi_x86_32
+x11-libs/libSM abi_x86_32
+x11-libs/libvdpau abi_x86_32
+x11-libs/libX11 abi_x86_32
+x11-libs/libXau abi_x86_32
+x11-libs/libxcb abi_x86_32
+x11-libs/libXcomposite abi_x86_32
+x11-libs/libXcursor abi_x86_32
+x11-libs/libXdamage abi_x86_32
+x11-libs/libXdmcp abi_x86_32
+x11-libs/libXext abi_x86_32
+x11-libs/libXfixes abi_x86_32
+x11-libs/libXft abi_x86_32
+x11-libs/libXi abi_x86_32
+x11-libs/libXinerama abi_x86_32
+x11-libs/libxkbcommon abi_x86_32
+x11-libs/libXrandr abi_x86_32
+x11-libs/libXrender abi_x86_32
+x11-libs/libXScrnSaver abi_x86_32
+x11-libs/libxshmfence abi_x86_32
+x11-libs/libXtst abi_x86_32
+x11-libs/libXxf86vm abi_x86_32
+x11-libs/pango abi_x86_32
+x11-libs/pixman abi_x86_32
+x11-libs/xcb-util-keysyms abi_x86_32
+x11-misc/colord abi_x86_32
+gui-libs/egl-gbm abi_x86_32
+gui-libs/egl-wayland abi_x86_32
+gui-libs/egl-wayland2 abi_x86_32
+gui-libs/egl-x11 abi_x86_32
+x11-drivers/nvidia-drivers abi_x86_32
+sys-libs/glibc hash-sysv-compat
 USE
+fi
 
-# Architect Fix: Hardcode all required ~amd64 flags to prevent autounmask blockers
+# Architect Fix: Strictly `**` to correctly force testing/live keywords for core stack
 cat > /etc/portage/package.accept_keywords/nexus << 'EOF'
 */*::gentoo-nexus **
 x11-base/xwayland-satellite **
@@ -339,26 +472,33 @@ gui-apps/quickshell **
 app-misc/dgop **
 sys-apps/danksearch **
 x11-misc/matugen **
-x11-misc/ly ~amd64
-app-misc/brightnessctl ~amd64
-dev-libs/linux-syscall-support ~amd64
-dev-embedded/libdisasm ~amd64
-dev-util/breakpad ~amd64
-games-util/game-device-udev-rules ~amd64
+x11-misc/ly **
+app-misc/brightnessctl **
+dev-libs/linux-syscall-support **
+dev-embedded/libdisasm **
+dev-util/breakpad **
 media-libs/dav1d **
-media-libs/libdvdnav ~amd64
-media-libs/libdvdread ~amd64
-sys-kernel/linux-firmware ~amd64
-virtual/dist-kernel ~amd64
-net-im/vesktop-bin ~amd64
-games-util/steam-launcher ~amd64
-games-util/heroic-bin ~amd64
-games-util/protonplus-bin ~amd64
-sys-libs/libudev-compat ~amd64
-app-misc/cliphist ~amd64
-dev-lang/rust ~amd64
-dev-lang/rust-bin ~amd64
-sys-kernel/gentoo-kernel ~amd64
+media-libs/libdvdnav **
+media-libs/libdvdread **
+net-im/vesktop-bin **
+games-util/steam-launcher **
+games-util/heroic-bin **
+games-util/protonplus-bin **
+sys-libs/libudev-compat **
+app-misc/cliphist **
+dev-lang/rust **
+dev-lang/rust-bin **
+sys-kernel/gentoo-kernel **
+virtual/dist-kernel **
+sys-kernel/linux-firmware **
+media-libs/mesa **
+media-libs/vulkan-loader **
+dev-util/spirv-tools **
+EOF
+
+cat > /etc/portage/package.accept_keywords/steam << 'EOF'
+*/*::steam-overlay **
+games-util/game-device-udev-rules **
 EOF
 
 if [ -n "$G_CMD" ]; then
@@ -387,6 +527,13 @@ repo_add_safe "gentoo-nexus" "git" "${NEXUS_REPO_URL}"
 emaint sync -a 2>/dev/null || true
 eselect news read all >/dev/null 2>&1 || true
 
+echo ">>> Shielding gentoo-nexus packages from Guru overrides..."
+for pkg in /var/db/repos/gentoo-nexus/*/*/*.ebuild; do
+    [ -e "$pkg" ] || continue
+    cat_pkg=$(echo "$pkg" | awk -F'/' '{print $(NF-2)"/"$(NF-1)}')
+    echo "$cat_pkg::guru" >> /etc/portage/package.mask/guru_shield
+done
+
 #==============================================================================
 # [6/8] PACKAGE INSTALLATION
 #==============================================================================
@@ -407,6 +554,9 @@ INSTALL_LIST=(
     sys-power/upower
     app-misc/jq
     sys-block/zram-init
+    media-libs/mesa
+    media-libs/vulkan-loader
+    dev-util/spirv-tools
 )
 
 [[ -n "${UCODE}" ]] && INSTALL_LIST+=( "${UCODE}" )
@@ -419,7 +569,6 @@ case $de_choice in
     5) INSTALL_LIST+=( "kde-plasma/plasma-meta" ) ;;
 esac
 
-# Architect Fix: Strictly separated quickshell vs noctalia-qs to prevent soft-blocks.
 case $shell_choice in
     1) INSTALL_LIST+=( "gui-wm/noctalia-shell" "gui-apps/noctalia-qs" ) ;;
     2) INSTALL_LIST+=( "gui-wm/dank-material-shell" "gui-apps/quickshell" "app-misc/dgop" "sys-apps/danksearch" ) ;;
@@ -450,32 +599,26 @@ INSTALL_LIST+=(
     "sys-apps/ripgrep"
 )
 
-# Architect Fix: Ensure FEATURES="-binpkg-request-signature" bypasses GPG for ALL binary installations locally
 BIN_OPTS="--getbinpkg --usepkg --keep-going --autounmask=y --autounmask-write --autounmask-keep-masks=n"
 export FEATURES="-binpkg-request-signature"
+EXCLUDES="--usepkg-exclude sys-auth/polkit --usepkg-exclude dev-libs/libei --usepkg-exclude media-video/wireplumber --usepkg-exclude media-libs/libpulse --usepkg-exclude sys-apps/accountsservice --usepkg-exclude sys-auth/elogind"
 
 log_msg "${B}>>> Installing systemd-utils and libudev first...${C}"
 emerge ${BIN_OPTS} --oneshot --quiet sys-apps/systemd-utils virtual/libudev || true
 
-log_msg "${B}>>> Installing SPIRV-Tools with GCC ICE workaround...${C}"
-emerge ${BIN_OPTS} --oneshot dev-util/spirv-tools || {
-    log_msg "${Y}[!] spirv-tools failed, retrying with explicit environment...${C}"
-    emerge ${BIN_OPTS} --oneshot --config-root=/ dev-util/spirv-tools || true
-}
-
 set +e
-emerge ${BIN_OPTS} "${INSTALL_LIST[@]}"
+emerge ${BIN_OPTS} $EXCLUDES "${INSTALL_LIST[@]}"
 AUTOUNMASK_EXIT=$?
 set -e
 
 if [[ $AUTOUNMASK_EXIT -ne 0 ]] && [[ $AUTOUNMASK_EXIT -ne 1 ]]; then
     log_msg "${R}[!] ERROR: emerge failed (Exit Code: ${AUTOUNMASK_EXIT})${C}"
     log_msg "${Y}Attempting to continue with --skipfirst...${C}"
-    emerge ${BIN_OPTS} --skipfirst "${INSTALL_LIST[@]}" || true
+    emerge ${BIN_OPTS} $EXCLUDES --skipfirst "${INSTALL_LIST[@]}" || true
 fi
 
 etc-update --automode -5 2>/dev/null || true
-emerge ${BIN_OPTS} --update --newuse "${INSTALL_LIST[@]}" || true
+emerge ${BIN_OPTS} $EXCLUDES --update --newuse "${INSTALL_LIST[@]}" || true
 
 #==============================================================================
 # [7/8] USER & SERVICE SETUP
@@ -557,7 +700,7 @@ if mountpoint -q /boot/efi 2>/dev/null; then
         log_msg "${Y}[!] /boot/efi mounted but is not FAT32 (vfat). Run grub-install manually.${C}"
     fi
 else
-    log_msg "${Y}[!] /boot/efi not mounted. Run grub-install and grub-mkconfig manually.${C}"
+    log_msg "${Y}[!] /boot/efi not mounted. Skipping GRUB installation. Run grub-install manually after mounting.${C}"
 fi
 
 echo "LANG=en_US.UTF-8" > /etc/locale.conf
