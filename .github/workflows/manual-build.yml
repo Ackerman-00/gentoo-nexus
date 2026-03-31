@@ -99,6 +99,10 @@ jobs:
           eselect repository enable guru 2>/dev/null || true
           emaint sync -r guru 2>/dev/null || true
 
+          # Architect Fix: Ensure steam-overlay is enabled for manual steam-launcher builds
+          eselect repository enable steam-overlay 2>/dev/null || true
+          emaint sync -r steam-overlay 2>/dev/null || true
+
           cat > /etc/portage/repos.conf/gentoo-nexus.conf << 'REPOCONF'
           [gentoo-nexus]
           location = /overlay
@@ -198,6 +202,7 @@ jobs:
 
           echo "*/*::gentoo-nexus **" >> /etc/portage/package.accept_keywords/nexus
           echo "*/*::guru **" >> /etc/portage/package.accept_keywords/guru
+          echo "*/*::steam-overlay **" >> /etc/portage/package.accept_keywords/steam
           echo "*/* *" >> /etc/portage/package.license/all
 
           echo "sys-kernel/gentoo-kernel ~amd64 **" >> /etc/portage/package.accept_keywords/nexus
