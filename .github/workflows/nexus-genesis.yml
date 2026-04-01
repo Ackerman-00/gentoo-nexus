@@ -205,7 +205,6 @@ jobs:
           done
 
           echo ">>> Auditing Core OS Packages Against Binhost..."
-          # Reverted kernel atom check back to official gentoo-kernel
           CORE_ATOMS="sys-kernel/gentoo-kernel media-libs/mesa media-libs/vulkan-loader sys-boot/grub sys-auth/elogind"
           for atom in $CORE_ATOMS; do
               if ! grep -q "^CPV: $atom-" gh_packages.txt; then
@@ -272,12 +271,12 @@ jobs:
           cat > build_script.sh << 'BUILDEOF'
           #!/bin/bash
           set -euo pipefail
-          mkdir -p /var/db/repos/{gentoo,guru,steam-overlay} /etc/portage/{repos.conf,binrepos.conf,env,package.{accept_keywords,license,use,mask,env}} /overlay/{distfiles,job_out} 
+          mkdir -p /var/db/repos/{gentoo,guru,steam-overlay} /etc/portage/{repos.conf,binrepos.conf,env,package.{accept_keywords,license,use,mask,env}} /overlay/{distfiles,job_out} /etc/portage/savedconfig/sys-kernel/
+          wget -qO /etc/portage/savedconfig/sys-kernel/gentoo-kernel https://raw.githubusercontent.com/Ackerman-00/gentoo-nexus/main/kernel-config/nexus-config-master || true
           
-          # ARCHITECT FIX: Inject the monolith config natively
-          echo ">>> Injecting Nexus Master Config..."
-          mkdir -p /etc/portage/savedconfig/sys-kernel/
-          cp /overlay/kernel-config/nexus-config-master /etc/portage/savedconfig/sys-kernel/gentoo-kernel || echo "Warning: nexus-config-master not found!"
+          emerge-webrsync -q || true
+          getuto || true
+          eselect profile set default/linux/amd64/23.0/desktop
           
           cat > /etc/portage/binrepos.conf/gentoo.conf << 'EOF'
           [gentoo]
@@ -293,22 +292,33 @@ jobs:
           verify-signature = false
           EOF
 
+          # ARCHITECT FIX: Safe architecture to prevent GCC Illegal Instruction faults
           cat > /etc/portage/make.conf << 'MAKECONF'
-          FEATURES="-ipc-sandbox -network-sandbox -pid-sandbox getbinpkg -binpkg-request-signature"
-          DISTDIR="/var/cache/distfiles"
-          PKGDIR="/overlay/job_out"
+          COMMON_FLAGS="-O2 -march=x86-64 -pipe"
+          CFLAGS="${COMMON_FLAGS}"; CXXFLAGS="${COMMON_FLAGS}"; RUSTFLAGS="-C target-cpu=x86-64 -C opt-level=2"
+          USE="wayland X vulkan pipewire dbus udev opengl dri gbm vaapi vdpau ffmpeg minizip -daemon -systemd -aqua -cups"
+          VIDEO_CARDS="amdgpu radeon radeonsi intel iris nouveau virgl"
+          FEATURES="-ipc-sandbox -network-sandbox -pid-sandbox buildpkg parallel-install getbinpkg -binpkg-request-signature ccache"
+          CCACHE_DIR="/var/cache/ccache"
+          EMERGE_DEFAULT_OPTS="--getbinpkg --usepkg --binpkg-respect-use=y --autounmask=y --autounmask-write --keep-going --quiet"
+          DISTDIR="/var/cache/distfiles"; PKGDIR="/overlay/job_out"; ACCEPT_LICENSE="*"
           MAKECONF
+          echo "MAKEOPTS=\"-j$(nproc)\"" >> /etc/portage/make.conf
 
-          emerge-webrsync -q || true
-          getuto || true
-          eselect profile set default/linux/amd64/23.0/desktop
-          
-          echo ">>> Bootstrapping Tools..."
           emerge --noreplace --quiet dev-vcs/git dev-util/ccache
           
+          chown -R portage:portage /var/cache/ccache
+          chmod -R 2777 /var/cache/ccache
+
           echo ">>> Cloning Overlays..."
           git clone --depth 1 https://github.com/gentoo-mirror/guru.git /var/db/repos/guru || true
-          git clone --depth 1 https://github.com/gentoo-mirror/steam-overlay.git /var/db/repos/steam-overlay || true
+          # ARCHITECT FIX: The actual steam-overlay URL
+          git clone --depth 1 https://github.com/anyc/steam-overlay.git /var/db/repos/steam-overlay || true
+          
+          # ARCHITECT FIX: Force layout.conf creation so Portage never complains
+          mkdir -p /var/db/repos/guru/metadata /var/db/repos/steam-overlay/metadata
+          echo "masters = gentoo" > /var/db/repos/guru/metadata/layout.conf
+          echo "masters = gentoo" > /var/db/repos/steam-overlay/metadata/layout.conf
 
           cat > /etc/portage/repos.conf/guru.conf << 'EOF'
           [guru]
@@ -331,22 +341,6 @@ jobs:
           priority = 9999
           EOF
 
-          echo ">>> Writing Universal Environment Configuration..."
-          cat > /etc/portage/make.conf << 'MAKECONF'
-          COMMON_FLAGS="-O2 -march=x86-64-v3 -pipe"
-          CFLAGS="${COMMON_FLAGS}"; CXXFLAGS="${COMMON_FLAGS}"; RUSTFLAGS="-C target-cpu=x86-64-v3 -C opt-level=2"
-          USE="wayland X vulkan pipewire dbus udev opengl dri gbm vaapi vdpau ffmpeg -daemon -systemd -aqua -cups"
-          VIDEO_CARDS="amdgpu radeon radeonsi intel iris nouveau virgl"
-          FEATURES="-userfetch -userpriv -usersandbox -ipc-sandbox -network-sandbox -pid-sandbox buildpkg parallel-install getbinpkg -binpkg-request-signature ccache"
-          CCACHE_DIR="/var/cache/ccache"
-          EMERGE_DEFAULT_OPTS="--getbinpkg --usepkg --binpkg-respect-use=y --autounmask=y --autounmask-write --keep-going --quiet"
-          DISTDIR="/var/cache/distfiles"; PKGDIR="/overlay/job_out"; ACCEPT_LICENSE="*"
-          MAKECONF
-          echo "MAKEOPTS=\"-j$(nproc)\"" >> /etc/portage/make.conf
-
-          chown -R root:root /var/cache/ccache
-          chmod -R 2777 /var/cache/ccache
-
           echo "*/*::guru **" >> /etc/portage/package.accept_keywords/guru
           echo "*/*::steam-overlay **" >> /etc/portage/package.accept_keywords/steam
           echo "*/*::gentoo-nexus **" >> /etc/portage/package.accept_keywords/nexus
@@ -358,13 +352,14 @@ jobs:
           sys-apps/gentoo-systemd-integration
           MASK
 
+          # ARCHITECT FIX: zlib minizip mapped correctly
           cat > /etc/portage/package.use/global << 'USE'
           */* -systemd -gpm
           media-video/ffmpeg -sdl
           media-video/pipewire -ffmpeg
+          sys-libs/zlib minizip
           USE
           
-          # ARCHITECT FIX: Utilizing savedconfig natively on official kernel
           cat > /etc/portage/package.use/kernel << 'USE'
           sys-kernel/gentoo-kernel savedconfig initramfs
           sys-kernel/installkernel dracut grub
@@ -423,11 +418,18 @@ jobs:
           verify-signature = false
           EOF
 
+          # ARCHITECT FIX: Safe architecture to prevent GCC Illegal Instruction faults
           cat > /etc/portage/make.conf << 'MAKECONF'
-          FEATURES="-ipc-sandbox -network-sandbox -pid-sandbox getbinpkg -binpkg-request-signature"
-          DISTDIR="/var/cache/distfiles"
-          PKGDIR="/overlay/job_out"
+          COMMON_FLAGS="-O2 -march=x86-64 -pipe"
+          CFLAGS="${COMMON_FLAGS}"; CXXFLAGS="${COMMON_FLAGS}"; RUSTFLAGS="-C target-cpu=x86-64 -C opt-level=2"
+          USE="wayland X vulkan pipewire dbus udev opengl dri gbm vaapi vdpau ffmpeg minizip -daemon -systemd -aqua -cups"
+          VIDEO_CARDS="amdgpu radeon radeonsi intel iris nouveau virgl"
+          FEATURES="-ipc-sandbox -network-sandbox -pid-sandbox buildpkg parallel-install getbinpkg -binpkg-request-signature ccache"
+          CCACHE_DIR="/var/cache/ccache"
+          EMERGE_DEFAULT_OPTS="--getbinpkg --usepkg --binpkg-respect-use=y --autounmask=y --autounmask-write --keep-going --quiet"
+          DISTDIR="/var/cache/distfiles"; PKGDIR="/overlay/job_out"; ACCEPT_LICENSE="*"
           MAKECONF
+          echo "MAKEOPTS=\"-j$(nproc)\"" >> /etc/portage/make.conf
 
           emerge-webrsync -q || true
           getuto || true
@@ -436,9 +438,16 @@ jobs:
           echo ">>> Bootstrapping Tools..."
           emerge --noreplace --quiet dev-vcs/git dev-util/ccache
           
+          chown -R portage:portage /var/cache/ccache
+          chmod -R 2777 /var/cache/ccache
+          
           echo ">>> Cloning Overlays..."
           git clone --depth 1 https://github.com/gentoo-mirror/guru.git /var/db/repos/guru || true
-          git clone --depth 1 https://github.com/gentoo-mirror/steam-overlay.git /var/db/repos/steam-overlay || true
+          git clone --depth 1 https://github.com/anyc/steam-overlay.git /var/db/repos/steam-overlay || true
+          
+          mkdir -p /var/db/repos/guru/metadata /var/db/repos/steam-overlay/metadata
+          echo "masters = gentoo" > /var/db/repos/guru/metadata/layout.conf
+          echo "masters = gentoo" > /var/db/repos/steam-overlay/metadata/layout.conf
 
           cat > /etc/portage/repos.conf/guru.conf << 'EOF'
           [guru]
@@ -461,22 +470,6 @@ jobs:
           priority = 9999
           EOF
 
-          echo ">>> Writing Universal Environment Configuration..."
-          cat > /etc/portage/make.conf << 'MAKECONF'
-          COMMON_FLAGS="-O2 -march=x86-64-v3 -pipe"
-          CFLAGS="${COMMON_FLAGS}"; CXXFLAGS="${COMMON_FLAGS}"; RUSTFLAGS="-C target-cpu=x86-64-v3 -C opt-level=2"
-          USE="wayland X vulkan pipewire dbus udev opengl dri gbm vaapi vdpau ffmpeg -daemon -systemd -aqua -cups"
-          VIDEO_CARDS="amdgpu radeon radeonsi intel iris nouveau virgl"
-          FEATURES="-userfetch -userpriv -usersandbox -ipc-sandbox -network-sandbox -pid-sandbox buildpkg parallel-install getbinpkg -binpkg-request-signature ccache"
-          CCACHE_DIR="/var/cache/ccache"
-          EMERGE_DEFAULT_OPTS="--getbinpkg --usepkg --binpkg-respect-use=y --autounmask=y --autounmask-write --keep-going --quiet"
-          DISTDIR="/var/cache/distfiles"; PKGDIR="/overlay/job_out"; ACCEPT_LICENSE="*"
-          MAKECONF
-          echo "MAKEOPTS=\"-j$(nproc)\"" >> /etc/portage/make.conf
-
-          chown -R root:root /var/cache/ccache
-          chmod -R 2777 /var/cache/ccache
-
           echo "*/*::guru **" >> /etc/portage/package.accept_keywords/guru
           echo "*/*::steam-overlay **" >> /etc/portage/package.accept_keywords/steam
           echo "*/*::gentoo-nexus **" >> /etc/portage/package.accept_keywords/nexus
@@ -492,8 +485,10 @@ jobs:
           */* -systemd -gpm
           media-video/ffmpeg -sdl
           media-video/pipewire -ffmpeg
+          sys-libs/zlib minizip
           USE
 
+          # ARCHITECT FIX: GCC-ICE Workarounds to prevent mesa compiler death
           mkdir -p /etc/portage/env /etc/portage/package.env
           cat > /etc/portage/env/gcc-ice-safe << 'EOF'
           CFLAGS="-O1 -pipe -fno-tree-loop-vectorize -fno-tree-slp-vectorize"
@@ -564,10 +559,16 @@ jobs:
           EOF
 
           cat > /etc/portage/make.conf << 'MAKECONF'
-          FEATURES="-ipc-sandbox -network-sandbox -pid-sandbox getbinpkg -binpkg-request-signature"
-          DISTDIR="/var/cache/distfiles"
-          PKGDIR="/overlay/job_out"
+          COMMON_FLAGS="-O2 -march=x86-64 -pipe"
+          CFLAGS="${COMMON_FLAGS}"; CXXFLAGS="${COMMON_FLAGS}"; RUSTFLAGS="-C target-cpu=x86-64 -C opt-level=2"
+          USE="wayland X vulkan pipewire dbus udev opengl dri gbm vaapi vdpau ffmpeg minizip -daemon -systemd -aqua -cups"
+          VIDEO_CARDS="amdgpu radeon radeonsi intel iris nouveau virgl"
+          FEATURES="-ipc-sandbox -network-sandbox -pid-sandbox buildpkg parallel-install getbinpkg -binpkg-request-signature ccache"
+          CCACHE_DIR="/var/cache/ccache"
+          EMERGE_DEFAULT_OPTS="--getbinpkg --usepkg --binpkg-respect-use=y --autounmask=y --autounmask-write --keep-going --quiet"
+          DISTDIR="/var/cache/distfiles"; PKGDIR="/overlay/job_out"; ACCEPT_LICENSE="*"
           MAKECONF
+          echo "MAKEOPTS=\"-j$(nproc)\"" >> /etc/portage/make.conf
 
           emerge-webrsync -q || true
           getuto || true
@@ -576,9 +577,16 @@ jobs:
           echo ">>> Bootstrapping Tools..."
           emerge --noreplace --quiet dev-vcs/git dev-util/ccache
           
+          chown -R portage:portage /var/cache/ccache
+          chmod -R 2777 /var/cache/ccache
+          
           echo ">>> Cloning Overlays..."
           git clone --depth 1 https://github.com/gentoo-mirror/guru.git /var/db/repos/guru || true
-          git clone --depth 1 https://github.com/gentoo-mirror/steam-overlay.git /var/db/repos/steam-overlay || true
+          git clone --depth 1 https://github.com/anyc/steam-overlay.git /var/db/repos/steam-overlay || true
+          
+          mkdir -p /var/db/repos/guru/metadata /var/db/repos/steam-overlay/metadata
+          echo "masters = gentoo" > /var/db/repos/guru/metadata/layout.conf
+          echo "masters = gentoo" > /var/db/repos/steam-overlay/metadata/layout.conf
 
           cat > /etc/portage/repos.conf/guru.conf << 'EOF'
           [guru]
@@ -601,22 +609,6 @@ jobs:
           priority = 9999
           EOF
 
-          echo ">>> Writing Universal Environment Configuration..."
-          cat > /etc/portage/make.conf << 'MAKECONF'
-          COMMON_FLAGS="-O2 -march=x86-64-v3 -pipe"
-          CFLAGS="${COMMON_FLAGS}"; CXXFLAGS="${COMMON_FLAGS}"; RUSTFLAGS="-C target-cpu=x86-64-v3 -C opt-level=2"
-          USE="wayland X vulkan pipewire dbus udev opengl dri gbm vaapi vdpau ffmpeg -daemon -systemd -aqua -cups"
-          VIDEO_CARDS="amdgpu radeon radeonsi intel iris nouveau virgl"
-          FEATURES="-userfetch -userpriv -usersandbox -ipc-sandbox -network-sandbox -pid-sandbox buildpkg parallel-install getbinpkg -binpkg-request-signature ccache"
-          CCACHE_DIR="/var/cache/ccache"
-          EMERGE_DEFAULT_OPTS="--getbinpkg --usepkg --binpkg-respect-use=y --autounmask=y --autounmask-write --keep-going --quiet"
-          DISTDIR="/var/cache/distfiles"; PKGDIR="/overlay/job_out"; ACCEPT_LICENSE="*"
-          MAKECONF
-          echo "MAKEOPTS=\"-j$(nproc)\"" >> /etc/portage/make.conf
-
-          chown -R root:root /var/cache/ccache
-          chmod -R 2777 /var/cache/ccache
-
           echo "*/*::guru **" >> /etc/portage/package.accept_keywords/guru
           echo "*/*::steam-overlay **" >> /etc/portage/package.accept_keywords/steam
           echo "*/*::gentoo-nexus **" >> /etc/portage/package.accept_keywords/nexus
@@ -630,6 +622,7 @@ jobs:
           */* -systemd -gpm
           media-video/ffmpeg -sdl
           media-video/pipewire -ffmpeg
+          sys-libs/zlib minizip
           USE
 
           BASE_LIST=(sys-boot/grub sys-boot/efibootmgr sys-auth/elogind sys-auth/seatd net-misc/networkmanager)
@@ -701,10 +694,16 @@ jobs:
           EOF
 
           cat > /etc/portage/make.conf << 'MAKECONF'
-          FEATURES="-ipc-sandbox -network-sandbox -pid-sandbox getbinpkg -binpkg-request-signature"
-          DISTDIR="/var/cache/distfiles"
-          PKGDIR="/overlay/job_out"
+          COMMON_FLAGS="-O2 -march=x86-64 -pipe"
+          CFLAGS="${COMMON_FLAGS}"; CXXFLAGS="${COMMON_FLAGS}"; RUSTFLAGS="-C target-cpu=x86-64 -C opt-level=2"
+          USE="wayland X vulkan opengl dri gbm minizip -daemon -systemd"
+          VIDEO_CARDS="amdgpu radeon radeonsi intel iris nouveau virgl"
+          FEATURES="-ipc-sandbox -network-sandbox -pid-sandbox buildpkg parallel-install getbinpkg -binpkg-request-signature ccache"
+          CCACHE_DIR="/var/cache/ccache"
+          EMERGE_DEFAULT_OPTS="--getbinpkg --usepkg --binpkg-respect-use=y --autounmask=y --autounmask-write --keep-going --quiet"
+          DISTDIR="/var/cache/distfiles"; PKGDIR="/overlay/job_out"; ACCEPT_LICENSE="*"
           MAKECONF
+          echo "MAKEOPTS=\"-j$(nproc)\"" >> /etc/portage/make.conf
 
           emerge-webrsync -q || true
           getuto || true
@@ -713,9 +712,16 @@ jobs:
           echo ">>> Bootstrapping Tools..."
           emerge --noreplace --quiet dev-vcs/git dev-util/ccache
           
+          chown -R portage:portage /var/cache/ccache
+          chmod -R 2777 /var/cache/ccache
+          
           echo ">>> Cloning Overlays..."
           git clone --depth 1 https://github.com/gentoo-mirror/guru.git /var/db/repos/guru || true
-          git clone --depth 1 https://github.com/gentoo-mirror/steam-overlay.git /var/db/repos/steam-overlay || true
+          git clone --depth 1 https://github.com/anyc/steam-overlay.git /var/db/repos/steam-overlay || true
+          
+          mkdir -p /var/db/repos/guru/metadata /var/db/repos/steam-overlay/metadata
+          echo "masters = gentoo" > /var/db/repos/guru/metadata/layout.conf
+          echo "masters = gentoo" > /var/db/repos/steam-overlay/metadata/layout.conf
 
           cat > /etc/portage/repos.conf/guru.conf << 'EOF'
           [guru]
@@ -738,27 +744,9 @@ jobs:
           priority = 9999
           EOF
 
-          echo ">>> Writing Universal Environment Configuration..."
-          cat > /etc/portage/make.conf << 'MAKECONF'
-          COMMON_FLAGS="-O2 -march=x86-64-v3 -pipe"
-          CFLAGS="${COMMON_FLAGS}"; CXXFLAGS="${COMMON_FLAGS}"; RUSTFLAGS="-C target-cpu=x86-64-v3 -C opt-level=2"
-          USE="wayland X vulkan pipewire dbus udev opengl dri gbm vaapi vdpau ffmpeg -daemon -systemd -aqua -cups"
-          VIDEO_CARDS="amdgpu radeon radeonsi intel iris nouveau virgl"
-          FEATURES="-userfetch -userpriv -usersandbox -ipc-sandbox -network-sandbox -pid-sandbox buildpkg parallel-install getbinpkg -binpkg-request-signature ccache"
-          CCACHE_DIR="/var/cache/ccache"
-          EMERGE_DEFAULT_OPTS="--getbinpkg --usepkg --binpkg-respect-use=y --autounmask=y --autounmask-write --keep-going --quiet"
-          DISTDIR="/var/cache/distfiles"; PKGDIR="/overlay/job_out"; ACCEPT_LICENSE="*"
-          MAKECONF
-          echo "MAKEOPTS=\"-j$(nproc)\"" >> /etc/portage/make.conf
-
-          chown -R root:root /var/cache/ccache
-          chmod -R 2777 /var/cache/ccache
-
           echo "*/*::guru **" >> /etc/portage/package.accept_keywords/guru
           echo "*/*::steam-overlay **" >> /etc/portage/package.accept_keywords/steam
           echo "*/*::gentoo-nexus **" >> /etc/portage/package.accept_keywords/nexus
-          echo "media-libs/mesa **" >> /etc/portage/package.accept_keywords/nexus
-          echo "media-libs/vulkan-loader **" >> /etc/portage/package.accept_keywords/nexus
 
           cat > /etc/portage/package.mask/fixes << 'MASK'
           sys-apps/systemd
@@ -769,6 +757,7 @@ jobs:
           */* -systemd -gpm
           media-video/ffmpeg -sdl
           media-video/pipewire -ffmpeg
+          sys-libs/zlib minizip
           USE
 
           mkdir -p /etc/portage/env /etc/portage/package.env
@@ -852,10 +841,16 @@ jobs:
           EOF
 
           cat > /etc/portage/make.conf << 'MAKECONF'
-          FEATURES="-ipc-sandbox -network-sandbox -pid-sandbox getbinpkg -binpkg-request-signature"
-          DISTDIR="/var/cache/distfiles"
-          PKGDIR="/overlay/job_out"
+          COMMON_FLAGS="-O2 -march=x86-64 -pipe"
+          CFLAGS="${COMMON_FLAGS}"; CXXFLAGS="${COMMON_FLAGS}"; RUSTFLAGS="-C target-cpu=x86-64 -C opt-level=2"
+          USE="wayland X vulkan pipewire dbus udev opengl dri gbm vaapi vdpau ffmpeg minizip -daemon -systemd -aqua -cups"
+          VIDEO_CARDS="amdgpu radeon radeonsi intel iris nouveau virgl"
+          FEATURES="-ipc-sandbox -network-sandbox -pid-sandbox buildpkg parallel-install getbinpkg -binpkg-request-signature ccache"
+          CCACHE_DIR="/var/cache/ccache"
+          EMERGE_DEFAULT_OPTS="--getbinpkg --usepkg --binpkg-respect-use=y --autounmask=y --autounmask-write --keep-going --quiet"
+          DISTDIR="/var/cache/distfiles"; PKGDIR="/overlay/job_out"; ACCEPT_LICENSE="*"
           MAKECONF
+          echo "MAKEOPTS=\"-j$(nproc)\"" >> /etc/portage/make.conf
 
           emerge-webrsync -q || true
           getuto || true
@@ -864,9 +859,16 @@ jobs:
           echo ">>> Bootstrapping Tools..."
           emerge --noreplace --quiet dev-vcs/git dev-util/ccache
           
+          chown -R portage:portage /var/cache/ccache
+          chmod -R 2777 /var/cache/ccache
+          
           echo ">>> Cloning Overlays..."
           git clone --depth 1 https://github.com/gentoo-mirror/guru.git /var/db/repos/guru || true
-          git clone --depth 1 https://github.com/gentoo-mirror/steam-overlay.git /var/db/repos/steam-overlay || true
+          git clone --depth 1 https://github.com/anyc/steam-overlay.git /var/db/repos/steam-overlay || true
+          
+          mkdir -p /var/db/repos/guru/metadata /var/db/repos/steam-overlay/metadata
+          echo "masters = gentoo" > /var/db/repos/guru/metadata/layout.conf
+          echo "masters = gentoo" > /var/db/repos/steam-overlay/metadata/layout.conf
 
           cat > /etc/portage/repos.conf/guru.conf << 'EOF'
           [guru]
@@ -889,22 +891,6 @@ jobs:
           priority = 9999
           EOF
 
-          echo ">>> Writing Universal Environment Configuration..."
-          cat > /etc/portage/make.conf << 'MAKECONF'
-          COMMON_FLAGS="-O2 -march=x86-64-v3 -pipe"
-          CFLAGS="${COMMON_FLAGS}"; CXXFLAGS="${COMMON_FLAGS}"; RUSTFLAGS="-C target-cpu=x86-64-v3 -C opt-level=2"
-          USE="wayland X vulkan pipewire dbus udev opengl dri gbm vaapi vdpau ffmpeg -daemon -systemd -aqua -cups"
-          VIDEO_CARDS="amdgpu radeon radeonsi intel iris nouveau virgl"
-          FEATURES="-userfetch -userpriv -usersandbox -ipc-sandbox -network-sandbox -pid-sandbox buildpkg parallel-install getbinpkg -binpkg-request-signature ccache"
-          CCACHE_DIR="/var/cache/ccache"
-          EMERGE_DEFAULT_OPTS="--getbinpkg --usepkg --binpkg-respect-use=y --autounmask=y --autounmask-write --keep-going --quiet"
-          DISTDIR="/var/cache/distfiles"; PKGDIR="/overlay/job_out"; ACCEPT_LICENSE="*"
-          MAKECONF
-          echo "MAKEOPTS=\"-j$(nproc)\"" >> /etc/portage/make.conf
-
-          chown -R root:root /var/cache/ccache
-          chmod -R 2777 /var/cache/ccache
-
           echo "*/*::guru **" >> /etc/portage/package.accept_keywords/guru
           echo "*/*::steam-overlay **" >> /etc/portage/package.accept_keywords/steam
           echo "*/*::gentoo-nexus **" >> /etc/portage/package.accept_keywords/nexus
@@ -918,6 +904,7 @@ jobs:
           */* -systemd -gpm
           media-video/ffmpeg -sdl
           media-video/pipewire -ffmpeg
+          sys-libs/zlib minizip
           USE
 
           mkdir -p /etc/portage/env /etc/portage/package.env
