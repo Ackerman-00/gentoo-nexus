@@ -8,7 +8,7 @@ on:
         required: true
         type: string
       force_rebuild:
-        description: 'Force rebuild even if binary exists on SourceForge'
+        description: 'Force rebuild even if binary exists'
         required: false
         type: boolean
         default: false
@@ -28,11 +28,11 @@ jobs:
       - name: Checkout
         uses: actions/checkout@v4
 
-      - name: Check SourceForge Binhost Status
+      - name: Check GitHub Pages Binhost Status
         id: check_bin
         run: |
           PKG="${{ github.event.inputs.atom }}"
-          BINHOST="https://gentoo-nexus.sourceforge.io/Packages"
+          BINHOST="https://${{ github.repository_owner }}.github.io/${{ github.event.repository.name }}/Packages"
 
           if [ "${{ github.event.inputs.force_rebuild }}" = "true" ]; then
             echo "skip=false" >> "$GITHUB_OUTPUT"
@@ -48,11 +48,11 @@ jobs:
           PN=$(basename "${PKG}")
           VER=$(basename "${EBUILD_FILE}" | sed -E "s/^${PN}-//; s/\.ebuild$//")
           
-          HTTP_STATUS=$(curl -sL -o sf_packages.txt -w "%{http_code}" --connect-timeout 15 --retry 3 "$BINHOST" || echo "000")
+          HTTP_STATUS=$(curl -sL -o gh_packages.txt -w "%{http_code}" --connect-timeout 15 --retry 3 "$BINHOST" || echo "000")
           
           if [ "$HTTP_STATUS" -eq 200 ]; then
-            if grep -q "^CPV: ${PKG}-${VER}$" sf_packages.txt; then
-              echo "✅ Binary for ${PKG}-${VER} exists. Skipping!"
+            if grep -q "^CPV: ${PKG}-${VER}$" gh_packages.txt; then
+              echo "✅ Binary for ${PKG}-${VER} exists on Pages. Skipping!"
               echo "skip=true" >> "$GITHUB_OUTPUT"
             else
               echo "🚀 No binary found. Proceeding to build."
@@ -62,7 +62,7 @@ jobs:
             echo "🚀 Index is 404 (Empty Binhost). Proceeding to build."
             echo "skip=false" >> "$GITHUB_OUTPUT"
           else
-             echo "🚨 SourceForge timeout ($HTTP_STATUS). Skipping to prevent damage."
+             echo "🚨 Timeout ($HTTP_STATUS). Skipping to prevent damage."
              echo "skip=true" >> "$GITHUB_OUTPUT"
           fi
 
@@ -133,7 +133,7 @@ jobs:
           VIDEO_CARDS="amdgpu radeon radeonsi intel iris nouveau virgl"
           LINUX_FIRMWARE="amd-ucode intel-ucode amdgpu nvidia i915 rtl_nic ath10k ath11k iwlwifi mt76 rtw88 rtw89"
           FEATURES="-userfetch -userpriv -usersandbox -ipc-sandbox -network-sandbox -pid-sandbox getbinpkg buildpkg parallel-install"
-          EMERGE_DEFAULT_OPTS="--getbinpkg --usepkg --binpkg-respect-use=y --binpkg-changed-deps=y --autounmask=y --autounmask-write --autounmask-backtrack=y --keep-going --quiet --update"
+          EMERGE_DEFAULT_OPTS="--getbinpkg --usepkg --binpkg-respect-use=y --binpkg-changed-deps=n --rebuilt-binaries=n --autounmask=y --autounmask-write --autounmask-backtrack=y --keep-going --quiet --update"
           DISTDIR="/var/cache/distfiles"
           PKGDIR="/overlay/job_out"
           EGIT_CLONE_TYPE="single"
@@ -156,18 +156,12 @@ jobs:
           media-libs/mesa gcc-ice-safe
           EOF
 
-          cat > /etc/portage/package.mask/systemd << 'MASK'
+          cat > /etc/portage/package.mask/fixes << 'MASK'
           sys-apps/systemd
           sys-apps/gentoo-systemd-integration
-          MASK
-
-          cat > /etc/portage/package.mask/gpm << 'MASK'
           sys-libs/gpm
-          MASK
-
-          cat > /etc/portage/package.mask/ly_fixes << 'MASK'
-          x11-misc/ly::guru
           =x11-misc/ly-9999
+          =gui-libs/scenefx-9999
           MASK
 
           cat > /etc/portage/package.use/global << 'USE'
@@ -340,9 +334,9 @@ jobs:
           REPOCONF
 
           cat > /etc/portage/binrepos.conf/nexus.conf << 'REPOCONF'
-          [gentoo-nexus-sf]
+          [gentoo-nexus-gh]
           priority = 9999
-          sync-uri = https://gentoo-nexus.sourceforge.io/
+          sync-uri = https://${{ github.repository_owner }}.github.io/${{ github.event.repository.name }}/
           verify-signature = false
           REPOCONF
 
@@ -356,12 +350,14 @@ jobs:
           sys-libs/libudev-compat ~amd64
           EOF
 
-          echo "sys-kernel/gentoo-kernel ~amd64 **" >> /etc/portage/package.accept_keywords/nexus
-          echo "virtual/dist-kernel ~amd64 **" >> /etc/portage/package.accept_keywords/nexus
-          echo "sys-kernel/linux-firmware ~amd64 **" >> /etc/portage/package.accept_keywords/nexus
-          echo "media-libs/mesa ~amd64 **" >> /etc/portage/package.accept_keywords/nexus
-          echo "media-libs/vulkan-loader ~amd64 **" >> /etc/portage/package.accept_keywords/nexus
-          echo "dev-util/spirv-tools ~amd64 **" >> /etc/portage/package.accept_keywords/nexus
+          echo "sys-kernel/gentoo-kernel **" >> /etc/portage/package.accept_keywords/nexus
+          echo "virtual/dist-kernel **" >> /etc/portage/package.accept_keywords/nexus
+          echo "sys-kernel/linux-firmware **" >> /etc/portage/package.accept_keywords/nexus
+          echo "media-libs/mesa **" >> /etc/portage/package.accept_keywords/nexus
+          echo "media-libs/vulkan-loader **" >> /etc/portage/package.accept_keywords/nexus
+          echo "dev-util/spirv-tools **" >> /etc/portage/package.accept_keywords/nexus
+          echo "dev-util/mesa_clc **" >> /etc/portage/package.accept_keywords/nexus
+          echo "dev-util/spirv-headers **" >> /etc/portage/package.accept_keywords/nexus
 
           echo ">>> Shielding gentoo-nexus packages from Guru overrides..."
           for pkg in /overlay/*/*/*.ebuild; do
@@ -395,85 +391,58 @@ jobs:
             -v "/tmp/distfiles:/var/cache/distfiles" \
             gentoo/stage3:amd64-desktop-openrc bash /overlay/build_script.sh
 
-      - name: Deploy Additively to SourceForge
+      - name: Deploy to GitHub Releases & Pages
         if: steps.check_bin.outputs.skip == 'false'
         env:
-          SF_USERNAME: ${{ secrets.SF_USERNAME }}
-          SF_SSH_KEY: ${{ secrets.SF_SSH_KEY }}
+          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
         run: |
-          if [ -z "$(ls -A job_out/ 2>/dev/null)" ]; then
-            echo "No new packages built. Skipping deployment."
-            exit 0
-          fi
+          if [ -z "$(find job_out -name '*.gpkg.tar' 2>/dev/null)" ]; then exit 0; fi
 
-          mkdir -p ~/.ssh && chmod 700 ~/.ssh
-          echo "$SF_SSH_KEY" > ~/.ssh/id_ed25519
-          chmod 600 ~/.ssh/id_ed25519
-          ssh-keyscan -t rsa,ecdsa,ed25519 web.sourceforge.net >> ~/.ssh/known_hosts
-          
-          cat > deploy_script.sh << 'EOF'
-          #!/bin/bash
-          set -euo pipefail
-          
-          python3 << 'PYEOF'
-          import urllib.request
+          echo ">>> Uploading to Releases..."
+          gh release view rolling || gh release create rolling --title "Nexus Rolling Packages" --notes "Automated OS Binaries"
+          find job_out -name '*.gpkg.tar' -exec gh release upload rolling {} --clobber \;
+
+          echo ">>> Updating Index on Pages..."
+          git config --global user.name "github-actions[bot]"
+          git config --global user.email "bot@github.com"
+          git clone --branch gh-pages https://x-access-token:${GITHUB_TOKEN}@github.com/${{ github.repository }}.git pages_repo || { git init pages_repo; cd pages_repo; git checkout -b gh-pages; cd ..; }
+
+          python3 << 'EOF'
           import os
-
-          def parse_blocks(text):
-              blocks = dict()
-              current_block = list()
-              current_cpv = None
-              for line in text.splitlines(True):
-                  if line.startswith('PACKAGES:') or line.startswith('PKGDIR:'): continue
-                  if line.startswith('CPV:'): 
-                      _, cpv_val = line.split(':', 1)
-                      current_cpv = cpv_val.strip()
-                  current_block.append(line)
-                  if line.strip() == '':
-                      if current_cpv: blocks[current_cpv] = "".join(current_block).strip() + "\n\n"
-                      current_block = list()
-                      current_cpv = None
-              if current_cpv: blocks[current_cpv] = "".join(current_block).strip() + "\n\n"
+          base_url = f"https://github.com/{os.environ.get('GITHUB_REPOSITORY')}/releases/download/rolling/"
+          
+          def get_blocks(path):
+              blocks = {}
+              if not os.path.exists(path): return blocks
+              with open(path, 'r') as f:
+                  cpv, cur = None, []
+                  for line in f:
+                      if line.startswith('PACKAGES:') or line.startswith('PKGDIR:'): continue
+                      if line.strip() == '':
+                          if cpv: blocks[cpv] = cur
+                          cpv, cur = None, []
+                      else:
+                          if line.startswith('CPV:'): cpv = line.split(':', 1).strip()
+                          cur.append(line.strip())
+                  if cpv: blocks[cpv] = cur
               return blocks
 
-          local_blocks = dict()
-          if os.path.exists('/overlay/job_out/Packages'):
-              with open('/overlay/job_out/Packages', 'r', encoding='utf-8') as f:
-                  local_blocks = parse_blocks(f.read())
+          new_b = get_blocks('/home/runner/work/${{ github.event.repository.name }}/${{ github.event.repository.name }}/job_out/Packages')
+          old_b = get_blocks('pages_repo/Packages')
 
-          server_blocks = dict()
-          try:
-              req = urllib.request.urlopen("https://gentoo-nexus.sourceforge.io/Packages", timeout=15)
-              server_blocks = parse_blocks(req.read().decode('utf-8'))
-          except Exception as e:
-              print("Notice: Server index missing or unreachable. Starting fresh.")
+          for cpv, lines in new_b.items():
+              rel_path = next((l.split(':',1).strip() for l in lines if l.startswith('PATH:')), cpv+".gpkg.tar")
+              lines = [l for l in lines if not l.startswith('URI:')]
+              lines.append(f"URI: {base_url}{os.path.basename(rel_path)}")
+              old_b[cpv] = lines
 
-          final_blocks = server_blocks.copy()
-          
-          for cpv, block_text in local_blocks.items():
-              pkg_name = "/".join(cpv.split("-")[:-1]) if "-" in cpv else cpv 
-              keys_to_remove = [k for k in final_blocks.keys() if k.startswith(pkg_name + "-")]
-              for k in keys_to_remove:
-                  del final_blocks[k]
-              final_blocks[cpv] = block_text
-
-          with open('/overlay/job_out/Packages', 'w', encoding='utf-8') as f:
+          with open('pages_repo/Packages', 'w') as f:
               f.write("PKGDIR: .\nPACKAGES:\n\n")
-              for cpv in sorted(final_blocks.keys()):
-                  f.write(final_blocks.get(cpv))
-
-          html = "<!DOCTYPE html><html><head><title>Gentoo Nexus Binhost</title><style>body { font-family: monospace; background: #1a1a1a; color: #e0e0e0; padding: 2em; } a { color: #66d9ef; }</style></head><body><h1>Gentoo Nexus Binhost</h1>"
-          html += "<p>Last Updated: " + os.popen("date -u '+%Y-%m-%d %H:%M:%S UTC'").read().strip() + "</p><pre>\n"
-          for cpv in sorted(final_blocks.keys()):
-              html += f"{cpv}\n"
-          html += "</pre></body></html>"
-          
-          with open('/overlay/job_out/index.html', 'w', encoding='utf-8') as f:
-              f.write(html)
-          PYEOF
+              for cpv in sorted(old_b.keys()):
+                  f.write("\n".join(old_b[cpv]) + "\n\n")
           EOF
-          chmod +x deploy_script.sh
-          docker run --rm -v "${{ github.workspace }}:/overlay" -w /overlay gentoo/stage3:amd64-desktop-openrc bash /overlay/deploy_script.sh
 
-          echo ">>> Deploying updated packages additively to SourceForge..."
-          rsync -avz -e "ssh -o StrictHostKeyChecking=no" job_out/ $SF_USERNAME@web.sourceforge.net:/home/project-web/gentoo-nexus/htdocs/
+          cd pages_repo
+          git add Packages
+          git commit -m "Update Binhost via Manual Sniper" || true
+          git push https://x-access-token:${GITHUB_TOKEN}@github.com/${{ github.repository }}.git gh-pages

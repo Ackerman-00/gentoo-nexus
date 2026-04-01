@@ -1,0 +1,140 @@
+name: Nexus Factory (Core OS)
+on:
+  schedule:
+    - cron: '0 4 * * *'
+  workflow_dispatch:
+concurrency:
+  group: build-nexus-core
+  cancel-in-progress: false
+permissions:
+  contents: write
+jobs:
+  build-core:
+    runs-on: ubuntu-latest
+    timeout-minutes: 360
+    steps:
+      - name: Checkout Repository
+        uses: actions/checkout@v4
+
+      - name: Execute Core Build
+        run: |
+          mkdir -p job_out /tmp/distfiles
+          chmod 777 /tmp/distfiles
+
+          cat > build_script.sh << 'BUILDEOF'
+          #!/bin/bash
+          set -euo pipefail
+          
+          mkdir -p /var/db/repos/gentoo /etc/portage/{repos.conf,binrepos.conf,env,package.{accept_keywords,license,use,mask,env}} /overlay/{distfiles,job_out}
+          emerge-webrsync -q; eselect profile set default/linux/amd64/23.0/desktop
+          emerge --noreplace --quiet dev-lang/go dev-lang/rust-bin app-eselect/eselect-repository dev-vcs/git
+          
+          cat > /etc/portage/make.conf << 'MAKECONF'
+          COMMON_FLAGS="-O2 -march=x86-64-v3 -pipe"
+          CFLAGS="${COMMON_FLAGS}"; CXXFLAGS="${COMMON_FLAGS}"; RUSTFLAGS="-C target-cpu=x86-64-v3 -C opt-level=2"
+          USE="wayland X vulkan pipewire dbus elogind udev opengl dri gbm vaapi vdpau ffmpeg bluetooth screencast gstreamer minizip -daemon -systemd -aqua -cups"
+          VIDEO_CARDS="amdgpu radeon radeonsi intel iris nouveau virgl"
+          LINUX_FIRMWARE="amd-ucode intel-ucode amdgpu nvidia i915 rtl_nic ath10k ath11k iwlwifi mt76 rtw88 rtw89"
+          FEATURES="-userfetch -userpriv -usersandbox -ipc-sandbox -network-sandbox -pid-sandbox buildpkg parallel-install"
+          EMERGE_DEFAULT_OPTS="--usepkg --binpkg-respect-use=y --binpkg-changed-deps=n --rebuilt-binaries=n --autounmask=y --autounmask-write --autounmask-backtrack=y --keep-going --quiet"
+          DISTDIR="/var/cache/distfiles"; PKGDIR="/overlay/job_out"; ACCEPT_LICENSE="*"
+          MAKECONF
+
+          CORES=$(nproc); echo "MAKEOPTS=\"-j${CORES} -l${CORES}\"" >> /etc/portage/make.conf
+
+          cat > /etc/portage/package.mask/fixes << 'MASK'
+          sys-apps/systemd
+          sys-apps/gentoo-systemd-integration
+          sys-libs/gpm
+          MASK
+
+          cat > /etc/portage/package.use/global << 'USE'
+          */* -systemd -gpm
+          sys-libs/ncurses -abi_x86_32
+          media-video/pipewire extra sound-server
+          media-video/wireplumber extra
+          sys-kernel/gentoo-kernel initramfs
+          sys-kernel/installkernel dracut grub
+          USE
+
+          echo "*/* *" >> /etc/portage/package.license/all
+          echo "sys-kernel/gentoo-kernel **" >> /etc/portage/package.accept_keywords/nexus
+          echo "virtual/dist-kernel **" >> /etc/portage/package.accept_keywords/nexus
+          echo "sys-kernel/linux-firmware **" >> /etc/portage/package.accept_keywords/nexus
+          echo "media-libs/mesa **" >> /etc/portage/package.accept_keywords/nexus
+          echo "media-libs/vulkan-loader **" >> /etc/portage/package.accept_keywords/nexus
+          echo "dev-util/spirv-tools **" >> /etc/portage/package.accept_keywords/nexus
+          echo "dev-util/spirv-headers **" >> /etc/portage/package.accept_keywords/nexus
+          echo "dev-util/mesa_clc **" >> /etc/portage/package.accept_keywords/nexus
+
+          BASE_LIST=(
+              sys-kernel/gentoo-kernel
+              sys-kernel/linux-firmware
+              sys-kernel/dracut
+              media-libs/mesa
+              media-video/pipewire
+              media-video/wireplumber
+              sys-boot/grub
+              sys-boot/efibootmgr
+              sys-auth/elogind
+              sys-auth/seatd
+              net-misc/networkmanager
+          )
+
+          for i in 1 2 3; do emerge --deep --newuse "${BASE_LIST[@]}" 2>&1 && break || etc-update --automode -5; done
+          emerge --deep --newuse "${BASE_LIST[@]}"
+          BUILDEOF
+          chmod +x build_script.sh
+
+          docker run --rm --privileged -v "${{ github.workspace }}:/overlay" -v "/tmp/distfiles:/var/cache/distfiles" gentoo/stage3:amd64-desktop-openrc bash /overlay/build_script.sh
+
+      - name: Deploy to GitHub Releases & Pages
+        env:
+          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+        run: |
+          if [ -z "$(find job_out -name '*.gpkg.tar' 2>/dev/null)" ]; then exit 0; fi
+          echo ">>> Uploading to Releases..."
+          gh release view rolling || gh release create rolling --title "Nexus Rolling Packages" --notes "Automated OS Binaries"
+          find job_out -name '*.gpkg.tar' -exec gh release upload rolling {} --clobber \;
+
+          echo ">>> Updating Index on Pages..."
+          git config --global user.name "github-actions[bot]"
+          git config --global user.email "bot@github.com"
+          git clone --branch gh-pages https://x-access-token:${GITHUB_TOKEN}@github.com/${{ github.repository }}.git pages_repo || { git init pages_repo; cd pages_repo; git checkout -b gh-pages; cd ..; }
+
+          python3 << 'EOF'
+          import os
+          base_url = f"https://github.com/{os.environ.get('GITHUB_REPOSITORY')}/releases/download/rolling/"
+          def get_blocks(path):
+              blocks = {}
+              if not os.path.exists(path): return blocks
+              with open(path, 'r') as f:
+                  cpv, cur = None, []
+                  for line in f:
+                      if line.startswith('PACKAGES:') or line.startswith('PKGDIR:'): continue
+                      if line.strip() == '':
+                          if cpv: blocks[cpv] = cur
+                          cpv, cur = None, []
+                      else:
+                          if line.startswith('CPV:'): cpv = line.split(':', 1).strip()
+                          cur.append(line.strip())
+                  if cpv: blocks[cpv] = cur
+              return blocks
+
+          new_b = get_blocks('/home/runner/work/${{ github.event.repository.name }}/${{ github.event.repository.name }}/job_out/Packages')
+          old_b = get_blocks('pages_repo/Packages')
+          for cpv, lines in new_b.items():
+              rel_path = next((l.split(':',1).strip() for l in lines if l.startswith('PATH:')), cpv+".gpkg.tar")
+              lines = [l for l in lines if not l.startswith('URI:')]
+              lines.append(f"URI: {base_url}{os.path.basename(rel_path)}")
+              old_b[cpv] = lines
+          with open('pages_repo/Packages', 'w') as f:
+              f.write("PKGDIR: .\nPACKAGES:\n\n")
+              for cpv in sorted(old_b.keys()):
+                  f.write("\n".join(old_b[cpv]) + "\n\n")
+          EOF
+
+          cd pages_repo
+          git add Packages
+          git commit -m "Update Binhost" || true
+          git push https://x-access-token:${GITHUB_TOKEN}@github.com/${{ github.repository }}.git gh-pages
