@@ -7,6 +7,11 @@ on:
         description: 'Package atom to build (e.g. games-util/steam-launcher)'
         required: true
         type: string
+      force_rebuild:
+        description: 'Force rebuild even if binary exists on Pages'
+        required: false
+        type: boolean
+        default: false
 
 concurrency:
   group: build-${{ github.event.inputs.atom }}
@@ -23,7 +28,46 @@ jobs:
       - name: Checkout
         uses: actions/checkout@v4
 
+      - name: Check GitHub Pages Binhost Status
+        id: check_bin
+        run: |
+          PKG="${{ github.event.inputs.atom }}"
+          BINHOST="https://${{ github.repository_owner }}.github.io/${{ github.event.repository.name }}/Packages"
+
+          if [ "${{ github.event.inputs.force_rebuild }}" = "true" ]; then
+            echo "skip=false" >> "$GITHUB_OUTPUT"
+            exit 0
+          fi
+
+          EBUILD_FILE=$(ls -1v "${PKG}"/*.ebuild 2>/dev/null | tail -n 1)
+          if [ -z "$EBUILD_FILE" ]; then
+            echo "skip=false" >> "$GITHUB_OUTPUT"
+            exit 0
+          fi
+          
+          PN=$(basename "${PKG}")
+          VER=$(basename "${EBUILD_FILE}" | sed -E "s/^${PN}-//; s/\.ebuild$//")
+          
+          HTTP_STATUS=$(curl -sL -o gh_packages.txt -w "%{http_code}" --connect-timeout 15 --retry 3 "$BINHOST" || echo "000")
+          
+          if [ "$HTTP_STATUS" -eq 200 ]; then
+            if grep -q "^CPV: ${PKG}-${VER}$" gh_packages.txt; then
+              echo "✅ Binary for ${PKG}-${VER} exists on Pages. Skipping!"
+              echo "skip=true" >> "$GITHUB_OUTPUT"
+            else
+              echo "🚀 No binary found. Proceeding to build."
+              echo "skip=false" >> "$GITHUB_OUTPUT"
+            fi
+          elif [ "$HTTP_STATUS" -eq 404 ]; then
+            echo "🚀 Index is 404 (Empty Binhost). Proceeding to build."
+            echo "skip=false" >> "$GITHUB_OUTPUT"
+          else
+             echo "🚨 Timeout ($HTTP_STATUS). Skipping to prevent damage."
+             echo "skip=true" >> "$GITHUB_OUTPUT"
+          fi
+
       - name: Build Binary Package
+        if: steps.check_bin.outputs.skip == 'false'
         run: |
           mkdir -p job_out /tmp/distfiles
           chmod 777 /tmp/distfiles
@@ -32,25 +76,47 @@ jobs:
           #!/bin/bash
           set -euo pipefail
           
+          echo ">>> Initializing Gentoo Stage3 Container..."
           mkdir -p /var/db/repos/gentoo /etc/portage/{repos.conf,binrepos.conf,env,package.{accept_keywords,license,use,mask,env}} /overlay/{distfiles,job_out}
-          emerge-webrsync -q; eselect profile set default/linux/amd64/23.0/desktop
+          emerge-webrsync -q
+          eselect profile set default/linux/amd64/23.0/desktop
           
+          emerge --unmerge --quiet sys-libs/gpm 2>/dev/null || true
+
+          echo ">>> Configuring Repository Overlays..."
           emerge --noreplace --quiet dev-lang/go dev-lang/rust-bin app-eselect/eselect-repository dev-vcs/git
           eselect repository enable guru steam-overlay 2>/dev/null || true
           emaint sync -r guru steam-overlay 2>/dev/null || true
 
+          cat > /etc/portage/repos.conf/gentoo-nexus.conf << 'REPOCONF'
+          [gentoo-nexus]
+          location = /overlay
+          masters = gentoo
+          priority = 9999
+          REPOCONF
+          
+          # Architect Fix: Force portage to index the custom overlay before building
+          emaint sync -r gentoo-nexus 2>/dev/null || true
+          egencache --repo=gentoo-nexus --update
+
+          echo ">>> Configuring Universal Make.conf..."
           cat > /etc/portage/make.conf << 'MAKECONF'
           COMMON_FLAGS="-O2 -march=x86-64-v3 -pipe"
-          CFLAGS="${COMMON_FLAGS}"; CXXFLAGS="${COMMON_FLAGS}"; RUSTFLAGS="-C target-cpu=x86-64-v3 -C opt-level=2"
+          CFLAGS="${COMMON_FLAGS}"
+          CXXFLAGS="${COMMON_FLAGS}"
+          RUSTFLAGS="-C target-cpu=x86-64-v3 -C opt-level=2"
           USE="wayland X vulkan pipewire dbus elogind udev opengl dri gbm vaapi vdpau ffmpeg bluetooth screencast gstreamer minizip -daemon -systemd -aqua -cups"
           VIDEO_CARDS="amdgpu radeon radeonsi intel iris nouveau virgl"
           LINUX_FIRMWARE="amd-ucode intel-ucode amdgpu nvidia i915 rtl_nic ath10k ath11k iwlwifi mt76 rtw88 rtw89"
           FEATURES="-userfetch -userpriv -usersandbox -ipc-sandbox -network-sandbox -pid-sandbox buildpkg parallel-install"
           EMERGE_DEFAULT_OPTS="--usepkg --binpkg-respect-use=y --binpkg-changed-deps=n --rebuilt-binaries=n --autounmask=y --autounmask-write --autounmask-backtrack=y --keep-going --quiet"
-          DISTDIR="/var/cache/distfiles"; PKGDIR="/overlay/job_out"; ACCEPT_LICENSE="*"
+          DISTDIR="/var/cache/distfiles"
+          PKGDIR="/overlay/job_out"
+          ACCEPT_LICENSE="*"
           MAKECONF
 
-          CORES=$(nproc); echo "MAKEOPTS=\"-j${CORES} -l${CORES}\"" >> /etc/portage/make.conf
+          CORES=$(nproc)
+          echo "MAKEOPTS=\"-j${CORES} -l${CORES}\"" >> /etc/portage/make.conf
 
           cat > /etc/portage/package.mask/fixes << 'MASK'
           sys-apps/systemd
@@ -71,17 +137,28 @@ jobs:
 
           echo "*/* *" >> /etc/portage/package.license/all
           echo "*/*::steam-overlay **" >> /etc/portage/package.accept_keywords/steam
+          echo "*/*::gentoo-nexus **" >> /etc/portage/package.accept_keywords/nexus
+          echo "*/*::guru **" >> /etc/portage/package.accept_keywords/guru
           
           TARGET_PKG="${{ github.event.inputs.atom }}"
 
+          echo ">>> Compiling Target..."
           for i in 1 2 3; do emerge --deep --newuse "$TARGET_PKG" 2>&1 && break || etc-update --automode -5; done
           emerge --deep --newuse "$TARGET_PKG"
+          
           BUILDEOF
           chmod +x build_script.sh
 
-          docker run --rm --privileged -v "${{ github.workspace }}:/overlay" -v "/tmp/distfiles:/var/cache/distfiles" gentoo/stage3:amd64-desktop-openrc bash /overlay/build_script.sh
+          docker run --rm --privileged \
+            -v "${{ github.workspace }}:/overlay" \
+            -v "/tmp/distfiles:/var/cache/distfiles" \
+            gentoo/stage3:amd64-desktop-openrc bash /overlay/build_script.sh
 
+      # =====================================================================
+      # PHASE 5: SPLIT-BRAIN DEPLOYMENT (RELEASES + PAGES)
+      # =====================================================================
       - name: Deploy to GitHub Releases & Pages
+        if: steps.check_bin.outputs.skip == 'false'
         env:
           GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
         run: |
