@@ -1,0 +1,626 @@
+name: Nexus Genesis (Parallel Sync Pipeline)
+
+on:
+  schedule:
+    - cron: '0 2 * * *'
+  workflow_dispatch:
+    inputs:
+      atom:
+        description: 'Sniper Mode: Package atom to build (e.g., games-util/steam-launcher)'
+        required: false
+        type: string
+        default: ''
+      force_rebuild:
+        description: 'Sniper Mode: Force rebuild even if binary exists'
+        required: false
+        type: boolean
+        default: false
+
+concurrency:
+  group: build-nexus-genesis
+  cancel-in-progress: false
+
+permissions:
+  contents: write
+  actions: write
+
+jobs:
+  # =====================================================================
+  # PHASE 1: OVERLAY SCAN & PATCHING
+  # =====================================================================
+  overlay-scan:
+    name: Overlay Deep Scan
+    runs-on: ubuntu-latest
+    timeout-minutes: 30
+    outputs:
+      updates_found: ${{ steps.scan.outputs.updates_found }}
+    steps:
+      - name: Checkout Repository
+        uses: actions/checkout@v4
+        with:
+          token: ${{ secrets.GITHUB_TOKEN }}
+          fetch-depth: 0
+
+      - name: Set up Python
+        uses: actions/setup-python@v5
+        with:
+          python-version: '3.11'
+
+      - name: Install System Dependencies
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y squashfs-tools xvfb jq
+          pip install requests packaging
+
+      - name: Deep Upstream Scan & Ebuild Patching
+        id: scan
+        env:
+          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+        run: |
+          find . -path ./cache -prune -o -type f -name '*.ebuild' -exec sed -i 's/LLVM_COMPAT=( {18..21} )/LLVM_COMPAT=( {18..22} )/g' {} + || true
+          find . -path ./cache -prune -o -type f -name '*.ebuild' -exec sed -i 's/gui-libs\/display-info/media-libs\/libdisplay-info/g' {} + || true
+          find . -path ./cache -prune -o -type f -name '*.ebuild' -exec sed -i 's/media-libs\/mesa\[gbm\]/media-libs\/mesa/g' {} + || true
+          find . -path ./cache -prune -o -type f -name '*.ebuild' -exec sed -i 's/media-libs\/mesa\[gbm(+)\]/media-libs\/mesa/g' {} + || true
+          find gui-wm/mangowc -type f -name '*.ebuild' -exec sed -i 's/mangowm\/mangowc/mangowm\/mango/g' {} + || true
+
+          python3 << 'EOF'
+          import os, re, requests, subprocess, stat, shutil
+          from pathlib import Path
+          from packaging.version import parse as parse_version
+
+          updated_atoms = set()
+          gh_token = os.environ.get('GITHUB_TOKEN')
+          hdrs = {"Authorization": f"token {gh_token}"} if gh_token else dict()
+
+          def get_latest_github_release(repo):
+              try:
+                  r = requests.get(f"https://api.github.com/repos/{repo}/releases/latest", headers=hdrs, timeout=15)
+                  if r.status_code == 200:
+                      tag = r.json().get("tag_name", "").lstrip("v")
+                      if tag and re.match(r'^[0-9]', tag): return tag
+                  r2 = requests.get(f"https://api.github.com/repos/{repo}/tags", headers=hdrs, timeout=15)
+                  if r2.status_code == 200:
+                      for tag in r2.json():
+                          name = tag.get("name", "").lstrip("v")
+                          if re.match(r'^[0-9]', name): return name
+              except Exception: pass
+              return None
+
+          def get_latest_commit(repo_url):
+              try:
+                  out = subprocess.check_output(["git", "ls-remote", repo_url, "HEAD"], timeout=30, stderr=subprocess.DEVNULL).decode()
+                  m = re.search(r"([a-f0-9]{40})", out)
+                  if m: return m.group(1)
+              except Exception: pass
+              return None
+
+          def get_rootapp_version():
+              appimage = "/tmp/Root.AppImage"
+              subprocess.run(["wget", "-qO", appimage, "https://installer.rootapp.com/installer/Linux/X64/Root.AppImage"])
+              if not os.path.exists(appimage): return None
+              os.chmod(appimage, stat.S_IRWXU)
+              subprocess.run([appimage, "--appimage-extract"], stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL)
+              ver = None
+              if os.path.exists("squashfs-root"):
+                  for d_file in Path("squashfs-root").glob("*.desktop"):
+                      txt = d_file.read_text(encoding="utf-8")
+                      m = re.search(r'^X-AppImage-Version=(.+)', txt, re.M | re.I)
+                      if m: ver = m.group(1).strip()
+                      break
+                  if ver in (None, "1.0", "1.0.0"):
+                      os.system("xvfb-run -a ./squashfs-root/AppRun > /tmp/startup.log 2>&1 & sleep 5 && pkill -f AppRun || true")
+                      if os.path.exists("/tmp/startup.log"):
+                          log = Path("/tmp/startup.log").read_text(encoding="utf-8")
+                          m = re.search(r'Root Version:\s*([0-9]+\.[0-9]+\.[0-9]+)', log, re.I)
+                          if m: ver = m.group(1)
+                  shutil.rmtree("squashfs-root", ignore_errors=True)
+              os.remove(appimage)
+              return ver
+
+          for ebuild_path in Path('.').rglob('*.ebuild'):
+              if 'cache' in ebuild_path.parts or 'job_out' in ebuild_path.parts: continue
+              pkg_dir = ebuild_path.parent
+              *parent_parts, cat_name, pkg_name = pkg_dir.parts
+              pkg_cat_name = f"{cat_name}/{pkg_name}"
+              
+              content = ebuild_path.read_text(encoding="utf-8")
+              is_live = ebuild_path.name.endswith('-9999.ebuild') or 'git-r3' in content
+              
+              if pkg_name == "rootapp-bin":
+                  new_ver = get_rootapp_version()
+                  if new_ver:
+                      curr_ver_m = re.search(r'-([0-9][0-9.]*(?:_p[0-9]+)?(?:-r[0-9]+)?)\.ebuild$', ebuild_path.name)
+                      curr_ver = curr_ver_m.group(1) if curr_ver_m else None
+                      if curr_ver and new_ver != curr_ver:
+                          new_path = pkg_dir / f"{pkg_name}-{new_ver}.ebuild"
+                          ebuild_path.rename(new_path)
+                          updated_atoms.add(pkg_cat_name)
+                  continue
+
+              repo_m = re.search(r'https://github\.com/([A-Za-z0-9_.-]+/[A-Za-z0-9_.-]+?)(?:\.git|/archive|/releases|/tarball|"\s|\n)', content)
+              if not repo_m: continue
+              repo = repo_m.group(1)
+              if repo.endswith('.git'): repo = repo[:-4]
+
+              if is_live:
+                  repo_url = f"https://github.com/{repo}.git"
+                  new_commit = get_latest_commit(repo_url)
+                  if new_commit:
+                      new_content = content
+                      short_commit = new_commit[:12]
+                      if "EGIT_COMMIT=" in new_content:
+                          new_content = re.sub(r'(EGIT_COMMIT=["\']?)[a-fA-F0-9]{7,40}(["\']?)', r"\g<1>" + short_commit + r"\2", new_content)
+                      else:
+                          new_content = re.sub(r"(^EAPI=.*)", r'\1\nEGIT_COMMIT="' + short_commit + '"', new_content, count=1, flags=re.MULTILINE)
+                      if "_commit=" in new_content:
+                          new_content = re.sub(r'(_commit=["\']?)[a-fA-F0-9]{7,40}(["\']?)', r"\g<1>" + new_commit + r"\2", new_content)
+
+                      if new_content != content:
+                          ebuild_path.write_text(new_content, encoding="utf-8")
+                          updated_atoms.add(pkg_cat_name)
+              else:
+                  curr_ver_m = re.search(r'-([0-9][0-9.]*(?:_p[0-9]+)?(?:-r[0-9]+)?)\.ebuild$', ebuild_path.name)
+                  if not curr_ver_m: continue
+                  curr_ver = curr_ver_m.group(1)
+                  
+                  latest_ver = get_latest_github_release(repo)
+                  if latest_ver:
+                      if pkg_name == "mangowc" and latest_ver.startswith("12."): latest_ver = "0." + latest_ver
+                      try: is_newer = parse_version(latest_ver) > parse_version(curr_ver)
+                      except: is_newer = (latest_ver != curr_ver)
+                      
+                      if is_newer:
+                          new_path = pkg_dir / f"{pkg_name}-{latest_ver}.ebuild"
+                          ebuild_path.rename(new_path)
+                          updated_atoms.add(pkg_cat_name)
+
+          if updated_atoms:
+              Path('changed_packages.txt').write_text('\n'.join(updated_atoms) + '\n', encoding="utf-8")
+          EOF
+
+      - name: Smart Binhost Audit
+        run: |
+          BINHOST_URL="https://${{ github.repository_owner }}.github.io/${{ github.event.repository.name }}/Packages"
+          HTTP_STATUS=$(curl -sL -o gh_packages.txt -w "%{http_code}" --connect-timeout 15 --retry 3 "$BINHOST_URL" || echo "000")
+          if [ "$HTTP_STATUS" != "200" ]; then touch gh_packages.txt; fi
+          
+          for ebuild in */*/*.ebuild; do
+              [ -e "$ebuild" ] || continue
+              pkg_dir=$(dirname "$ebuild")
+              CATEGORY=$(dirname "$pkg_dir")
+              EBUILD_NAME=$(basename "$ebuild" .ebuild)
+              CPV="${CATEGORY}/${EBUILD_NAME}"
+              
+              if ! grep -q "^CPV: $CPV$" gh_packages.txt; then
+                  echo "$pkg_dir" >> changed_packages.txt
+              fi
+          done
+
+          if [ -f changed_packages.txt ] && [ -s changed_packages.txt ]; then
+              sort -u changed_packages.txt > changed_packages_unique.txt
+              mv changed_packages_unique.txt changed_packages.txt
+              echo "updates_found=true" >> "$GITHUB_OUTPUT"
+          else
+              echo "updates_found=false" >> "$GITHUB_OUTPUT"
+          fi
+
+      - name: Commit & Upload Overlay State
+        run: |
+          git config user.name "github-actions[bot]"
+          git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
+          git add .
+          if ! git diff --cached --quiet; then
+            git commit -m "bot: auto-update ebuilds and manifests"
+            git pull --rebase origin "${GITHUB_REF_NAME}"
+            git push origin HEAD:"${GITHUB_REF_NAME}"
+          fi
+          
+      - name: Upload Workspace
+        uses: actions/upload-artifact@v4
+        with:
+          name: overlay-workspace
+          path: .
+          include-hidden-files: true
+
+
+  # =====================================================================
+  # PHASE 2: FAN-OUT VANGUARD (PARALLEL 64-BIT BUILDS)
+  # =====================================================================
+  
+  # JOB A: KERNEL ISOLATION
+  build-kernel:
+    name: Vanguard Kernel
+    needs: overlay-scan
+    if: github.event.inputs.atom == '' && (needs.overlay-scan.outputs.updates_found == 'true' || github.event_name == 'schedule')
+    runs-on: ubuntu-latest
+    timeout-minutes: 240
+    steps:
+      - uses: actions/download-artifact@v4
+        with: { name: overlay-workspace, path: . }
+      - uses: actions/cache@v4
+        with: { path: /tmp/ccache, key: ccache-kernel-${{ github.run_id }}, restore-keys: 'ccache-kernel-' }
+      - name: Execute Kernel Build
+        run: |
+          mkdir -p job_out /tmp/distfiles /tmp/ccache; chmod 777 /tmp/distfiles /tmp/ccache
+          cat > build_script.sh << 'BUILDEOF'
+          #!/bin/bash
+          set -euo pipefail
+          mkdir -p /var/db/repos/gentoo /etc/portage/{repos.conf,binrepos.conf,env,package.{accept_keywords,license,use,mask,env}} /overlay/{distfiles,job_out} /etc/portage/savedconfig/sys-kernel/
+          wget -qO /etc/portage/savedconfig/sys-kernel/gentoo-kernel https://raw.githubusercontent.com/Ackerman-00/gentoo-nexus/main/kernel-config/nexus-config-master || true
+          emerge-webrsync -q && getuto || true
+          eselect profile set default/linux/amd64/23.0/desktop
+          
+          cat > /etc/portage/binrepos.conf/gentoo.conf << 'REPOCONF'
+          [gentoo]
+          priority = 10000
+          sync-uri = https://distfiles.gentoo.org/releases/amd64/binpackages/23.0/x86-64/
+          verify-signature = false
+          REPOCONF
+
+          cat > /etc/portage/make.conf << 'MAKECONF'
+          COMMON_FLAGS="-O2 -march=x86-64-v3 -pipe"
+          CFLAGS="${COMMON_FLAGS}"; CXXFLAGS="${COMMON_FLAGS}"; RUSTFLAGS="-C target-cpu=x86-64-v3 -C opt-level=2"
+          USE="-daemon -systemd -aqua -cups"
+          LINUX_FIRMWARE="amd-ucode intel-ucode amdgpu nvidia i915 rtl_nic ath10k ath11k iwlwifi mt76 rtw88 rtw89"
+          FEATURES="-ipc-sandbox -network-sandbox -pid-sandbox buildpkg parallel-install getbinpkg -binpkg-request-signature ccache"
+          CCACHE_DIR="/var/cache/ccache"
+          EMERGE_DEFAULT_OPTS="--getbinpkg --usepkg --binpkg-respect-use=y --autounmask=y --autounmask-write --keep-going --quiet"
+          DISTDIR="/var/cache/distfiles"; PKGDIR="/overlay/job_out"; ACCEPT_LICENSE="*"
+          MAKECONF
+          echo "MAKEOPTS=\"-j$(nproc)\"" >> /etc/portage/make.conf
+
+          emerge --noreplace --quiet app-eselect/eselect-repository dev-vcs/git dev-util/ccache
+          cat > /etc/portage/package.use/kernel << 'USE'
+          sys-kernel/gentoo-kernel savedconfig initramfs
+          sys-kernel/installkernel dracut grub
+          USE
+          echo "sys-kernel/gentoo-kernel **" >> /etc/portage/package.accept_keywords/nexus
+          echo "sys-kernel/linux-firmware **" >> /etc/portage/package.accept_keywords/nexus
+
+          BASE_LIST=(sys-kernel/gentoo-kernel sys-kernel/linux-firmware sys-kernel/dracut)
+          for i in 1 2; do emerge --deep --newuse "${BASE_LIST[@]}" 2>&1 && break || etc-update --automode -5; done
+          emerge --deep --newuse "${BASE_LIST[@]}"
+          BUILDEOF
+          chmod +x build_script.sh
+          docker run --rm --privileged -v "${{ github.workspace }}:/overlay" -v "/tmp/distfiles:/var/cache/distfiles" -v "/tmp/ccache:/var/cache/ccache" gentoo/stage3:amd64-desktop-openrc bash /overlay/build_script.sh
+      - uses: actions/upload-artifact@v4
+        with: { name: kernel-binaries, path: job_out/, retention-days: 1 }
+
+  # JOB B: GRAPHICS ISOLATION
+  build-graphics:
+    name: Vanguard Graphics (64-bit)
+    needs: overlay-scan
+    if: github.event.inputs.atom == '' && (needs.overlay-scan.outputs.updates_found == 'true' || github.event_name == 'schedule')
+    runs-on: ubuntu-latest
+    timeout-minutes: 240
+    steps:
+      - uses: actions/download-artifact@v4
+        with: { name: overlay-workspace, path: . }
+      - uses: actions/cache@v4
+        with: { path: /tmp/ccache, key: ccache-graphics-${{ github.run_id }}, restore-keys: 'ccache-graphics-' }
+      - name: Execute 64-bit Graphics Build
+        run: |
+          mkdir -p job_out /tmp/distfiles /tmp/ccache; chmod 777 /tmp/distfiles /tmp/ccache
+          cat > build_script.sh << 'BUILDEOF'
+          #!/bin/bash
+          set -euo pipefail
+          mkdir -p /var/db/repos/gentoo /etc/portage/{repos.conf,binrepos.conf,env,package.{accept_keywords,license,use,mask,env}} /overlay/{distfiles,job_out}
+          emerge-webrsync -q && getuto || true
+          eselect profile set default/linux/amd64/23.0/desktop
+          
+          cat > /etc/portage/binrepos.conf/gentoo.conf << 'REPOCONF'
+          [gentoo]
+          priority = 10000
+          sync-uri = https://distfiles.gentoo.org/releases/amd64/binpackages/23.0/x86-64/
+          verify-signature = false
+          REPOCONF
+
+          cat > /etc/portage/make.conf << 'MAKECONF'
+          COMMON_FLAGS="-O2 -march=x86-64-v3 -pipe"
+          CFLAGS="${COMMON_FLAGS}"; CXXFLAGS="${COMMON_FLAGS}"; RUSTFLAGS="-C target-cpu=x86-64-v3 -C opt-level=2"
+          USE="wayland X vulkan pipewire dbus udev opengl dri gbm vaapi vdpau ffmpeg -daemon -systemd -aqua -cups"
+          VIDEO_CARDS="amdgpu radeon radeonsi intel iris nouveau virgl"
+          FEATURES="-ipc-sandbox -network-sandbox -pid-sandbox buildpkg parallel-install getbinpkg -binpkg-request-signature ccache"
+          CCACHE_DIR="/var/cache/ccache"
+          EMERGE_DEFAULT_OPTS="--getbinpkg --usepkg --binpkg-respect-use=y --autounmask=y --autounmask-write --keep-going --quiet"
+          DISTDIR="/var/cache/distfiles"; PKGDIR="/overlay/job_out"; ACCEPT_LICENSE="*"
+          MAKECONF
+          echo "MAKEOPTS=\"-j$(nproc)\"" >> /etc/portage/make.conf
+
+          emerge --noreplace --quiet app-eselect/eselect-repository dev-vcs/git dev-util/ccache
+          cat > /etc/portage/repos.conf/gentoo-nexus.conf << 'REPOCONF'
+          [gentoo-nexus]
+          location = /overlay
+          masters = gentoo
+          priority = 9999
+          REPOCONF
+          emaint sync -r gentoo-nexus 2>/dev/null || true
+
+          cat > /etc/portage/package.use/graphics << 'USE'
+          media-libs/mesa -abi_x86_32
+          media-libs/vulkan-loader -abi_x86_32
+          media-video/ffmpeg -sdl
+          media-video/pipewire -ffmpeg
+          USE
+          echo "media-libs/mesa **" >> /etc/portage/package.accept_keywords/nexus
+          echo "media-libs/vulkan-loader **" >> /etc/portage/package.accept_keywords/nexus
+
+          BASE_LIST=(media-libs/mesa media-libs/vulkan-loader dev-util/spirv-tools media-video/pipewire media-video/wireplumber)
+          for i in 1 2; do emerge --deep --newuse "${BASE_LIST[@]}" 2>&1 && break || etc-update --automode -5; done
+          emerge --deep --newuse "${BASE_LIST[@]}"
+          BUILDEOF
+          chmod +x build_script.sh
+          docker run --rm --privileged -v "${{ github.workspace }}:/overlay" -v "/tmp/distfiles:/var/cache/distfiles" -v "/tmp/ccache:/var/cache/ccache" gentoo/stage3:amd64-desktop-openrc bash /overlay/build_script.sh
+      - uses: actions/upload-artifact@v4
+        with: { name: graphics-binaries, path: job_out/, retention-days: 1 }
+
+  # JOB C: BASE ISOLATION
+  build-base:
+    name: Vanguard Base
+    needs: overlay-scan
+    if: github.event.inputs.atom == '' && (needs.overlay-scan.outputs.updates_found == 'true' || github.event_name == 'schedule')
+    runs-on: ubuntu-latest
+    timeout-minutes: 240
+    steps:
+      - uses: actions/download-artifact@v4
+        with: { name: overlay-workspace, path: . }
+      - uses: actions/cache@v4
+        with: { path: /tmp/ccache, key: ccache-base-${{ github.run_id }}, restore-keys: 'ccache-base-' }
+      - name: Execute Base Build
+        run: |
+          mkdir -p job_out /tmp/distfiles /tmp/ccache; chmod 777 /tmp/distfiles /tmp/ccache
+          cat > build_script.sh << 'BUILDEOF'
+          #!/bin/bash
+          set -euo pipefail
+          mkdir -p /var/db/repos/gentoo /etc/portage/{repos.conf,binrepos.conf,env,package.{accept_keywords,license,use,mask,env}} /overlay/{distfiles,job_out}
+          emerge-webrsync -q && getuto || true
+          eselect profile set default/linux/amd64/23.0/desktop
+          
+          cat > /etc/portage/binrepos.conf/gentoo.conf << 'REPOCONF'
+          [gentoo]
+          priority = 10000
+          sync-uri = https://distfiles.gentoo.org/releases/amd64/binpackages/23.0/x86-64/
+          verify-signature = false
+          REPOCONF
+
+          cat > /etc/portage/make.conf << 'MAKECONF'
+          COMMON_FLAGS="-O2 -march=x86-64-v3 -pipe"
+          CFLAGS="${COMMON_FLAGS}"; CXXFLAGS="${COMMON_FLAGS}"; RUSTFLAGS="-C target-cpu=x86-64-v3 -C opt-level=2"
+          USE="-daemon -systemd -aqua -cups"
+          FEATURES="-ipc-sandbox -network-sandbox -pid-sandbox buildpkg parallel-install getbinpkg -binpkg-request-signature ccache"
+          CCACHE_DIR="/var/cache/ccache"
+          EMERGE_DEFAULT_OPTS="--getbinpkg --usepkg --binpkg-respect-use=y --autounmask=y --autounmask-write --keep-going --quiet"
+          DISTDIR="/var/cache/distfiles"; PKGDIR="/overlay/job_out"; ACCEPT_LICENSE="*"
+          MAKECONF
+          echo "MAKEOPTS=\"-j$(nproc)\"" >> /etc/portage/make.conf
+
+          emerge --noreplace --quiet app-eselect/eselect-repository dev-vcs/git dev-util/ccache
+          cat > /etc/portage/package.mask/fixes << 'MASK'
+          sys-apps/systemd
+          sys-apps/gentoo-systemd-integration
+          MASK
+          cat > /etc/portage/package.use/global << 'USE'
+          */* -systemd -gpm
+          USE
+
+          BASE_LIST=(sys-boot/grub sys-boot/efibootmgr sys-auth/elogind sys-auth/seatd net-misc/networkmanager)
+          for i in 1 2; do emerge --deep --newuse "${BASE_LIST[@]}" 2>&1 && break || etc-update --automode -5; done
+          emerge --deep --newuse "${BASE_LIST[@]}"
+          BUILDEOF
+          chmod +x build_script.sh
+          docker run --rm --privileged -v "${{ github.workspace }}:/overlay" -v "/tmp/distfiles:/var/cache/distfiles" -v "/tmp/ccache:/var/cache/ccache" gentoo/stage3:amd64-desktop-openrc bash /overlay/build_script.sh
+      - uses: actions/upload-artifact@v4
+        with: { name: base-binaries, path: job_out/, retention-days: 1 }
+
+
+  # =====================================================================
+  # PHASE 3: HARMONY BRIDGE
+  # =====================================================================
+  build-harmony-32bit:
+    name: Harmony Multilib (32-bit)
+    needs: build-graphics
+    runs-on: ubuntu-latest
+    timeout-minutes: 240
+    steps:
+      - uses: actions/download-artifact@v4
+        with: { name: overlay-workspace, path: . }
+      - uses: actions/download-artifact@v4
+        with: { name: graphics-binaries, path: job_out/ }
+      - uses: actions/cache@v4
+        with: { path: /tmp/ccache, key: ccache-harmony-${{ github.run_id }}, restore-keys: 'ccache-graphics-' }
+      - name: Execute 32-Bit Harmony Build
+        run: |
+          mkdir -p /tmp/distfiles /tmp/ccache; chmod 777 /tmp/distfiles /tmp/ccache
+          cat > build_script.sh << 'BUILDEOF'
+          #!/bin/bash
+          set -euo pipefail
+          mkdir -p /var/db/repos/gentoo /etc/portage/{repos.conf,binrepos.conf,env,package.{accept_keywords,license,use,mask,env}} /overlay/{distfiles,job_out}
+          emerge-webrsync -q && getuto || true
+          eselect profile set default/linux/amd64/23.0/desktop
+
+          cat > /etc/portage/binrepos.conf/gentoo.conf << 'REPOCONF'
+          [gentoo]
+          priority = 10000
+          sync-uri = https://distfiles.gentoo.org/releases/amd64/binpackages/23.0/x86-64/
+          verify-signature = false
+          REPOCONF
+
+          cat > /etc/portage/make.conf << 'MAKECONF'
+          COMMON_FLAGS="-O2 -march=x86-64-v3 -pipe"
+          CFLAGS="${COMMON_FLAGS}"; CXXFLAGS="${COMMON_FLAGS}"; RUSTFLAGS="-C target-cpu=x86-64-v3 -C opt-level=2"
+          USE="wayland X vulkan opengl dri gbm -daemon -systemd"
+          VIDEO_CARDS="amdgpu radeon radeonsi intel iris nouveau virgl"
+          FEATURES="-ipc-sandbox -network-sandbox -pid-sandbox buildpkg parallel-install getbinpkg -binpkg-request-signature ccache"
+          CCACHE_DIR="/var/cache/ccache"
+          EMERGE_DEFAULT_OPTS="--getbinpkg --usepkg --binpkg-respect-use=y --autounmask=y --autounmask-write --keep-going --quiet"
+          DISTDIR="/var/cache/distfiles"; PKGDIR="/overlay/job_out"; ACCEPT_LICENSE="*"
+          MAKECONF
+          echo "MAKEOPTS=\"-j$(nproc)\"" >> /etc/portage/make.conf
+
+          emerge --noreplace --quiet app-eselect/eselect-repository dev-vcs/git dev-util/ccache
+          eselect repository enable steam-overlay 2>/dev/null || true
+          emaint sync -r steam-overlay 2>/dev/null || true
+
+          cat > /etc/portage/package.use/steam << 'USE'
+          media-libs/mesa abi_x86_32
+          media-libs/vulkan-loader abi_x86_32 layers
+          dev-util/spirv-tools abi_x86_32
+          x11-drivers/nvidia-drivers abi_x86_32
+          USE
+          echo "*/*::steam-overlay **" >> /etc/portage/package.accept_keywords/steam
+
+          STEAM_LIST=(media-libs/mesa media-libs/vulkan-loader games-util/steam-launcher)
+          for i in 1 2; do emerge --deep --newuse "${STEAM_LIST[@]}" 2>&1 && break || etc-update --automode -5; done
+          emerge --deep --newuse "${STEAM_LIST[@]}"
+          BUILDEOF
+          chmod +x build_script.sh
+          docker run --rm --privileged -v "${{ github.workspace }}:/overlay" -v "/tmp/distfiles:/var/cache/distfiles" -v "/tmp/ccache:/var/cache/ccache" gentoo/stage3:amd64-desktop-openrc bash /overlay/build_script.sh
+      - uses: actions/upload-artifact@v4
+        with: { name: harmony-binaries, path: job_out/, retention-days: 1 }
+
+
+  # =====================================================================
+  # PHASE 4: SNIPER MODE
+  # =====================================================================
+  build-sniper-manual:
+    name: Sniper Build
+    needs: overlay-scan
+    if: github.event.inputs.atom != ''
+    runs-on: ubuntu-latest
+    timeout-minutes: 240
+    steps:
+      - uses: actions/download-artifact@v4
+        with: { name: overlay-workspace, path: . }
+      - name: Check GitHub Pages Binhost Status
+        id: check_bin
+        run: |
+          PKG="${{ github.event.inputs.atom }}"
+          BINHOST="https://${{ github.repository_owner }}.github.io/${{ github.event.repository.name }}/Packages"
+          if [ "${{ github.event.inputs.force_rebuild }}" = "true" ]; then echo "skip=false" >> "$GITHUB_OUTPUT"; exit 0; fi
+          EBUILD_FILE=$(ls -1v "${PKG}"/*.ebuild 2>/dev/null | tail -n 1)
+          if [ -z "$EBUILD_FILE" ]; then echo "skip=false" >> "$GITHUB_OUTPUT"; exit 0; fi
+          PN=$(basename "${PKG}"); VER=$(basename "${EBUILD_FILE}" | sed -E "s/^${PN}-//; s/\.ebuild$//")
+          HTTP_STATUS=$(curl -sL -o gh_packages.txt -w "%{http_code}" --connect-timeout 15 --retry 3 "$BINHOST" || echo "000")
+          if [ "$HTTP_STATUS" -eq 200 ] && grep -q "^CPV: ${PKG}-${VER}$" gh_packages.txt; then echo "skip=true" >> "$GITHUB_OUTPUT"; else echo "skip=false" >> "$GITHUB_OUTPUT"; fi
+      - name: Execute Sniper Build
+        if: steps.check_bin.outputs.skip == 'false'
+        run: |
+          mkdir -p job_out /tmp/distfiles; chmod 777 /tmp/distfiles
+          cat > build_script.sh << 'BUILDEOF'
+          #!/bin/bash
+          set -euo pipefail
+          mkdir -p /var/db/repos/gentoo /etc/portage/{repos.conf,binrepos.conf,env,package.{accept_keywords,license,use,mask,env}} /overlay/{distfiles,job_out}
+          emerge-webrsync -q && getuto || true
+          eselect profile set default/linux/amd64/23.0/desktop
+          cat > /etc/portage/binrepos.conf/gentoo.conf << 'REPOCONF'
+          [gentoo]
+          priority = 10000
+          sync-uri = https://distfiles.gentoo.org/releases/amd64/binpackages/23.0/x86-64/
+          verify-signature = false
+          REPOCONF
+          cat > /etc/portage/make.conf << 'MAKECONF'
+          COMMON_FLAGS="-O2 -march=x86-64-v3 -pipe"
+          CFLAGS="${COMMON_FLAGS}"; CXXFLAGS="${COMMON_FLAGS}"; RUSTFLAGS="-C target-cpu=x86-64-v3 -C opt-level=2"
+          USE="-daemon -systemd -aqua -cups"
+          FEATURES="-ipc-sandbox -network-sandbox -pid-sandbox buildpkg parallel-install getbinpkg -binpkg-request-signature"
+          EMERGE_DEFAULT_OPTS="--getbinpkg --usepkg --binpkg-respect-use=y --autounmask=y --autounmask-write --keep-going --quiet"
+          DISTDIR="/var/cache/distfiles"; PKGDIR="/overlay/job_out"; ACCEPT_LICENSE="*"
+          MAKECONF
+          echo "MAKEOPTS=\"-j$(nproc)\"" >> /etc/portage/make.conf
+          emerge --noreplace --quiet app-eselect/eselect-repository dev-vcs/git
+          
+          TARGET_PKG="${{ github.event.inputs.atom }}"
+          for i in 1 2; do emerge --deep --newuse "$TARGET_PKG" 2>&1 && break || etc-update --automode -5; done
+          emerge --deep --newuse "$TARGET_PKG"
+          BUILDEOF
+          chmod +x build_script.sh
+          docker run --rm --privileged -v "${{ github.workspace }}:/overlay" -v "/tmp/distfiles:/var/cache/distfiles" gentoo/stage3:amd64-desktop-openrc bash /overlay/build_script.sh
+      - uses: actions/upload-artifact@v4
+        if: steps.check_bin.outputs.skip == 'false'
+        with: { name: sniper-binaries, path: job_out/, retention-days: 1 }
+
+
+  # =====================================================================
+  # PHASE 5: FAN-IN UNIFIED DEPLOYMENT
+  # =====================================================================
+  deploy-nexus:
+    name: Unified Deploy (Pages & Releases)
+    needs: [build-kernel, build-graphics, build-base, build-harmony-32bit, build-sniper-manual]
+    if: always() && !cancelled()
+    runs-on: ubuntu-latest
+    steps:
+      - name: Download ALL Binaries
+        uses: actions/download-artifact@v4
+        with:
+          path: raw_artifacts/
+
+      - name: Generate Unified Gentoo Manifest
+        run: |
+          mkdir -p job_out
+          find raw_artifacts/ -name '*.gpkg.tar' -exec cp {} job_out/ \; || true
+          
+          if [ -z "$(ls -A job_out 2>/dev/null)" ]; then
+            echo "No binaries generated across any parallel jobs. Exiting."
+            exit 0
+          fi
+
+          echo ">>> Booting micro-container to generate unified Portage index..."
+          docker run --rm -v "${{ github.workspace }}/job_out:/pkgdir" gentoo/stage3:amd64-desktop-openrc bash -c "\
+          FEATURES='binpkg-multi-instance' PKGDIR='/pkgdir' emaint binhost --fix"
+
+      - name: Deploy to GitHub Releases & Pages
+        env:
+          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+        run: |
+          if [ -z "$(find job_out -name '*.gpkg.tar' 2>/dev/null)" ]; then exit 0; fi
+
+          echo ">>> Uploading heavy binaries to Releases..."
+          gh release view rolling || gh release create rolling --title "Nexus Rolling Packages" --notes "Automated OS Binaries"
+          find job_out -name '*.gpkg.tar' -exec gh release upload rolling {} --clobber \;
+
+          echo ">>> Updating lightweight Index on Pages..."
+          git config --global user.name "github-actions[bot]"
+          git config --global user.email "bot@github.com"
+          
+          git clone --branch gh-pages https://x-access-token:${GITHUB_TOKEN}@github.com/${{ github.repository }}.git pages_repo || \
+          (mkdir pages_repo && cd pages_repo && git init && git checkout -b gh-pages)
+
+          python3 << 'EOF'
+          import os
+          base_url = f"https://github.com/{os.environ.get('GITHUB_REPOSITORY')}/releases/download/rolling/"
+          
+          def get_blocks(path):
+              blocks = {}
+              if not os.path.exists(path): return blocks
+              with open(path, 'r') as f:
+                  cpv, cur = None, []
+                  for line in f:
+                      if line.startswith('PACKAGES:') or line.startswith('PKGDIR:'): continue
+                      if line.strip() == '':
+                          if cpv: blocks[cpv] = cur
+                          cpv, cur = None, []
+                      else:
+                          if line.startswith('CPV:'): cpv = line.split(':', 1).strip()
+                          cur.append(line.strip())
+                  if cpv: blocks[cpv] = cur
+              return blocks
+
+          new_b = get_blocks('job_out/Packages')
+          old_b = get_blocks('pages_repo/Packages')
+
+          for cpv, lines in new_b.items():
+              rel_path = next((l.split(':',1).strip() for l in lines if l.startswith('URI:')), cpv+".gpkg.tar")
+              lines = [l for l in lines if not l.startswith('URI:')]
+              lines.append(f"URI: {base_url}{os.path.basename(rel_path)}")
+              old_b[cpv] = lines
+
+          with open('pages_repo/Packages', 'w') as f:
+              f.write("PKGDIR: .\nPACKAGES:\n\n")
+              for cpv in sorted(old_b.keys()):
+                  f.write("\n".join(old_b[cpv]) + "\n\n")
+          EOF
+
+          cd pages_repo
+          git add Packages
+          git commit -m "Update Binhost via Parallel Sync Pipeline" || true
+          git push https://x-access-token:${GITHUB_TOKEN}@github.com/${{ github.repository }}.git gh-pages
