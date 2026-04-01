@@ -236,12 +236,19 @@ jobs:
     timeout-minutes: 240
     steps:
       - uses: actions/download-artifact@v4
-        with: { name: overlay-workspace, path: . }
+        with:
+          name: overlay-workspace
+          path: .
       - uses: actions/cache@v4
-        with: { path: /tmp/ccache, key: ccache-kernel-${{ github.run_id }}, restore-keys: 'ccache-kernel-' }
+        with:
+          path: /tmp/ccache
+          key: ccache-kernel-${{ github.run_id }}
+          restore-keys: |
+            ccache-kernel-
       - name: Execute Kernel Build
         run: |
-          mkdir -p job_out /tmp/distfiles /tmp/ccache; chmod 777 /tmp/distfiles /tmp/ccache
+          mkdir -p job_out /tmp/distfiles /tmp/ccache
+          chmod 777 /tmp/distfiles /tmp/ccache
           cat > build_script.sh << 'BUILDEOF'
           #!/bin/bash
           set -euo pipefail
@@ -284,7 +291,10 @@ jobs:
           chmod +x build_script.sh
           docker run --rm --privileged -v "${{ github.workspace }}:/overlay" -v "/tmp/distfiles:/var/cache/distfiles" -v "/tmp/ccache:/var/cache/ccache" gentoo/stage3:amd64-desktop-openrc bash /overlay/build_script.sh
       - uses: actions/upload-artifact@v4
-        with: { name: kernel-binaries, path: job_out/, retention-days: 1 }
+        with:
+          name: kernel-binaries
+          path: job_out/
+          retention-days: 1
 
   # JOB B: GRAPHICS ISOLATION
   build-graphics:
@@ -295,12 +305,19 @@ jobs:
     timeout-minutes: 240
     steps:
       - uses: actions/download-artifact@v4
-        with: { name: overlay-workspace, path: . }
+        with:
+          name: overlay-workspace
+          path: .
       - uses: actions/cache@v4
-        with: { path: /tmp/ccache, key: ccache-graphics-${{ github.run_id }}, restore-keys: 'ccache-graphics-' }
+        with:
+          path: /tmp/ccache
+          key: ccache-graphics-${{ github.run_id }}
+          restore-keys: |
+            ccache-graphics-
       - name: Execute 64-bit Graphics Build
         run: |
-          mkdir -p job_out /tmp/distfiles /tmp/ccache; chmod 777 /tmp/distfiles /tmp/ccache
+          mkdir -p job_out /tmp/distfiles /tmp/ccache
+          chmod 777 /tmp/distfiles /tmp/ccache
           cat > build_script.sh << 'BUILDEOF'
           #!/bin/bash
           set -euo pipefail
@@ -352,7 +369,10 @@ jobs:
           chmod +x build_script.sh
           docker run --rm --privileged -v "${{ github.workspace }}:/overlay" -v "/tmp/distfiles:/var/cache/distfiles" -v "/tmp/ccache:/var/cache/ccache" gentoo/stage3:amd64-desktop-openrc bash /overlay/build_script.sh
       - uses: actions/upload-artifact@v4
-        with: { name: graphics-binaries, path: job_out/, retention-days: 1 }
+        with:
+          name: graphics-binaries
+          path: job_out/
+          retention-days: 1
 
   # JOB C: BASE ISOLATION
   build-base:
@@ -363,12 +383,19 @@ jobs:
     timeout-minutes: 240
     steps:
       - uses: actions/download-artifact@v4
-        with: { name: overlay-workspace, path: . }
+        with:
+          name: overlay-workspace
+          path: .
       - uses: actions/cache@v4
-        with: { path: /tmp/ccache, key: ccache-base-${{ github.run_id }}, restore-keys: 'ccache-base-' }
+        with:
+          path: /tmp/ccache
+          key: ccache-base-${{ github.run_id }}
+          restore-keys: |
+            ccache-base-
       - name: Execute Base Build
         run: |
-          mkdir -p job_out /tmp/distfiles /tmp/ccache; chmod 777 /tmp/distfiles /tmp/ccache
+          mkdir -p job_out /tmp/distfiles /tmp/ccache
+          chmod 777 /tmp/distfiles /tmp/ccache
           cat > build_script.sh << 'BUILDEOF'
           #!/bin/bash
           set -euo pipefail
@@ -410,7 +437,10 @@ jobs:
           chmod +x build_script.sh
           docker run --rm --privileged -v "${{ github.workspace }}:/overlay" -v "/tmp/distfiles:/var/cache/distfiles" -v "/tmp/ccache:/var/cache/ccache" gentoo/stage3:amd64-desktop-openrc bash /overlay/build_script.sh
       - uses: actions/upload-artifact@v4
-        with: { name: base-binaries, path: job_out/, retention-days: 1 }
+        with:
+          name: base-binaries
+          path: job_out/
+          retention-days: 1
 
 
   # =====================================================================
@@ -423,14 +453,23 @@ jobs:
     timeout-minutes: 240
     steps:
       - uses: actions/download-artifact@v4
-        with: { name: overlay-workspace, path: . }
+        with:
+          name: overlay-workspace
+          path: .
       - uses: actions/download-artifact@v4
-        with: { name: graphics-binaries, path: job_out/ }
+        with:
+          name: graphics-binaries
+          path: job_out/
       - uses: actions/cache@v4
-        with: { path: /tmp/ccache, key: ccache-harmony-${{ github.run_id }}, restore-keys: 'ccache-graphics-' }
+        with:
+          path: /tmp/ccache
+          key: ccache-harmony-${{ github.run_id }}
+          restore-keys: |
+            ccache-graphics-
       - name: Execute 32-Bit Harmony Build
         run: |
-          mkdir -p /tmp/distfiles /tmp/ccache; chmod 777 /tmp/distfiles /tmp/ccache
+          mkdir -p /tmp/distfiles /tmp/ccache
+          chmod 777 /tmp/distfiles /tmp/ccache
           cat > build_script.sh << 'BUILDEOF'
           #!/bin/bash
           set -euo pipefail
@@ -476,7 +515,10 @@ jobs:
           chmod +x build_script.sh
           docker run --rm --privileged -v "${{ github.workspace }}:/overlay" -v "/tmp/distfiles:/var/cache/distfiles" -v "/tmp/ccache:/var/cache/ccache" gentoo/stage3:amd64-desktop-openrc bash /overlay/build_script.sh
       - uses: actions/upload-artifact@v4
-        with: { name: harmony-binaries, path: job_out/, retention-days: 1 }
+        with:
+          name: harmony-binaries
+          path: job_out/
+          retention-days: 1
 
 
   # =====================================================================
@@ -490,7 +532,9 @@ jobs:
     timeout-minutes: 240
     steps:
       - uses: actions/download-artifact@v4
-        with: { name: overlay-workspace, path: . }
+        with:
+          name: overlay-workspace
+          path: .
       - name: Check GitHub Pages Binhost Status
         id: check_bin
         run: |
@@ -505,7 +549,8 @@ jobs:
       - name: Execute Sniper Build
         if: steps.check_bin.outputs.skip == 'false'
         run: |
-          mkdir -p job_out /tmp/distfiles; chmod 777 /tmp/distfiles
+          mkdir -p job_out /tmp/distfiles
+          chmod 777 /tmp/distfiles
           cat > build_script.sh << 'BUILDEOF'
           #!/bin/bash
           set -euo pipefail
@@ -537,7 +582,10 @@ jobs:
           docker run --rm --privileged -v "${{ github.workspace }}:/overlay" -v "/tmp/distfiles:/var/cache/distfiles" gentoo/stage3:amd64-desktop-openrc bash /overlay/build_script.sh
       - uses: actions/upload-artifact@v4
         if: steps.check_bin.outputs.skip == 'false'
-        with: { name: sniper-binaries, path: job_out/, retention-days: 1 }
+        with:
+          name: sniper-binaries
+          path: job_out/
+          retention-days: 1
 
 
   # =====================================================================
