@@ -271,12 +271,14 @@ jobs:
           cat > build_script.sh << 'BUILDEOF'
           #!/bin/bash
           set -euo pipefail
-          mkdir -p /var/db/repos/{gentoo,guru,steam-overlay} /etc/portage/{repos.conf,binrepos.conf,env,package.{accept_keywords,license,use,mask,env}} /overlay/{distfiles,job_out} /etc/portage/savedconfig/sys-kernel/
-          wget -qO /etc/portage/savedconfig/sys-kernel/gentoo-kernel https://raw.githubusercontent.com/Ackerman-00/gentoo-nexus/main/kernel-config/nexus-config-master || true
+          mkdir -p /var/db/repos/{gentoo,guru,steam-overlay} /etc/portage/{repos.conf,binrepos.conf,env,package.{accept_keywords,license,use,mask,env}} /overlay/{distfiles,job_out}
           
-          emerge-webrsync -q || true
-          getuto || true
-          eselect profile set default/linux/amd64/23.0/desktop
+          # ARCHITECT FIX: Deep-merge config fragment instead of overwriting defaults!
+          echo ">>> Injecting Nexus Fragment into Kernel Build..."
+          mkdir -p /etc/kernel/config.d
+          if [ -f /overlay/kernel-config/nexus-config-master ]; then
+              cp /overlay/kernel-config/nexus-config-master /etc/kernel/config.d/nexus.config
+          fi
           
           cat > /etc/portage/binrepos.conf/gentoo.conf << 'EOF'
           [gentoo]
@@ -292,30 +294,36 @@ jobs:
           verify-signature = false
           EOF
 
-          # ARCHITECT FIX: Safe architecture to prevent GCC Illegal Instruction faults
+          # ARCHITECT FIX: Variables isolated line-by-line. GCC will not crash!
           cat > /etc/portage/make.conf << 'MAKECONF'
           COMMON_FLAGS="-O2 -march=x86-64 -pipe"
-          CFLAGS="${COMMON_FLAGS}"; CXXFLAGS="${COMMON_FLAGS}"; RUSTFLAGS="-C target-cpu=x86-64 -C opt-level=2"
+          CFLAGS="${COMMON_FLAGS}"
+          CXXFLAGS="${COMMON_FLAGS}"
+          RUSTFLAGS="-C target-cpu=x86-64 -C opt-level=2"
           USE="wayland X vulkan pipewire dbus udev opengl dri gbm vaapi vdpau ffmpeg minizip -daemon -systemd -aqua -cups"
           VIDEO_CARDS="amdgpu radeon radeonsi intel iris nouveau virgl"
           FEATURES="-ipc-sandbox -network-sandbox -pid-sandbox buildpkg parallel-install getbinpkg -binpkg-request-signature ccache"
           CCACHE_DIR="/var/cache/ccache"
           EMERGE_DEFAULT_OPTS="--getbinpkg --usepkg --binpkg-respect-use=y --autounmask=y --autounmask-write --keep-going --quiet"
-          DISTDIR="/var/cache/distfiles"; PKGDIR="/overlay/job_out"; ACCEPT_LICENSE="*"
+          DISTDIR="/var/cache/distfiles"
+          PKGDIR="/overlay/job_out"
+          ACCEPT_LICENSE="*"
           MAKECONF
           echo "MAKEOPTS=\"-j$(nproc)\"" >> /etc/portage/make.conf
 
+          emerge-webrsync -q || true
+          getuto || true
+          eselect profile set default/linux/amd64/23.0/desktop
+          
+          echo ">>> Bootstrapping Tools..."
           emerge --noreplace --quiet dev-vcs/git dev-util/ccache
           
-          chown -R portage:portage /var/cache/ccache
           chmod -R 2777 /var/cache/ccache
-
+          
           echo ">>> Cloning Overlays..."
           git clone --depth 1 https://github.com/gentoo-mirror/guru.git /var/db/repos/guru || true
-          # ARCHITECT FIX: The actual steam-overlay URL
           git clone --depth 1 https://github.com/anyc/steam-overlay.git /var/db/repos/steam-overlay || true
           
-          # ARCHITECT FIX: Force layout.conf creation so Portage never complains
           mkdir -p /var/db/repos/guru/metadata /var/db/repos/steam-overlay/metadata
           echo "masters = gentoo" > /var/db/repos/guru/metadata/layout.conf
           echo "masters = gentoo" > /var/db/repos/steam-overlay/metadata/layout.conf
@@ -352,7 +360,6 @@ jobs:
           sys-apps/gentoo-systemd-integration
           MASK
 
-          # ARCHITECT FIX: zlib minizip mapped correctly
           cat > /etc/portage/package.use/global << 'USE'
           */* -systemd -gpm
           media-video/ffmpeg -sdl
@@ -360,8 +367,9 @@ jobs:
           sys-libs/zlib minizip
           USE
           
+          # ARCHITECT FIX: savedconfig removed. Eclass merges config.d natively.
           cat > /etc/portage/package.use/kernel << 'USE'
-          sys-kernel/gentoo-kernel savedconfig initramfs
+          sys-kernel/gentoo-kernel initramfs
           sys-kernel/installkernel dracut grub
           USE
 
@@ -418,16 +426,20 @@ jobs:
           verify-signature = false
           EOF
 
-          # ARCHITECT FIX: Safe architecture to prevent GCC Illegal Instruction faults
+          # ARCHITECT FIX: Isolated lines
           cat > /etc/portage/make.conf << 'MAKECONF'
           COMMON_FLAGS="-O2 -march=x86-64 -pipe"
-          CFLAGS="${COMMON_FLAGS}"; CXXFLAGS="${COMMON_FLAGS}"; RUSTFLAGS="-C target-cpu=x86-64 -C opt-level=2"
+          CFLAGS="${COMMON_FLAGS}"
+          CXXFLAGS="${COMMON_FLAGS}"
+          RUSTFLAGS="-C target-cpu=x86-64 -C opt-level=2"
           USE="wayland X vulkan pipewire dbus udev opengl dri gbm vaapi vdpau ffmpeg minizip -daemon -systemd -aqua -cups"
           VIDEO_CARDS="amdgpu radeon radeonsi intel iris nouveau virgl"
           FEATURES="-ipc-sandbox -network-sandbox -pid-sandbox buildpkg parallel-install getbinpkg -binpkg-request-signature ccache"
           CCACHE_DIR="/var/cache/ccache"
           EMERGE_DEFAULT_OPTS="--getbinpkg --usepkg --binpkg-respect-use=y --autounmask=y --autounmask-write --keep-going --quiet"
-          DISTDIR="/var/cache/distfiles"; PKGDIR="/overlay/job_out"; ACCEPT_LICENSE="*"
+          DISTDIR="/var/cache/distfiles"
+          PKGDIR="/overlay/job_out"
+          ACCEPT_LICENSE="*"
           MAKECONF
           echo "MAKEOPTS=\"-j$(nproc)\"" >> /etc/portage/make.conf
 
@@ -438,7 +450,6 @@ jobs:
           echo ">>> Bootstrapping Tools..."
           emerge --noreplace --quiet dev-vcs/git dev-util/ccache
           
-          chown -R portage:portage /var/cache/ccache
           chmod -R 2777 /var/cache/ccache
           
           echo ">>> Cloning Overlays..."
@@ -488,7 +499,6 @@ jobs:
           sys-libs/zlib minizip
           USE
 
-          # ARCHITECT FIX: GCC-ICE Workarounds to prevent mesa compiler death
           mkdir -p /etc/portage/env /etc/portage/package.env
           cat > /etc/portage/env/gcc-ice-safe << 'EOF'
           CFLAGS="-O1 -pipe -fno-tree-loop-vectorize -fno-tree-slp-vectorize"
@@ -558,15 +568,20 @@ jobs:
           verify-signature = false
           EOF
 
+          # ARCHITECT FIX: Isolated lines
           cat > /etc/portage/make.conf << 'MAKECONF'
           COMMON_FLAGS="-O2 -march=x86-64 -pipe"
-          CFLAGS="${COMMON_FLAGS}"; CXXFLAGS="${COMMON_FLAGS}"; RUSTFLAGS="-C target-cpu=x86-64 -C opt-level=2"
+          CFLAGS="${COMMON_FLAGS}"
+          CXXFLAGS="${COMMON_FLAGS}"
+          RUSTFLAGS="-C target-cpu=x86-64 -C opt-level=2"
           USE="wayland X vulkan pipewire dbus udev opengl dri gbm vaapi vdpau ffmpeg minizip -daemon -systemd -aqua -cups"
           VIDEO_CARDS="amdgpu radeon radeonsi intel iris nouveau virgl"
           FEATURES="-ipc-sandbox -network-sandbox -pid-sandbox buildpkg parallel-install getbinpkg -binpkg-request-signature ccache"
           CCACHE_DIR="/var/cache/ccache"
           EMERGE_DEFAULT_OPTS="--getbinpkg --usepkg --binpkg-respect-use=y --autounmask=y --autounmask-write --keep-going --quiet"
-          DISTDIR="/var/cache/distfiles"; PKGDIR="/overlay/job_out"; ACCEPT_LICENSE="*"
+          DISTDIR="/var/cache/distfiles"
+          PKGDIR="/overlay/job_out"
+          ACCEPT_LICENSE="*"
           MAKECONF
           echo "MAKEOPTS=\"-j$(nproc)\"" >> /etc/portage/make.conf
 
@@ -577,7 +592,6 @@ jobs:
           echo ">>> Bootstrapping Tools..."
           emerge --noreplace --quiet dev-vcs/git dev-util/ccache
           
-          chown -R portage:portage /var/cache/ccache
           chmod -R 2777 /var/cache/ccache
           
           echo ">>> Cloning Overlays..."
@@ -693,15 +707,20 @@ jobs:
           verify-signature = false
           EOF
 
+          # ARCHITECT FIX: Isolated lines
           cat > /etc/portage/make.conf << 'MAKECONF'
           COMMON_FLAGS="-O2 -march=x86-64 -pipe"
-          CFLAGS="${COMMON_FLAGS}"; CXXFLAGS="${COMMON_FLAGS}"; RUSTFLAGS="-C target-cpu=x86-64 -C opt-level=2"
+          CFLAGS="${COMMON_FLAGS}"
+          CXXFLAGS="${COMMON_FLAGS}"
+          RUSTFLAGS="-C target-cpu=x86-64 -C opt-level=2"
           USE="wayland X vulkan opengl dri gbm minizip -daemon -systemd"
           VIDEO_CARDS="amdgpu radeon radeonsi intel iris nouveau virgl"
           FEATURES="-ipc-sandbox -network-sandbox -pid-sandbox buildpkg parallel-install getbinpkg -binpkg-request-signature ccache"
           CCACHE_DIR="/var/cache/ccache"
           EMERGE_DEFAULT_OPTS="--getbinpkg --usepkg --binpkg-respect-use=y --autounmask=y --autounmask-write --keep-going --quiet"
-          DISTDIR="/var/cache/distfiles"; PKGDIR="/overlay/job_out"; ACCEPT_LICENSE="*"
+          DISTDIR="/var/cache/distfiles"
+          PKGDIR="/overlay/job_out"
+          ACCEPT_LICENSE="*"
           MAKECONF
           echo "MAKEOPTS=\"-j$(nproc)\"" >> /etc/portage/make.conf
 
@@ -712,7 +731,6 @@ jobs:
           echo ">>> Bootstrapping Tools..."
           emerge --noreplace --quiet dev-vcs/git dev-util/ccache
           
-          chown -R portage:portage /var/cache/ccache
           chmod -R 2777 /var/cache/ccache
           
           echo ">>> Cloning Overlays..."
@@ -840,15 +858,20 @@ jobs:
           verify-signature = false
           EOF
 
+          # ARCHITECT FIX: Isolated lines
           cat > /etc/portage/make.conf << 'MAKECONF'
           COMMON_FLAGS="-O2 -march=x86-64 -pipe"
-          CFLAGS="${COMMON_FLAGS}"; CXXFLAGS="${COMMON_FLAGS}"; RUSTFLAGS="-C target-cpu=x86-64 -C opt-level=2"
+          CFLAGS="${COMMON_FLAGS}"
+          CXXFLAGS="${COMMON_FLAGS}"
+          RUSTFLAGS="-C target-cpu=x86-64 -C opt-level=2"
           USE="wayland X vulkan pipewire dbus udev opengl dri gbm vaapi vdpau ffmpeg minizip -daemon -systemd -aqua -cups"
           VIDEO_CARDS="amdgpu radeon radeonsi intel iris nouveau virgl"
           FEATURES="-ipc-sandbox -network-sandbox -pid-sandbox buildpkg parallel-install getbinpkg -binpkg-request-signature ccache"
           CCACHE_DIR="/var/cache/ccache"
           EMERGE_DEFAULT_OPTS="--getbinpkg --usepkg --binpkg-respect-use=y --autounmask=y --autounmask-write --keep-going --quiet"
-          DISTDIR="/var/cache/distfiles"; PKGDIR="/overlay/job_out"; ACCEPT_LICENSE="*"
+          DISTDIR="/var/cache/distfiles"
+          PKGDIR="/overlay/job_out"
+          ACCEPT_LICENSE="*"
           MAKECONF
           echo "MAKEOPTS=\"-j$(nproc)\"" >> /etc/portage/make.conf
 
@@ -859,7 +882,6 @@ jobs:
           echo ">>> Bootstrapping Tools..."
           emerge --noreplace --quiet dev-vcs/git dev-util/ccache
           
-          chown -R portage:portage /var/cache/ccache
           chmod -R 2777 /var/cache/ccache
           
           echo ">>> Cloning Overlays..."
