@@ -296,10 +296,11 @@ jobs:
           FEATURES="-sandbox -usersandbox -ipc-sandbox -network-sandbox -pid-sandbox buildpkg parallel-install getbinpkg -binpkg-request-signature ccache"
           CCACHE_DIR="/var/cache/ccache"
           CCACHE_UMASK="002"
-          EMERGE_DEFAULT_OPTS="--getbinpkg --usepkg --binpkg-respect-use=y --autounmask=y --autounmask-write --keep-going --quiet"
+          EMERGE_DEFAULT_OPTS="--getbinpkg --usepkg --binpkg-respect-use=y --binpkg-changed-deps=y --autounmask=y --autounmask-write --keep-going --quiet"
           DISTDIR="/var/cache/distfiles"
           PKGDIR="/overlay/job_out"
           ACCEPT_LICENSE="*"
+          EVCS_OFFLINE=1
           MAKECONF
           echo "MAKEOPTS=\"-j$(nproc)\"" >> /etc/portage/make.conf
 
@@ -345,8 +346,10 @@ jobs:
           echo "*/*::guru **" >> /etc/portage/package.accept_keywords/guru
           echo "*/*::steam-overlay **" >> /etc/portage/package.accept_keywords/steam
           echo "*/*::gentoo-nexus **" >> /etc/portage/package.accept_keywords/nexus
-          echo "sys-kernel/gentoo-kernel **" >> /etc/portage/package.accept_keywords/nexus
-          echo "sys-kernel/linux-firmware **" >> /etc/portage/package.accept_keywords/nexus
+          
+          # ARCHITECT FIX: Unmask only up to ~amd64 for stable releases
+          echo "sys-kernel/gentoo-kernel ~amd64" >> /etc/portage/package.accept_keywords/nexus
+          echo "sys-kernel/linux-firmware ~amd64" >> /etc/portage/package.accept_keywords/nexus
 
           cat > /etc/portage/package.mask/fixes << 'MASK'
           sys-apps/systemd
@@ -425,10 +428,11 @@ jobs:
           FEATURES="-sandbox -usersandbox -ipc-sandbox -network-sandbox -pid-sandbox buildpkg parallel-install getbinpkg -binpkg-request-signature ccache"
           CCACHE_DIR="/var/cache/ccache"
           CCACHE_UMASK="002"
-          EMERGE_DEFAULT_OPTS="--getbinpkg --usepkg --binpkg-respect-use=y --autounmask=y --autounmask-write --keep-going --quiet"
+          EMERGE_DEFAULT_OPTS="--getbinpkg --usepkg --binpkg-respect-use=y --binpkg-changed-deps=y --autounmask=y --autounmask-write --keep-going --quiet"
           DISTDIR="/var/cache/distfiles"
           PKGDIR="/overlay/job_out"
           ACCEPT_LICENSE="*"
+          EVCS_OFFLINE=1
           MAKECONF
           echo "MAKEOPTS=\"-j$(nproc)\"" >> /etc/portage/make.conf
 
@@ -471,12 +475,22 @@ jobs:
           priority = 9999
           EOF
 
+          # ARCHITECT FIX: Mask 9999 to guarantee stable latest releases
+          cat > /etc/portage/package.mask/no-live-core << 'MASK'
+          =media-libs/mesa-9999*
+          =dev-util/mesa_clc-9999*
+          =dev-util/spirv-tools-9999*
+          =media-libs/vulkan-loader-9999*
+          MASK
+
           echo "*/*::guru **" >> /etc/portage/package.accept_keywords/guru
           echo "*/*::steam-overlay **" >> /etc/portage/package.accept_keywords/steam
           echo "*/*::gentoo-nexus **" >> /etc/portage/package.accept_keywords/nexus
-          echo "media-libs/mesa **" >> /etc/portage/package.accept_keywords/nexus
-          echo "dev-util/mesa_clc **" >> /etc/portage/package.accept_keywords/nexus
-          echo "dev-util/spirv-tools **" >> /etc/portage/package.accept_keywords/nexus
+          
+          # ARCHITECT FIX: Unmask only up to ~amd64 for stable releases
+          echo "media-libs/mesa ~amd64" >> /etc/portage/package.accept_keywords/nexus
+          echo "dev-util/mesa_clc ~amd64" >> /etc/portage/package.accept_keywords/nexus
+          echo "dev-util/spirv-tools ~amd64" >> /etc/portage/package.accept_keywords/nexus
 
           cat > /etc/portage/package.mask/fixes << 'MASK'
           sys-apps/systemd
@@ -574,10 +588,11 @@ jobs:
           FEATURES="-sandbox -usersandbox -ipc-sandbox -network-sandbox -pid-sandbox buildpkg parallel-install getbinpkg -binpkg-request-signature ccache"
           CCACHE_DIR="/var/cache/ccache"
           CCACHE_UMASK="002"
-          EMERGE_DEFAULT_OPTS="--getbinpkg --usepkg --binpkg-respect-use=y --autounmask=y --autounmask-write --keep-going --quiet"
+          EMERGE_DEFAULT_OPTS="--getbinpkg --usepkg --binpkg-respect-use=y --binpkg-changed-deps=y --autounmask=y --autounmask-write --keep-going --quiet"
           DISTDIR="/var/cache/distfiles"
           PKGDIR="/overlay/job_out"
           ACCEPT_LICENSE="*"
+          EVCS_OFFLINE=1
           MAKECONF
           echo "MAKEOPTS=\"-j$(nproc)\"" >> /etc/portage/make.conf
 
@@ -619,12 +634,19 @@ jobs:
           masters = gentoo guru
           priority = 9999
           EOF
+          
+          cat > /etc/portage/package.mask/no-live-core << 'MASK'
+          =media-libs/mesa-9999*
+          =dev-util/mesa_clc-9999*
+          =dev-util/spirv-tools-9999*
+          =media-libs/vulkan-loader-9999*
+          MASK
 
           echo "*/*::guru **" >> /etc/portage/package.accept_keywords/guru
           echo "*/*::steam-overlay **" >> /etc/portage/package.accept_keywords/steam
           echo "*/*::gentoo-nexus **" >> /etc/portage/package.accept_keywords/nexus
-          echo "media-libs/mesa **" >> /etc/portage/package.accept_keywords/nexus
-          echo "media-libs/vulkan-loader **" >> /etc/portage/package.accept_keywords/nexus
+          echo "media-libs/mesa ~amd64" >> /etc/portage/package.accept_keywords/nexus
+          echo "media-libs/vulkan-loader ~amd64" >> /etc/portage/package.accept_keywords/nexus
 
           cat > /etc/portage/package.mask/fixes << 'MASK'
           sys-apps/systemd
@@ -705,10 +727,11 @@ jobs:
           FEATURES="-sandbox -usersandbox -ipc-sandbox -network-sandbox -pid-sandbox buildpkg parallel-install getbinpkg -binpkg-request-signature ccache"
           CCACHE_DIR="/var/cache/ccache"
           CCACHE_UMASK="002"
-          EMERGE_DEFAULT_OPTS="--getbinpkg --usepkg --binpkg-respect-use=y --autounmask=y --autounmask-write --keep-going --quiet"
+          EMERGE_DEFAULT_OPTS="--getbinpkg --usepkg --binpkg-respect-use=y --binpkg-changed-deps=y --autounmask=y --autounmask-write --keep-going --quiet"
           DISTDIR="/var/cache/distfiles"
           PKGDIR="/overlay/job_out"
           ACCEPT_LICENSE="*"
+          EVCS_OFFLINE=1
           MAKECONF
           echo "MAKEOPTS=\"-j$(nproc)\"" >> /etc/portage/make.conf
 
@@ -751,10 +774,17 @@ jobs:
           priority = 9999
           EOF
 
+          cat > /etc/portage/package.mask/no-live-core << 'MASK'
+          =media-libs/mesa-9999*
+          =dev-util/mesa_clc-9999*
+          =dev-util/spirv-tools-9999*
+          =media-libs/vulkan-loader-9999*
+          MASK
+
           echo "*/*::guru **" >> /etc/portage/package.accept_keywords/guru
           echo "*/*::steam-overlay **" >> /etc/portage/package.accept_keywords/steam
           echo "*/*::gentoo-nexus **" >> /etc/portage/package.accept_keywords/nexus
-          echo "media-libs/mesa **" >> /etc/portage/package.accept_keywords/nexus
+          echo "media-libs/mesa ~amd64" >> /etc/portage/package.accept_keywords/nexus
           
           cat > /etc/portage/package.mask/fixes << 'MASK'
           sys-apps/systemd
@@ -842,10 +872,11 @@ jobs:
           FEATURES="-sandbox -usersandbox -ipc-sandbox -network-sandbox -pid-sandbox buildpkg parallel-install getbinpkg -binpkg-request-signature ccache"
           CCACHE_DIR="/var/cache/ccache"
           CCACHE_UMASK="002"
-          EMERGE_DEFAULT_OPTS="--getbinpkg --usepkg --binpkg-respect-use=y --autounmask=y --autounmask-write --keep-going --quiet"
+          EMERGE_DEFAULT_OPTS="--getbinpkg --usepkg --binpkg-respect-use=y --binpkg-changed-deps=y --autounmask=y --autounmask-write --keep-going --quiet"
           DISTDIR="/var/cache/distfiles"
           PKGDIR="/overlay/job_out"
           ACCEPT_LICENSE="*"
+          EVCS_OFFLINE=1
           MAKECONF
           echo "MAKEOPTS=\"-j$(nproc)\"" >> /etc/portage/make.conf
 
@@ -888,10 +919,17 @@ jobs:
           priority = 9999
           EOF
 
+          cat > /etc/portage/package.mask/no-live-core << 'MASK'
+          =media-libs/mesa-9999*
+          =dev-util/mesa_clc-9999*
+          =dev-util/spirv-tools-9999*
+          =media-libs/vulkan-loader-9999*
+          MASK
+
           echo "*/*::guru **" >> /etc/portage/package.accept_keywords/guru
           echo "*/*::steam-overlay **" >> /etc/portage/package.accept_keywords/steam
           echo "*/*::gentoo-nexus **" >> /etc/portage/package.accept_keywords/nexus
-          echo "media-libs/mesa **" >> /etc/portage/package.accept_keywords/nexus
+          echo "media-libs/mesa ~amd64" >> /etc/portage/package.accept_keywords/nexus
 
           cat > /etc/portage/package.mask/fixes << 'MASK'
           sys-apps/systemd
@@ -990,10 +1028,11 @@ jobs:
           FEATURES="-sandbox -usersandbox -ipc-sandbox -network-sandbox -pid-sandbox buildpkg parallel-install getbinpkg -binpkg-request-signature ccache"
           CCACHE_DIR="/var/cache/ccache"
           CCACHE_UMASK="002"
-          EMERGE_DEFAULT_OPTS="--getbinpkg --usepkg --binpkg-respect-use=y --autounmask=y --autounmask-write --keep-going --quiet"
+          EMERGE_DEFAULT_OPTS="--getbinpkg --usepkg --binpkg-respect-use=y --binpkg-changed-deps=y --autounmask=y --autounmask-write --keep-going --quiet"
           DISTDIR="/var/cache/distfiles"
           PKGDIR="/overlay/job_out"
           ACCEPT_LICENSE="*"
+          EVCS_OFFLINE=1
           MAKECONF
           echo "MAKEOPTS=\"-j$(nproc)\"" >> /etc/portage/make.conf
 
@@ -1036,15 +1075,22 @@ jobs:
           priority = 9999
           EOF
 
+          cat > /etc/portage/package.mask/no-live-core << 'MASK'
+          =media-libs/mesa-9999*
+          =dev-util/mesa_clc-9999*
+          =dev-util/spirv-tools-9999*
+          =media-libs/vulkan-loader-9999*
+          MASK
+
           echo "*/*::guru **" >> /etc/portage/package.accept_keywords/guru
           echo "*/*::steam-overlay **" >> /etc/portage/package.accept_keywords/steam
           echo "*/*::gentoo-nexus **" >> /etc/portage/package.accept_keywords/nexus
-          echo "media-libs/mesa **" >> /etc/portage/package.accept_keywords/nexus
-          echo "media-libs/vulkan-loader **" >> /etc/portage/package.accept_keywords/nexus
-          echo "dev-util/mesa_clc **" >> /etc/portage/package.accept_keywords/nexus
-          echo "dev-util/spirv-tools **" >> /etc/portage/package.accept_keywords/nexus
-          echo "sys-kernel/gentoo-kernel **" >> /etc/portage/package.accept_keywords/nexus
-          echo "sys-kernel/linux-firmware **" >> /etc/portage/package.accept_keywords/nexus
+          echo "media-libs/mesa ~amd64" >> /etc/portage/package.accept_keywords/nexus
+          echo "media-libs/vulkan-loader ~amd64" >> /etc/portage/package.accept_keywords/nexus
+          echo "dev-util/mesa_clc ~amd64" >> /etc/portage/package.accept_keywords/nexus
+          echo "dev-util/spirv-tools ~amd64" >> /etc/portage/package.accept_keywords/nexus
+          echo "sys-kernel/gentoo-kernel ~amd64" >> /etc/portage/package.accept_keywords/nexus
+          echo "sys-kernel/linux-firmware ~amd64" >> /etc/portage/package.accept_keywords/nexus
           
           cat > /etc/portage/package.mask/fixes << 'MASK'
           sys-apps/systemd
@@ -1074,7 +1120,6 @@ jobs:
           cp /overlay/kernel-config/nexus-config-master /etc/portage/savedconfig/sys-kernel/gentoo-kernel || true
           
           TARGET_PKG="${{ github.event.inputs.atom }}"
-          # ARCHITECT FIX: Unquoted $TARGET_PKG allows Bash to split the list by spaces
           for i in 1 2; do emerge --deep --newuse $TARGET_PKG 2>&1 && break || etc-update --automode -5; done
           emerge --deep --newuse $TARGET_PKG
           BUILDEOF
