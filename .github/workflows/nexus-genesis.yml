@@ -38,7 +38,8 @@ jobs:
     runs-on: ubuntu-latest
     timeout-minutes: 30
     outputs:
-      updates_found: ${{ steps.scan.outputs.updates_found }}
+      # ARCHITECT FIX: Now correctly points to the 'audit' step
+      updates_found: ${{ steps.audit.outputs.updates_found }}
     steps:
       - name: Checkout Repository
         uses: actions/checkout@v4
@@ -184,6 +185,7 @@ jobs:
           EOF
 
       - name: Smart Binhost Audit
+        id: audit # ARCHITECT FIX: Added the missing ID here!
         run: |
           BINHOST_URL="https://${{ github.repository_owner }}.github.io/${{ github.event.repository.name }}/Packages"
           HTTP_STATUS=$(curl -sL -o gh_packages.txt -w "%{http_code}" --connect-timeout 15 --retry 3 "$BINHOST_URL" || echo "000")
@@ -220,6 +222,7 @@ jobs:
               UPDATES="true"
           fi
           
+          # This variable will now correctly propagate to all subsequent jobs!
           echo "updates_found=$UPDATES" >> "$GITHUB_OUTPUT"
 
       - name: Commit & Upload Overlay State
@@ -461,7 +464,6 @@ jobs:
 
           BASE_LIST=(sys-boot/grub sys-boot/efibootmgr sys-auth/elogind sys-auth/seatd net-misc/networkmanager)
 
-          # Architect Fix: Sweep up any missing/updated custom overlay packages
           if [ -s /overlay/changed_packages.txt ]; then
               echo ">>> Adding custom overlay packages to Base build target..."
               while IFS= read -r pkg_dir; do
