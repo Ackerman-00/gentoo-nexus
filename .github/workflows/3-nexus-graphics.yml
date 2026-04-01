@@ -26,13 +26,18 @@ jobs:
           set -euo pipefail
           
           mkdir -p /var/db/repos/gentoo /etc/portage/{repos.conf,binrepos.conf,env,package.{accept_keywords,license,use,mask,env}} /overlay/{distfiles,job_out}
-          emerge-webrsync -q; eselect profile set default/linux/amd64/23.0/desktop
+          emerge-webrsync -q
+          getuto || true
+          eselect profile set default/linux/amd64/23.0/desktop
           
-          emerge --noreplace --quiet dev-lang/go dev-lang/rust-bin app-eselect/eselect-repository dev-vcs/git
-          eselect repository enable steam-overlay 2>/dev/null || true
-          emaint sync -r steam-overlay 2>/dev/null || true
-
           echo ">>> Wiring Cross-Factory Binhosts..."
+          cat > /etc/portage/binrepos.conf/gentoo.conf << 'REPOCONF'
+          [gentoo]
+          priority = 10000
+          sync-uri = https://distfiles.gentoo.org/releases/amd64/binpackages/23.0/x86-64/
+          verify-signature = false
+          REPOCONF
+
           cat > /etc/portage/binrepos.conf/nexus.conf << 'REPOCONF'
           [gentoo-nexus-gh]
           priority = 9999
@@ -46,21 +51,40 @@ jobs:
           USE="wayland X vulkan pipewire dbus elogind udev opengl dri gbm vaapi vdpau ffmpeg bluetooth screencast gstreamer minizip -daemon -systemd -aqua -cups"
           VIDEO_CARDS="amdgpu radeon radeonsi intel iris nouveau virgl"
           LINUX_FIRMWARE="amd-ucode intel-ucode amdgpu nvidia i915 rtl_nic ath10k ath11k iwlwifi mt76 rtw88 rtw89"
-          FEATURES="-userfetch -userpriv -usersandbox -ipc-sandbox -network-sandbox -pid-sandbox buildpkg parallel-install getbinpkg"
+          FEATURES="-userfetch -userpriv -usersandbox -ipc-sandbox -network-sandbox -pid-sandbox buildpkg parallel-install getbinpkg -binpkg-request-signature"
           EMERGE_DEFAULT_OPTS="--getbinpkg --usepkg --binpkg-respect-use=y --binpkg-changed-deps=n --rebuilt-binaries=n --autounmask=y --autounmask-write --autounmask-backtrack=y --keep-going --quiet"
           DISTDIR="/var/cache/distfiles"; PKGDIR="/overlay/job_out"; ACCEPT_LICENSE="*"
           MAKECONF
 
           CORES=$(nproc); echo "MAKEOPTS=\"-j${CORES} -l${CORES}\"" >> /etc/portage/make.conf
 
+          emerge --noreplace --quiet dev-lang/go dev-lang/rust-bin app-eselect/eselect-repository dev-vcs/git
+          eselect repository enable steam-overlay 2>/dev/null || true
+          emaint sync -r steam-overlay 2>/dev/null || true
+
+          echo ">>> Applying GCC ICE Workarounds for Mesa 26..."
+          cat > /etc/portage/env/gcc-ice-safe << 'EOF'
+          CFLAGS="-O1 -pipe -fno-tree-loop-vectorize -fno-tree-slp-vectorize"
+          CXXFLAGS="-O1 -pipe -fno-tree-loop-vectorize -fno-tree-slp-vectorize"
+          EOF
+          echo "MAKEOPTS=\"-j${CORES}\"" >> /etc/portage/env/gcc-ice-safe
+
+          cat > /etc/portage/package.env/gcc-ice-packages << 'EOF'
+          dev-util/spirv-tools gcc-ice-safe
+          media-libs/mesa gcc-ice-safe
+          EOF
+
           cat > /etc/portage/package.mask/fixes << 'MASK'
           sys-apps/systemd
           sys-apps/gentoo-systemd-integration
           sys-libs/gpm
+          =x11-misc/ly-9999
+          =gui-libs/scenefx-9999
           MASK
 
           cat > /etc/portage/package.use/global << 'USE'
           */* -systemd -gpm
+          media-video/pipewire -ffmpeg
           USE
 
           cat > /etc/portage/package.use/steam << 'USE'
@@ -88,8 +112,10 @@ jobs:
               games-util/steam-launcher
           )
 
-          for i in 1 2 3; do emerge --deep --newuse "${BASE_LIST[@]}" 2>&1 && break || etc-update --automode -5; done
-          emerge --deep --newuse "${BASE_LIST[@]}"
+          EXCLUDES="--usepkg-exclude sys-auth/polkit --usepkg-exclude dev-libs/libei --usepkg-exclude media-video/wireplumber --usepkg-exclude media-libs/libpulse --usepkg-exclude sys-apps/accountsservice --usepkg-exclude sys-auth/elogind"
+
+          for i in 1 2 3; do emerge $EXCLUDES --deep --newuse "${BASE_LIST[@]}" 2>&1 && break || etc-update --automode -5; done
+          emerge $EXCLUDES --deep --newuse "${BASE_LIST[@]}"
           BUILDEOF
           chmod +x build_script.sh
 
