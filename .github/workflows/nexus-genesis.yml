@@ -271,7 +271,6 @@ jobs:
           #!/bin/bash
           set -euo pipefail
           mkdir -p /var/db/repos/{gentoo,guru,steam-overlay} /etc/portage/{repos.conf,binrepos.conf,env,package.{accept_keywords,license,use,mask,env}} /overlay/{distfiles,job_out} /etc/portage/savedconfig/sys-kernel/
-          wget -qO /etc/portage/savedconfig/sys-kernel/gentoo-kernel https://raw.githubusercontent.com/Ackerman-00/gentoo-nexus/main/kernel-config/nexus-config-master || true
           
           cat > /etc/portage/binrepos.conf/gentoo.conf << 'EOF'
           [gentoo]
@@ -313,7 +312,7 @@ jobs:
           
           chown -R portage:portage /var/cache/ccache
           chmod -R 2777 /var/cache/ccache
-
+          
           echo ">>> Cloning Overlays..."
           git clone --depth 1 https://github.com/gentoo-mirror/guru.git /var/db/repos/guru || true
           git clone --depth 1 https://github.com/anyc/steam-overlay.git /var/db/repos/steam-overlay || true
@@ -346,8 +345,10 @@ jobs:
           echo "*/*::guru **" >> /etc/portage/package.accept_keywords/guru
           echo "*/*::steam-overlay **" >> /etc/portage/package.accept_keywords/steam
           echo "*/*::gentoo-nexus **" >> /etc/portage/package.accept_keywords/nexus
-          echo "sys-kernel/gentoo-kernel **" >> /etc/portage/package.accept_keywords/nexus
-          echo "sys-kernel/linux-firmware **" >> /etc/portage/package.accept_keywords/nexus
+          echo "media-libs/mesa **" >> /etc/portage/package.accept_keywords/nexus
+          echo "media-libs/vulkan-loader **" >> /etc/portage/package.accept_keywords/nexus
+          echo "dev-util/mesa_clc **" >> /etc/portage/package.accept_keywords/nexus
+          echo "dev-util/spirv-tools **" >> /etc/portage/package.accept_keywords/nexus
 
           cat > /etc/portage/package.mask/fixes << 'MASK'
           sys-apps/systemd
@@ -360,6 +361,9 @@ jobs:
           sys-kernel/gentoo-kernel savedconfig initramfs
           sys-kernel/installkernel dracut grub
           USE
+          
+          echo ">>> Injecting Nexus Master Config..."
+          cp /overlay/kernel-config/nexus-config-master /etc/portage/savedconfig/sys-kernel/gentoo-kernel || echo "Warning: nexus-config-master not found!"
 
           BASE_LIST=(sys-kernel/gentoo-kernel sys-kernel/linux-firmware sys-kernel/dracut)
           for i in 1 2; do emerge --deep --newuse "${BASE_LIST[@]}" 2>&1 && break || etc-update --automode -5; done
@@ -373,8 +377,6 @@ jobs:
           path: job_out/
           retention-days: 1
 
-
-  # THE MESA VANGUARD: Compiles Mesa-9999 strictly first for all downstream nodes
   build-mesa-vanguard:
     name: Vanguard Mesa (64-bit Core)
     needs: overlay-scan
@@ -500,12 +502,10 @@ jobs:
           media-libs/mesa -abi_x86_32
           USE
 
-          # ARCHITECT FIX: Compile Mesa and its direct deps first
           MESA_LIST=(dev-util/spirv-tools dev-util/mesa_clc media-libs/mesa)
           for i in 1 2; do emerge --deep --newuse "${MESA_LIST[@]}" 2>&1 && break || etc-update --automode -5; done
           emerge --deep --newuse "${MESA_LIST[@]}"
           
-          # Fix the local binhost index so downstream jobs can pull it
           emaint binhost --fix
           BUILDEOF
           chmod +x build_script.sh
@@ -550,7 +550,6 @@ jobs:
           set -euo pipefail
           mkdir -p /var/db/repos/{gentoo,guru,steam-overlay} /etc/portage/{repos.conf,binrepos.conf,env,package.{accept_keywords,license,use,mask,env}} /overlay/{distfiles,job_out}
           
-          # Ensure local Mesa binaries are mapped immediately
           emaint binhost --fix
 
           cat > /etc/portage/binrepos.conf/gentoo.conf << 'EOF'
@@ -903,6 +902,17 @@ jobs:
 
           echo "sys-libs/zlib minizip" >> /etc/portage/package.use/global
 
+          mkdir -p /etc/portage/env /etc/portage/package.env
+          cat > /etc/portage/env/gcc-ice-safe << 'EOF'
+          CFLAGS="-O1 -pipe -fno-tree-loop-vectorize -fno-tree-slp-vectorize"
+          CXXFLAGS="-O1 -pipe -fno-tree-loop-vectorize -fno-tree-slp-vectorize"
+          EOF
+          echo "MAKEOPTS=\"-j$(nproc)\"" >> /etc/portage/env/gcc-ice-safe
+          cat > /etc/portage/package.env/gcc-ice-packages << 'EOF'
+          dev-util/spirv-tools gcc-ice-safe
+          media-libs/mesa gcc-ice-safe
+          EOF
+
           cat > /etc/portage/package.use/steam << 'USE'
           media-libs/mesa abi_x86_32
           media-libs/vulkan-loader abi_x86_32 layers
@@ -1038,6 +1048,17 @@ jobs:
           MASK
 
           echo "sys-libs/zlib minizip" >> /etc/portage/package.use/global
+
+          mkdir -p /etc/portage/env /etc/portage/package.env
+          cat > /etc/portage/env/gcc-ice-safe << 'EOF'
+          CFLAGS="-O1 -pipe -fno-tree-loop-vectorize -fno-tree-slp-vectorize"
+          CXXFLAGS="-O1 -pipe -fno-tree-loop-vectorize -fno-tree-slp-vectorize"
+          EOF
+          echo "MAKEOPTS=\"-j$(nproc)\"" >> /etc/portage/env/gcc-ice-safe
+          cat > /etc/portage/package.env/gcc-ice-packages << 'EOF'
+          dev-util/spirv-tools gcc-ice-safe
+          media-libs/mesa gcc-ice-safe
+          EOF
           
           TARGET_PKG="${{ github.event.inputs.atom }}"
           for i in 1 2; do emerge --deep --newuse "$TARGET_PKG" 2>&1 && break || etc-update --automode -5; done
@@ -1062,6 +1083,9 @@ jobs:
     if: always() && !cancelled()
     runs-on: ubuntu-latest
     steps:
+      - name: Checkout Repository
+        uses: actions/checkout@v4
+        
       - name: Download ALL Binaries
         uses: actions/download-artifact@v4
         with:
@@ -1079,7 +1103,7 @@ jobs:
 
           echo ">>> Booting micro-container to generate unified Portage index..."
           docker run --rm -v "${{ github.workspace }}/job_out:/pkgdir" gentoo/stage3:amd64-desktop-openrc bash -c "\
-          FEATURES='binpkg-multi-instance' PKGDIR='/pkgdir' emaint binhost --fix"
+          emerge-webrsync -q && FEATURES='binpkg-multi-instance' PKGDIR='/pkgdir' emaint binhost --fix"
 
       - name: Deploy to GitHub Releases & Pages
         env:
