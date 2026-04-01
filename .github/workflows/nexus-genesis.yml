@@ -243,10 +243,9 @@ jobs:
 
 
   # =====================================================================
-  # PHASE 2: FAN-OUT VANGUARD (PARALLEL 64-BIT BUILDS)
+  # TIER 1: VANGUARD ISOLATION (Kernel & Mesa run first, in parallel)
   # =====================================================================
   
-  # JOB A: KERNEL ISOLATION
   build-kernel:
     name: Vanguard Kernel
     needs: overlay-scan
@@ -271,14 +270,8 @@ jobs:
           cat > build_script.sh << 'BUILDEOF'
           #!/bin/bash
           set -euo pipefail
-          mkdir -p /var/db/repos/{gentoo,guru,steam-overlay} /etc/portage/{repos.conf,binrepos.conf,env,package.{accept_keywords,license,use,mask,env}} /overlay/{distfiles,job_out}
-          
-          # ARCHITECT FIX: Deep-merge config fragment instead of overwriting defaults!
-          echo ">>> Injecting Nexus Fragment into Kernel Build..."
-          mkdir -p /etc/kernel/config.d
-          if [ -f /overlay/kernel-config/nexus-config-master ]; then
-              cp /overlay/kernel-config/nexus-config-master /etc/kernel/config.d/nexus.config
-          fi
+          mkdir -p /var/db/repos/{gentoo,guru,steam-overlay} /etc/portage/{repos.conf,binrepos.conf,env,package.{accept_keywords,license,use,mask,env}} /overlay/{distfiles,job_out} /etc/portage/savedconfig/sys-kernel/
+          wget -qO /etc/portage/savedconfig/sys-kernel/gentoo-kernel https://raw.githubusercontent.com/Ackerman-00/gentoo-nexus/main/kernel-config/nexus-config-master || true
           
           cat > /etc/portage/binrepos.conf/gentoo.conf << 'EOF'
           [gentoo]
@@ -294,16 +287,16 @@ jobs:
           verify-signature = false
           EOF
 
-          # ARCHITECT FIX: Variables isolated line-by-line. GCC will not crash!
-          cat > /etc/portage/make.conf << 'MAKECONF'
+          cat >> /etc/portage/make.conf << 'MAKECONF'
           COMMON_FLAGS="-O2 -march=x86-64 -pipe"
           CFLAGS="${COMMON_FLAGS}"
           CXXFLAGS="${COMMON_FLAGS}"
           RUSTFLAGS="-C target-cpu=x86-64 -C opt-level=2"
           USE="wayland X vulkan pipewire dbus udev opengl dri gbm vaapi vdpau ffmpeg minizip -daemon -systemd -aqua -cups"
           VIDEO_CARDS="amdgpu radeon radeonsi intel iris nouveau virgl"
-          FEATURES="-ipc-sandbox -network-sandbox -pid-sandbox buildpkg parallel-install getbinpkg -binpkg-request-signature ccache"
+          FEATURES="-sandbox -usersandbox -ipc-sandbox -network-sandbox -pid-sandbox buildpkg parallel-install getbinpkg -binpkg-request-signature ccache"
           CCACHE_DIR="/var/cache/ccache"
+          CCACHE_UMASK="002"
           EMERGE_DEFAULT_OPTS="--getbinpkg --usepkg --binpkg-respect-use=y --autounmask=y --autounmask-write --keep-going --quiet"
           DISTDIR="/var/cache/distfiles"
           PKGDIR="/overlay/job_out"
@@ -318,8 +311,9 @@ jobs:
           echo ">>> Bootstrapping Tools..."
           emerge --noreplace --quiet dev-vcs/git dev-util/ccache
           
+          chown -R portage:portage /var/cache/ccache
           chmod -R 2777 /var/cache/ccache
-          
+
           echo ">>> Cloning Overlays..."
           git clone --depth 1 https://github.com/gentoo-mirror/guru.git /var/db/repos/guru || true
           git clone --depth 1 https://github.com/anyc/steam-overlay.git /var/db/repos/steam-overlay || true
@@ -360,16 +354,10 @@ jobs:
           sys-apps/gentoo-systemd-integration
           MASK
 
-          cat > /etc/portage/package.use/global << 'USE'
-          */* -systemd -gpm
-          media-video/ffmpeg -sdl
-          media-video/pipewire -ffmpeg
-          sys-libs/zlib minizip
-          USE
-          
-          # ARCHITECT FIX: savedconfig removed. Eclass merges config.d natively.
+          echo "sys-libs/zlib minizip" >> /etc/portage/package.use/global
+
           cat > /etc/portage/package.use/kernel << 'USE'
-          sys-kernel/gentoo-kernel initramfs
+          sys-kernel/gentoo-kernel savedconfig initramfs
           sys-kernel/installkernel dracut grub
           USE
 
@@ -385,9 +373,10 @@ jobs:
           path: job_out/
           retention-days: 1
 
-  # JOB B: GRAPHICS ISOLATION
-  build-graphics:
-    name: Vanguard Graphics (64-bit)
+
+  # THE MESA VANGUARD: Compiles Mesa-9999 strictly first for all downstream nodes
+  build-mesa-vanguard:
+    name: Vanguard Mesa (64-bit Core)
     needs: overlay-scan
     if: github.event.inputs.atom == '' && (needs.overlay-scan.outputs.updates_found == 'true' || github.event_name == 'schedule' || github.event.inputs.force_full_run == 'true')
     runs-on: ubuntu-latest
@@ -403,7 +392,7 @@ jobs:
           key: ccache-graphics-${{ github.run_id }}
           restore-keys: |
             ccache-graphics-
-      - name: Execute 64-bit Graphics Build
+      - name: Execute Mesa Build
         run: |
           mkdir -p job_out /tmp/distfiles /tmp/ccache
           chmod 777 /tmp/distfiles /tmp/ccache
@@ -426,16 +415,16 @@ jobs:
           verify-signature = false
           EOF
 
-          # ARCHITECT FIX: Isolated lines
-          cat > /etc/portage/make.conf << 'MAKECONF'
+          cat >> /etc/portage/make.conf << 'MAKECONF'
           COMMON_FLAGS="-O2 -march=x86-64 -pipe"
           CFLAGS="${COMMON_FLAGS}"
           CXXFLAGS="${COMMON_FLAGS}"
           RUSTFLAGS="-C target-cpu=x86-64 -C opt-level=2"
           USE="wayland X vulkan pipewire dbus udev opengl dri gbm vaapi vdpau ffmpeg minizip -daemon -systemd -aqua -cups"
           VIDEO_CARDS="amdgpu radeon radeonsi intel iris nouveau virgl"
-          FEATURES="-ipc-sandbox -network-sandbox -pid-sandbox buildpkg parallel-install getbinpkg -binpkg-request-signature ccache"
+          FEATURES="-sandbox -usersandbox -ipc-sandbox -network-sandbox -pid-sandbox buildpkg parallel-install getbinpkg -binpkg-request-signature ccache"
           CCACHE_DIR="/var/cache/ccache"
+          CCACHE_UMASK="002"
           EMERGE_DEFAULT_OPTS="--getbinpkg --usepkg --binpkg-respect-use=y --autounmask=y --autounmask-write --keep-going --quiet"
           DISTDIR="/var/cache/distfiles"
           PKGDIR="/overlay/job_out"
@@ -450,6 +439,159 @@ jobs:
           echo ">>> Bootstrapping Tools..."
           emerge --noreplace --quiet dev-vcs/git dev-util/ccache
           
+          chown -R portage:portage /var/cache/ccache
+          chmod -R 2777 /var/cache/ccache
+          
+          echo ">>> Cloning Overlays..."
+          git clone --depth 1 https://github.com/gentoo-mirror/guru.git /var/db/repos/guru || true
+          git clone --depth 1 https://github.com/anyc/steam-overlay.git /var/db/repos/steam-overlay || true
+          
+          mkdir -p /var/db/repos/guru/metadata /var/db/repos/steam-overlay/metadata
+          echo "masters = gentoo" > /var/db/repos/guru/metadata/layout.conf
+          echo "masters = gentoo" > /var/db/repos/steam-overlay/metadata/layout.conf
+
+          cat > /etc/portage/repos.conf/guru.conf << 'EOF'
+          [guru]
+          location = /var/db/repos/guru
+          priority = 50
+          masters = gentoo
+          EOF
+          
+          cat > /etc/portage/repos.conf/steam-overlay.conf << 'EOF'
+          [steam-overlay]
+          location = /var/db/repos/steam-overlay
+          priority = 50
+          masters = gentoo
+          EOF
+
+          cat > /etc/portage/repos.conf/gentoo-nexus.conf << 'EOF'
+          [gentoo-nexus]
+          location = /overlay
+          masters = gentoo guru
+          priority = 9999
+          EOF
+
+          echo "*/*::guru **" >> /etc/portage/package.accept_keywords/guru
+          echo "*/*::steam-overlay **" >> /etc/portage/package.accept_keywords/steam
+          echo "*/*::gentoo-nexus **" >> /etc/portage/package.accept_keywords/nexus
+          echo "media-libs/mesa **" >> /etc/portage/package.accept_keywords/nexus
+          echo "dev-util/mesa_clc **" >> /etc/portage/package.accept_keywords/nexus
+          echo "dev-util/spirv-tools **" >> /etc/portage/package.accept_keywords/nexus
+
+          cat > /etc/portage/package.mask/fixes << 'MASK'
+          sys-apps/systemd
+          sys-apps/gentoo-systemd-integration
+          MASK
+
+          echo "sys-libs/zlib minizip" >> /etc/portage/package.use/global
+
+          mkdir -p /etc/portage/env /etc/portage/package.env
+          cat > /etc/portage/env/gcc-ice-safe << 'EOF'
+          CFLAGS="-O1 -pipe -fno-tree-loop-vectorize -fno-tree-slp-vectorize"
+          CXXFLAGS="-O1 -pipe -fno-tree-loop-vectorize -fno-tree-slp-vectorize"
+          EOF
+          echo "MAKEOPTS=\"-j$(nproc)\"" >> /etc/portage/env/gcc-ice-safe
+          cat > /etc/portage/package.env/gcc-ice-packages << 'EOF'
+          dev-util/spirv-tools gcc-ice-safe
+          media-libs/mesa gcc-ice-safe
+          EOF
+
+          cat > /etc/portage/package.use/graphics << 'USE'
+          media-libs/mesa -abi_x86_32
+          USE
+
+          # ARCHITECT FIX: Compile Mesa and its direct deps first
+          MESA_LIST=(dev-util/spirv-tools dev-util/mesa_clc media-libs/mesa)
+          for i in 1 2; do emerge --deep --newuse "${MESA_LIST[@]}" 2>&1 && break || etc-update --automode -5; done
+          emerge --deep --newuse "${MESA_LIST[@]}"
+          
+          # Fix the local binhost index so downstream jobs can pull it
+          emaint binhost --fix
+          BUILDEOF
+          chmod +x build_script.sh
+          docker run --rm --privileged -v "${{ github.workspace }}:/overlay" -v "/tmp/distfiles:/var/cache/distfiles" -v "/tmp/ccache:/var/cache/ccache" gentoo/stage3:amd64-desktop-openrc bash /overlay/build_script.sh
+      - uses: actions/upload-artifact@v4
+        with:
+          name: mesa-binaries
+          path: job_out/
+          retention-days: 1
+
+
+  # =====================================================================
+  # TIER 2: CASCADE CONSUMERS (Waits for Mesa, runs in parallel)
+  # =====================================================================
+
+  build-graphics-core:
+    name: Graphics Core (Vulkan/Pipewire)
+    needs: build-mesa-vanguard
+    runs-on: ubuntu-latest
+    timeout-minutes: 240
+    steps:
+      - uses: actions/download-artifact@v4
+        with:
+          name: overlay-workspace
+          path: .
+      - uses: actions/download-artifact@v4
+        with:
+          name: mesa-binaries
+          path: job_out/
+      - uses: actions/cache@v4
+        with:
+          path: /tmp/ccache
+          key: ccache-graphicscore-${{ github.run_id }}
+          restore-keys: |
+            ccache-graphics-
+      - name: Execute Graphics Core Build
+        run: |
+          mkdir -p /tmp/distfiles /tmp/ccache
+          chmod 777 /tmp/distfiles /tmp/ccache
+          cat > build_script.sh << 'BUILDEOF'
+          #!/bin/bash
+          set -euo pipefail
+          mkdir -p /var/db/repos/{gentoo,guru,steam-overlay} /etc/portage/{repos.conf,binrepos.conf,env,package.{accept_keywords,license,use,mask,env}} /overlay/{distfiles,job_out}
+          
+          # Ensure local Mesa binaries are mapped immediately
+          emaint binhost --fix
+
+          cat > /etc/portage/binrepos.conf/gentoo.conf << 'EOF'
+          [gentoo]
+          priority = 10000
+          sync-uri = https://distfiles.gentoo.org/releases/amd64/binpackages/23.0/x86-64/
+          verify-signature = false
+          EOF
+
+          cat > /etc/portage/binrepos.conf/nexus.conf << 'EOF'
+          [gentoo-nexus-gh]
+          priority = 9999
+          sync-uri = https://${{ github.repository_owner }}.github.io/${{ github.event.repository.name }}/
+          verify-signature = false
+          EOF
+
+          cat >> /etc/portage/make.conf << 'MAKECONF'
+          COMMON_FLAGS="-O2 -march=x86-64 -pipe"
+          CFLAGS="${COMMON_FLAGS}"
+          CXXFLAGS="${COMMON_FLAGS}"
+          RUSTFLAGS="-C target-cpu=x86-64 -C opt-level=2"
+          USE="wayland X vulkan pipewire dbus udev opengl dri gbm vaapi vdpau ffmpeg minizip -daemon -systemd -aqua -cups"
+          VIDEO_CARDS="amdgpu radeon radeonsi intel iris nouveau virgl"
+          FEATURES="-sandbox -usersandbox -ipc-sandbox -network-sandbox -pid-sandbox buildpkg parallel-install getbinpkg -binpkg-request-signature ccache"
+          CCACHE_DIR="/var/cache/ccache"
+          CCACHE_UMASK="002"
+          EMERGE_DEFAULT_OPTS="--getbinpkg --usepkg --binpkg-respect-use=y --autounmask=y --autounmask-write --keep-going --quiet"
+          DISTDIR="/var/cache/distfiles"
+          PKGDIR="/overlay/job_out"
+          ACCEPT_LICENSE="*"
+          MAKECONF
+          echo "MAKEOPTS=\"-j$(nproc)\"" >> /etc/portage/make.conf
+
+          emerge-webrsync -q || true
+          getuto || true
+          eselect profile set default/linux/amd64/23.0/desktop
+          
+          echo ">>> Bootstrapping Tools..."
+          emerge --noreplace --quiet dev-vcs/git dev-util/ccache
+          
+          chown -R portage:portage /var/cache/ccache
           chmod -R 2777 /var/cache/ccache
           
           echo ">>> Cloning Overlays..."
@@ -492,46 +634,28 @@ jobs:
           sys-apps/gentoo-systemd-integration
           MASK
 
-          cat > /etc/portage/package.use/global << 'USE'
-          */* -systemd -gpm
-          media-video/ffmpeg -sdl
-          media-video/pipewire -ffmpeg
-          sys-libs/zlib minizip
-          USE
-
-          mkdir -p /etc/portage/env /etc/portage/package.env
-          cat > /etc/portage/env/gcc-ice-safe << 'EOF'
-          CFLAGS="-O1 -pipe -fno-tree-loop-vectorize -fno-tree-slp-vectorize"
-          CXXFLAGS="-O1 -pipe -fno-tree-loop-vectorize -fno-tree-slp-vectorize"
-          EOF
-          echo "MAKEOPTS=\"-j$(nproc)\"" >> /etc/portage/env/gcc-ice-safe
-          cat > /etc/portage/package.env/gcc-ice-packages << 'EOF'
-          dev-util/spirv-tools gcc-ice-safe
-          media-libs/mesa gcc-ice-safe
-          EOF
+          echo "sys-libs/zlib minizip" >> /etc/portage/package.use/global
 
           cat > /etc/portage/package.use/graphics << 'USE'
-          media-libs/mesa -abi_x86_32
           media-libs/vulkan-loader -abi_x86_32
           USE
 
-          BASE_LIST=(media-libs/mesa media-libs/vulkan-loader dev-util/spirv-tools media-video/pipewire media-video/wireplumber)
-          for i in 1 2; do emerge --deep --newuse "${BASE_LIST[@]}" 2>&1 && break || etc-update --automode -5; done
-          emerge --deep --newuse "${BASE_LIST[@]}"
+          CORE_LIST=(media-libs/vulkan-loader media-video/pipewire media-video/wireplumber media-video/ffmpeg)
+          for i in 1 2; do emerge --deep --newuse "${CORE_LIST[@]}" 2>&1 && break || etc-update --automode -5; done
+          emerge --deep --newuse "${CORE_LIST[@]}"
           BUILDEOF
           chmod +x build_script.sh
           docker run --rm --privileged -v "${{ github.workspace }}:/overlay" -v "/tmp/distfiles:/var/cache/distfiles" -v "/tmp/ccache:/var/cache/ccache" gentoo/stage3:amd64-desktop-openrc bash /overlay/build_script.sh
       - uses: actions/upload-artifact@v4
         with:
-          name: graphics-binaries
+          name: graphicscore-binaries
           path: job_out/
           retention-days: 1
 
-  # JOB C: BASE ISOLATION
+
   build-base:
     name: Vanguard Base
-    needs: overlay-scan
-    if: github.event.inputs.atom == '' && (needs.overlay-scan.outputs.updates_found == 'true' || github.event_name == 'schedule' || github.event.inputs.force_full_run == 'true')
+    needs: build-mesa-vanguard
     runs-on: ubuntu-latest
     timeout-minutes: 240
     steps:
@@ -539,6 +663,10 @@ jobs:
         with:
           name: overlay-workspace
           path: .
+      - uses: actions/download-artifact@v4
+        with:
+          name: mesa-binaries
+          path: job_out/
       - uses: actions/cache@v4
         with:
           path: /tmp/ccache
@@ -547,13 +675,15 @@ jobs:
             ccache-base-
       - name: Execute Base Build
         run: |
-          mkdir -p job_out /tmp/distfiles /tmp/ccache
+          mkdir -p /tmp/distfiles /tmp/ccache
           chmod 777 /tmp/distfiles /tmp/ccache
           cat > build_script.sh << 'BUILDEOF'
           #!/bin/bash
           set -euo pipefail
           mkdir -p /var/db/repos/{gentoo,guru,steam-overlay} /etc/portage/{repos.conf,binrepos.conf,env,package.{accept_keywords,license,use,mask,env}} /overlay/{distfiles,job_out}
           
+          emaint binhost --fix
+
           cat > /etc/portage/binrepos.conf/gentoo.conf << 'EOF'
           [gentoo]
           priority = 10000
@@ -568,16 +698,16 @@ jobs:
           verify-signature = false
           EOF
 
-          # ARCHITECT FIX: Isolated lines
-          cat > /etc/portage/make.conf << 'MAKECONF'
+          cat >> /etc/portage/make.conf << 'MAKECONF'
           COMMON_FLAGS="-O2 -march=x86-64 -pipe"
           CFLAGS="${COMMON_FLAGS}"
           CXXFLAGS="${COMMON_FLAGS}"
           RUSTFLAGS="-C target-cpu=x86-64 -C opt-level=2"
           USE="wayland X vulkan pipewire dbus udev opengl dri gbm vaapi vdpau ffmpeg minizip -daemon -systemd -aqua -cups"
           VIDEO_CARDS="amdgpu radeon radeonsi intel iris nouveau virgl"
-          FEATURES="-ipc-sandbox -network-sandbox -pid-sandbox buildpkg parallel-install getbinpkg -binpkg-request-signature ccache"
+          FEATURES="-sandbox -usersandbox -ipc-sandbox -network-sandbox -pid-sandbox buildpkg parallel-install getbinpkg -binpkg-request-signature ccache"
           CCACHE_DIR="/var/cache/ccache"
+          CCACHE_UMASK="002"
           EMERGE_DEFAULT_OPTS="--getbinpkg --usepkg --binpkg-respect-use=y --autounmask=y --autounmask-write --keep-going --quiet"
           DISTDIR="/var/cache/distfiles"
           PKGDIR="/overlay/job_out"
@@ -592,6 +722,7 @@ jobs:
           echo ">>> Bootstrapping Tools..."
           emerge --noreplace --quiet dev-vcs/git dev-util/ccache
           
+          chown -R portage:portage /var/cache/ccache
           chmod -R 2777 /var/cache/ccache
           
           echo ">>> Cloning Overlays..."
@@ -626,22 +757,20 @@ jobs:
           echo "*/*::guru **" >> /etc/portage/package.accept_keywords/guru
           echo "*/*::steam-overlay **" >> /etc/portage/package.accept_keywords/steam
           echo "*/*::gentoo-nexus **" >> /etc/portage/package.accept_keywords/nexus
+          echo "media-libs/mesa **" >> /etc/portage/package.accept_keywords/nexus
           
           cat > /etc/portage/package.mask/fixes << 'MASK'
           sys-apps/systemd
           sys-apps/gentoo-systemd-integration
           MASK
 
-          cat > /etc/portage/package.use/global << 'USE'
-          */* -systemd -gpm
-          media-video/ffmpeg -sdl
-          media-video/pipewire -ffmpeg
-          sys-libs/zlib minizip
-          USE
+          echo "sys-libs/zlib minizip" >> /etc/portage/package.use/global
 
           BASE_LIST=(sys-boot/grub sys-boot/efibootmgr sys-auth/elogind sys-auth/seatd net-misc/networkmanager)
 
           if [ -s /overlay/changed_packages.txt ]; then
+              echo ">>> Filtering conflicting packages..."
+              sed -i '/gui-apps\/quickshell/d' /overlay/changed_packages.txt || true
               echo ">>> Adding custom overlay packages to Base build target..."
               while IFS= read -r pkg_dir; do
                   [ -z "$pkg_dir" ] && continue
@@ -661,12 +790,9 @@ jobs:
           retention-days: 1
 
 
-  # =====================================================================
-  # PHASE 3: HARMONY BRIDGE
-  # =====================================================================
   build-harmony-32bit:
     name: Harmony Multilib (32-bit)
-    needs: build-graphics
+    needs: build-mesa-vanguard
     runs-on: ubuntu-latest
     timeout-minutes: 240
     steps:
@@ -676,7 +802,7 @@ jobs:
           path: .
       - uses: actions/download-artifact@v4
         with:
-          name: graphics-binaries
+          name: mesa-binaries
           path: job_out/
       - uses: actions/cache@v4
         with:
@@ -693,6 +819,8 @@ jobs:
           set -euo pipefail
           mkdir -p /var/db/repos/{gentoo,guru,steam-overlay} /etc/portage/{repos.conf,binrepos.conf,env,package.{accept_keywords,license,use,mask,env}} /overlay/{distfiles,job_out}
           
+          emaint binhost --fix
+
           cat > /etc/portage/binrepos.conf/gentoo.conf << 'EOF'
           [gentoo]
           priority = 10000
@@ -707,16 +835,16 @@ jobs:
           verify-signature = false
           EOF
 
-          # ARCHITECT FIX: Isolated lines
-          cat > /etc/portage/make.conf << 'MAKECONF'
+          cat >> /etc/portage/make.conf << 'MAKECONF'
           COMMON_FLAGS="-O2 -march=x86-64 -pipe"
           CFLAGS="${COMMON_FLAGS}"
           CXXFLAGS="${COMMON_FLAGS}"
           RUSTFLAGS="-C target-cpu=x86-64 -C opt-level=2"
           USE="wayland X vulkan opengl dri gbm minizip -daemon -systemd"
           VIDEO_CARDS="amdgpu radeon radeonsi intel iris nouveau virgl"
-          FEATURES="-ipc-sandbox -network-sandbox -pid-sandbox buildpkg parallel-install getbinpkg -binpkg-request-signature ccache"
+          FEATURES="-sandbox -usersandbox -ipc-sandbox -network-sandbox -pid-sandbox buildpkg parallel-install getbinpkg -binpkg-request-signature ccache"
           CCACHE_DIR="/var/cache/ccache"
+          CCACHE_UMASK="002"
           EMERGE_DEFAULT_OPTS="--getbinpkg --usepkg --binpkg-respect-use=y --autounmask=y --autounmask-write --keep-going --quiet"
           DISTDIR="/var/cache/distfiles"
           PKGDIR="/overlay/job_out"
@@ -731,6 +859,7 @@ jobs:
           echo ">>> Bootstrapping Tools..."
           emerge --noreplace --quiet dev-vcs/git dev-util/ccache
           
+          chown -R portage:portage /var/cache/ccache
           chmod -R 2777 /var/cache/ccache
           
           echo ">>> Cloning Overlays..."
@@ -765,29 +894,14 @@ jobs:
           echo "*/*::guru **" >> /etc/portage/package.accept_keywords/guru
           echo "*/*::steam-overlay **" >> /etc/portage/package.accept_keywords/steam
           echo "*/*::gentoo-nexus **" >> /etc/portage/package.accept_keywords/nexus
+          echo "media-libs/mesa **" >> /etc/portage/package.accept_keywords/nexus
 
           cat > /etc/portage/package.mask/fixes << 'MASK'
           sys-apps/systemd
           sys-apps/gentoo-systemd-integration
           MASK
 
-          cat > /etc/portage/package.use/global << 'USE'
-          */* -systemd -gpm
-          media-video/ffmpeg -sdl
-          media-video/pipewire -ffmpeg
-          sys-libs/zlib minizip
-          USE
-
-          mkdir -p /etc/portage/env /etc/portage/package.env
-          cat > /etc/portage/env/gcc-ice-safe << 'EOF'
-          CFLAGS="-O1 -pipe -fno-tree-loop-vectorize -fno-tree-slp-vectorize"
-          CXXFLAGS="-O1 -pipe -fno-tree-loop-vectorize -fno-tree-slp-vectorize"
-          EOF
-          echo "MAKEOPTS=\"-j$(nproc)\"" >> /etc/portage/env/gcc-ice-safe
-          cat > /etc/portage/package.env/gcc-ice-packages << 'EOF'
-          dev-util/spirv-tools gcc-ice-safe
-          media-libs/mesa gcc-ice-safe
-          EOF
+          echo "sys-libs/zlib minizip" >> /etc/portage/package.use/global
 
           cat > /etc/portage/package.use/steam << 'USE'
           media-libs/mesa abi_x86_32
@@ -858,16 +972,16 @@ jobs:
           verify-signature = false
           EOF
 
-          # ARCHITECT FIX: Isolated lines
-          cat > /etc/portage/make.conf << 'MAKECONF'
+          cat >> /etc/portage/make.conf << 'MAKECONF'
           COMMON_FLAGS="-O2 -march=x86-64 -pipe"
           CFLAGS="${COMMON_FLAGS}"
           CXXFLAGS="${COMMON_FLAGS}"
           RUSTFLAGS="-C target-cpu=x86-64 -C opt-level=2"
           USE="wayland X vulkan pipewire dbus udev opengl dri gbm vaapi vdpau ffmpeg minizip -daemon -systemd -aqua -cups"
           VIDEO_CARDS="amdgpu radeon radeonsi intel iris nouveau virgl"
-          FEATURES="-ipc-sandbox -network-sandbox -pid-sandbox buildpkg parallel-install getbinpkg -binpkg-request-signature ccache"
+          FEATURES="-sandbox -usersandbox -ipc-sandbox -network-sandbox -pid-sandbox buildpkg parallel-install getbinpkg -binpkg-request-signature ccache"
           CCACHE_DIR="/var/cache/ccache"
+          CCACHE_UMASK="002"
           EMERGE_DEFAULT_OPTS="--getbinpkg --usepkg --binpkg-respect-use=y --autounmask=y --autounmask-write --keep-going --quiet"
           DISTDIR="/var/cache/distfiles"
           PKGDIR="/overlay/job_out"
@@ -882,6 +996,7 @@ jobs:
           echo ">>> Bootstrapping Tools..."
           emerge --noreplace --quiet dev-vcs/git dev-util/ccache
           
+          chown -R portage:portage /var/cache/ccache
           chmod -R 2777 /var/cache/ccache
           
           echo ">>> Cloning Overlays..."
@@ -922,23 +1037,7 @@ jobs:
           sys-apps/gentoo-systemd-integration
           MASK
 
-          cat > /etc/portage/package.use/global << 'USE'
-          */* -systemd -gpm
-          media-video/ffmpeg -sdl
-          media-video/pipewire -ffmpeg
-          sys-libs/zlib minizip
-          USE
-
-          mkdir -p /etc/portage/env /etc/portage/package.env
-          cat > /etc/portage/env/gcc-ice-safe << 'EOF'
-          CFLAGS="-O1 -pipe -fno-tree-loop-vectorize -fno-tree-slp-vectorize"
-          CXXFLAGS="-O1 -pipe -fno-tree-loop-vectorize -fno-tree-slp-vectorize"
-          EOF
-          echo "MAKEOPTS=\"-j$(nproc)\"" >> /etc/portage/env/gcc-ice-safe
-          cat > /etc/portage/package.env/gcc-ice-packages << 'EOF'
-          dev-util/spirv-tools gcc-ice-safe
-          media-libs/mesa gcc-ice-safe
-          EOF
+          echo "sys-libs/zlib minizip" >> /etc/portage/package.use/global
           
           TARGET_PKG="${{ github.event.inputs.atom }}"
           for i in 1 2; do emerge --deep --newuse "$TARGET_PKG" 2>&1 && break || etc-update --automode -5; done
@@ -959,7 +1058,7 @@ jobs:
   # =====================================================================
   deploy-nexus:
     name: Unified Deploy (Pages & Releases)
-    needs: [build-kernel, build-graphics, build-base, build-harmony-32bit, build-sniper-manual]
+    needs: [build-kernel, build-mesa-vanguard, build-graphics-core, build-base, build-harmony-32bit, build-sniper-manual]
     if: always() && !cancelled()
     runs-on: ubuntu-latest
     steps:
