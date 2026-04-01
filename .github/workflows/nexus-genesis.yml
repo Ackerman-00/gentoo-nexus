@@ -923,7 +923,7 @@ jobs:
           emerge --deep --newuse "${STEAM_LIST[@]}"
           BUILDEOF
           chmod +x build_script.sh
-          docker run --rm --privileged -v "${{ workspace }}:/overlay" -v "/tmp/distfiles:/var/cache/distfiles" -v "/tmp/ccache:/var/cache/ccache" gentoo/stage3:amd64-desktop-openrc bash /overlay/build_script.sh
+          docker run --rm --privileged -v "${{ github.workspace }}:/overlay" -v "/tmp/distfiles:/var/cache/distfiles" -v "/tmp/ccache:/var/cache/ccache" gentoo/stage3:amd64-desktop-openrc bash /overlay/build_script.sh
       - uses: actions/upload-artifact@v4
         with:
           name: harmony-binaries
