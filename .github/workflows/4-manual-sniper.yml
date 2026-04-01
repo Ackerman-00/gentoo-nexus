@@ -95,9 +95,16 @@ jobs:
           priority = 9999
           REPOCONF
           
-          # Architect Fix: Force portage to index the custom overlay before building
           emaint sync -r gentoo-nexus 2>/dev/null || true
           egencache --repo=gentoo-nexus --update
+
+          echo ">>> Wiring Cross-Factory Binhosts..."
+          cat > /etc/portage/binrepos.conf/nexus.conf << 'REPOCONF'
+          [gentoo-nexus-gh]
+          priority = 9999
+          sync-uri = https://${{ github.repository_owner }}.github.io/${{ github.event.repository.name }}/
+          verify-signature = false
+          REPOCONF
 
           echo ">>> Configuring Universal Make.conf..."
           cat > /etc/portage/make.conf << 'MAKECONF'
@@ -108,8 +115,8 @@ jobs:
           USE="wayland X vulkan pipewire dbus elogind udev opengl dri gbm vaapi vdpau ffmpeg bluetooth screencast gstreamer minizip -daemon -systemd -aqua -cups"
           VIDEO_CARDS="amdgpu radeon radeonsi intel iris nouveau virgl"
           LINUX_FIRMWARE="amd-ucode intel-ucode amdgpu nvidia i915 rtl_nic ath10k ath11k iwlwifi mt76 rtw88 rtw89"
-          FEATURES="-userfetch -userpriv -usersandbox -ipc-sandbox -network-sandbox -pid-sandbox buildpkg parallel-install"
-          EMERGE_DEFAULT_OPTS="--usepkg --binpkg-respect-use=y --binpkg-changed-deps=n --rebuilt-binaries=n --autounmask=y --autounmask-write --autounmask-backtrack=y --keep-going --quiet"
+          FEATURES="-userfetch -userpriv -usersandbox -ipc-sandbox -network-sandbox -pid-sandbox buildpkg parallel-install getbinpkg"
+          EMERGE_DEFAULT_OPTS="--getbinpkg --usepkg --binpkg-respect-use=y --binpkg-changed-deps=n --rebuilt-binaries=n --autounmask=y --autounmask-write --autounmask-backtrack=y --keep-going --quiet"
           DISTDIR="/var/cache/distfiles"
           PKGDIR="/overlay/job_out"
           ACCEPT_LICENSE="*"
@@ -140,6 +147,14 @@ jobs:
           echo "*/*::gentoo-nexus **" >> /etc/portage/package.accept_keywords/nexus
           echo "*/*::guru **" >> /etc/portage/package.accept_keywords/guru
           
+          echo "sys-kernel/gentoo-kernel **" >> /etc/portage/package.accept_keywords/nexus
+          echo "virtual/dist-kernel **" >> /etc/portage/package.accept_keywords/nexus
+          echo "media-libs/mesa **" >> /etc/portage/package.accept_keywords/nexus
+          echo "media-libs/vulkan-loader **" >> /etc/portage/package.accept_keywords/nexus
+          echo "dev-util/spirv-tools **" >> /etc/portage/package.accept_keywords/nexus
+          echo "dev-util/spirv-headers **" >> /etc/portage/package.accept_keywords/nexus
+          echo "dev-util/mesa_clc **" >> /etc/portage/package.accept_keywords/nexus
+
           TARGET_PKG="${{ github.event.inputs.atom }}"
 
           echo ">>> Compiling Target..."

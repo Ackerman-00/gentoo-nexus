@@ -29,14 +29,27 @@ jobs:
           emerge-webrsync -q; eselect profile set default/linux/amd64/23.0/desktop
           emerge --noreplace --quiet dev-lang/go dev-lang/rust-bin app-eselect/eselect-repository dev-vcs/git
           
+          mkdir -p /etc/portage/savedconfig/sys-kernel/
+          if [ -f /overlay/kernel-config/nexus-config-master ]; then
+              cp /overlay/kernel-config/nexus-config-master /etc/portage/savedconfig/sys-kernel/gentoo-kernel
+          fi
+
+          echo ">>> Wiring Cross-Factory Binhosts..."
+          cat > /etc/portage/binrepos.conf/nexus.conf << 'REPOCONF'
+          [gentoo-nexus-gh]
+          priority = 9999
+          sync-uri = https://${{ github.repository_owner }}.github.io/${{ github.event.repository.name }}/
+          verify-signature = false
+          REPOCONF
+
           cat > /etc/portage/make.conf << 'MAKECONF'
           COMMON_FLAGS="-O2 -march=x86-64-v3 -pipe"
           CFLAGS="${COMMON_FLAGS}"; CXXFLAGS="${COMMON_FLAGS}"; RUSTFLAGS="-C target-cpu=x86-64-v3 -C opt-level=2"
           USE="wayland X vulkan pipewire dbus elogind udev opengl dri gbm vaapi vdpau ffmpeg bluetooth screencast gstreamer minizip -daemon -systemd -aqua -cups"
           VIDEO_CARDS="amdgpu radeon radeonsi intel iris nouveau virgl"
           LINUX_FIRMWARE="amd-ucode intel-ucode amdgpu nvidia i915 rtl_nic ath10k ath11k iwlwifi mt76 rtw88 rtw89"
-          FEATURES="-userfetch -userpriv -usersandbox -ipc-sandbox -network-sandbox -pid-sandbox buildpkg parallel-install"
-          EMERGE_DEFAULT_OPTS="--usepkg --binpkg-respect-use=y --binpkg-changed-deps=n --rebuilt-binaries=n --autounmask=y --autounmask-write --autounmask-backtrack=y --keep-going --quiet"
+          FEATURES="-userfetch -userpriv -usersandbox -ipc-sandbox -network-sandbox -pid-sandbox buildpkg parallel-install getbinpkg"
+          EMERGE_DEFAULT_OPTS="--getbinpkg --usepkg --binpkg-respect-use=y --binpkg-changed-deps=n --rebuilt-binaries=n --autounmask=y --autounmask-write --autounmask-backtrack=y --keep-going --quiet"
           DISTDIR="/var/cache/distfiles"; PKGDIR="/overlay/job_out"; ACCEPT_LICENSE="*"
           MAKECONF
 
@@ -53,7 +66,7 @@ jobs:
           sys-libs/ncurses -abi_x86_32
           media-video/pipewire extra sound-server
           media-video/wireplumber extra
-          sys-kernel/gentoo-kernel initramfs
+          sys-kernel/gentoo-kernel savedconfig initramfs
           sys-kernel/installkernel dracut grub
           USE
 
