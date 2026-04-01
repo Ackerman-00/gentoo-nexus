@@ -38,7 +38,6 @@ jobs:
     runs-on: ubuntu-latest
     timeout-minutes: 30
     outputs:
-      # ARCHITECT FIX: Now correctly points to the 'audit' step
       updates_found: ${{ steps.audit.outputs.updates_found }}
     steps:
       - name: Checkout Repository
@@ -185,7 +184,7 @@ jobs:
           EOF
 
       - name: Smart Binhost Audit
-        id: audit # ARCHITECT FIX: Added the missing ID here!
+        id: audit
         run: |
           BINHOST_URL="https://${{ github.repository_owner }}.github.io/${{ github.event.repository.name }}/Packages"
           HTTP_STATUS=$(curl -sL -o gh_packages.txt -w "%{http_code}" --connect-timeout 15 --retry 3 "$BINHOST_URL" || echo "000")
@@ -222,7 +221,6 @@ jobs:
               UPDATES="true"
           fi
           
-          # This variable will now correctly propagate to all subsequent jobs!
           echo "updates_found=$UPDATES" >> "$GITHUB_OUTPUT"
 
       - name: Commit & Upload Overlay State
@@ -285,25 +283,62 @@ jobs:
           verify-signature = false
           REPOCONF
 
+          # UNIVERSAL ENVIRONMENT: No drift allowed across cluster nodes
           cat > /etc/portage/make.conf << 'MAKECONF'
           COMMON_FLAGS="-O2 -march=x86-64-v3 -pipe"
           CFLAGS="${COMMON_FLAGS}"; CXXFLAGS="${COMMON_FLAGS}"; RUSTFLAGS="-C target-cpu=x86-64-v3 -C opt-level=2"
-          USE="-daemon -systemd -aqua -cups"
-          LINUX_FIRMWARE="amd-ucode intel-ucode amdgpu nvidia i915 rtl_nic ath10k ath11k iwlwifi mt76 rtw88 rtw89"
-          FEATURES="-ipc-sandbox -network-sandbox -pid-sandbox buildpkg parallel-install getbinpkg -binpkg-request-signature ccache"
+          USE="wayland X vulkan pipewire dbus udev opengl dri gbm vaapi vdpau ffmpeg -daemon -systemd -aqua -cups"
+          VIDEO_CARDS="amdgpu radeon radeonsi intel iris nouveau virgl"
+          FEATURES="-ipc-sandbox -network-sandbox -pid-sandbox buildpkg parallel-install getbinpkg -binpkg-request-signature"
           CCACHE_DIR="/var/cache/ccache"
           EMERGE_DEFAULT_OPTS="--getbinpkg --usepkg --binpkg-respect-use=y --autounmask=y --autounmask-write --keep-going --quiet"
           DISTDIR="/var/cache/distfiles"; PKGDIR="/overlay/job_out"; ACCEPT_LICENSE="*"
           MAKECONF
           echo "MAKEOPTS=\"-j$(nproc)\"" >> /etc/portage/make.conf
 
+          # UNIVERSAL BOOTSTRAP: Install core tools WITHOUT ccache to prevent paradox
           emerge --noreplace --quiet app-eselect/eselect-repository dev-vcs/git dev-util/ccache
+          
+          # ARCHITECT FIX: Safely activate and permission ccache for the Portage user
+          mkdir -p /var/cache/ccache
+          chown -R portage:portage /var/cache/ccache
+          chmod -R 2777 /var/cache/ccache
+          echo 'FEATURES="${FEATURES} ccache"' >> /etc/portage/make.conf
+
+          # ARCHITECT FIX: Universal Overlay Sync
+          eselect repository enable guru steam-overlay 2>/dev/null || true
+          emaint sync -r guru steam-overlay 2>/dev/null || true
+          
+          cat > /etc/portage/repos.conf/gentoo-nexus.conf << 'REPOCONF'
+          [gentoo-nexus]
+          location = /overlay
+          masters = gentoo guru
+          priority = 9999
+          REPOCONF
+          emaint sync -r gentoo-nexus 2>/dev/null || true
+
+          # Universal Unmasking
+          echo "*/*::guru **" >> /etc/portage/package.accept_keywords/guru
+          echo "*/*::steam-overlay **" >> /etc/portage/package.accept_keywords/steam
+          echo "*/*::gentoo-nexus **" >> /etc/portage/package.accept_keywords/nexus
+          echo "sys-kernel/gentoo-kernel **" >> /etc/portage/package.accept_keywords/nexus
+          echo "sys-kernel/linux-firmware **" >> /etc/portage/package.accept_keywords/nexus
+
+          cat > /etc/portage/package.mask/fixes << 'MASK'
+          sys-apps/systemd
+          sys-apps/gentoo-systemd-integration
+          MASK
+
+          cat > /etc/portage/package.use/global << 'USE'
+          */* -systemd -gpm
+          media-video/ffmpeg -sdl
+          media-video/pipewire -ffmpeg
+          USE
+          
           cat > /etc/portage/package.use/kernel << 'USE'
           sys-kernel/gentoo-kernel savedconfig initramfs
           sys-kernel/installkernel dracut grub
           USE
-          echo "sys-kernel/gentoo-kernel **" >> /etc/portage/package.accept_keywords/nexus
-          echo "sys-kernel/linux-firmware **" >> /etc/portage/package.accept_keywords/nexus
 
           BASE_LIST=(sys-kernel/gentoo-kernel sys-kernel/linux-firmware sys-kernel/dracut)
           for i in 1 2; do emerge --deep --newuse "${BASE_LIST[@]}" 2>&1 && break || etc-update --automode -5; done
@@ -353,12 +388,13 @@ jobs:
           verify-signature = false
           REPOCONF
 
+          # UNIVERSAL ENVIRONMENT
           cat > /etc/portage/make.conf << 'MAKECONF'
           COMMON_FLAGS="-O2 -march=x86-64-v3 -pipe"
           CFLAGS="${COMMON_FLAGS}"; CXXFLAGS="${COMMON_FLAGS}"; RUSTFLAGS="-C target-cpu=x86-64-v3 -C opt-level=2"
           USE="wayland X vulkan pipewire dbus udev opengl dri gbm vaapi vdpau ffmpeg -daemon -systemd -aqua -cups"
           VIDEO_CARDS="amdgpu radeon radeonsi intel iris nouveau virgl"
-          FEATURES="-ipc-sandbox -network-sandbox -pid-sandbox buildpkg parallel-install getbinpkg -binpkg-request-signature ccache"
+          FEATURES="-ipc-sandbox -network-sandbox -pid-sandbox buildpkg parallel-install getbinpkg -binpkg-request-signature"
           CCACHE_DIR="/var/cache/ccache"
           EMERGE_DEFAULT_OPTS="--getbinpkg --usepkg --binpkg-respect-use=y --autounmask=y --autounmask-write --keep-going --quiet"
           DISTDIR="/var/cache/distfiles"; PKGDIR="/overlay/job_out"; ACCEPT_LICENSE="*"
@@ -366,22 +402,58 @@ jobs:
           echo "MAKEOPTS=\"-j$(nproc)\"" >> /etc/portage/make.conf
 
           emerge --noreplace --quiet app-eselect/eselect-repository dev-vcs/git dev-util/ccache
+          
+          # ARCHITECT FIX: Ccache permissions
+          mkdir -p /var/cache/ccache
+          chown -R portage:portage /var/cache/ccache
+          chmod -R 2777 /var/cache/ccache
+          echo 'FEATURES="${FEATURES} ccache"' >> /etc/portage/make.conf
+
+          # Universal Overlay Sync
+          eselect repository enable guru steam-overlay 2>/dev/null || true
+          emaint sync -r guru steam-overlay 2>/dev/null || true
           cat > /etc/portage/repos.conf/gentoo-nexus.conf << 'REPOCONF'
           [gentoo-nexus]
           location = /overlay
-          masters = gentoo
+          masters = gentoo guru
           priority = 9999
           REPOCONF
           emaint sync -r gentoo-nexus 2>/dev/null || true
 
-          cat > /etc/portage/package.use/graphics << 'USE'
-          media-libs/mesa -abi_x86_32
-          media-libs/vulkan-loader -abi_x86_32
+          # Universal Unmasking
+          echo "*/*::guru **" >> /etc/portage/package.accept_keywords/guru
+          echo "*/*::steam-overlay **" >> /etc/portage/package.accept_keywords/steam
+          echo "*/*::gentoo-nexus **" >> /etc/portage/package.accept_keywords/nexus
+          echo "media-libs/mesa **" >> /etc/portage/package.accept_keywords/nexus
+          echo "media-libs/vulkan-loader **" >> /etc/portage/package.accept_keywords/nexus
+
+          cat > /etc/portage/package.mask/fixes << 'MASK'
+          sys-apps/systemd
+          sys-apps/gentoo-systemd-integration
+          MASK
+
+          cat > /etc/portage/package.use/global << 'USE'
+          */* -systemd -gpm
           media-video/ffmpeg -sdl
           media-video/pipewire -ffmpeg
           USE
-          echo "media-libs/mesa **" >> /etc/portage/package.accept_keywords/nexus
-          echo "media-libs/vulkan-loader **" >> /etc/portage/package.accept_keywords/nexus
+
+          # ARCHITECT FIX: GCC-ICE Workarounds for Mesa 26 / Clang
+          mkdir -p /etc/portage/env /etc/portage/package.env
+          cat > /etc/portage/env/gcc-ice-safe << 'EOF'
+          CFLAGS="-O1 -pipe -fno-tree-loop-vectorize -fno-tree-slp-vectorize"
+          CXXFLAGS="-O1 -pipe -fno-tree-loop-vectorize -fno-tree-slp-vectorize"
+          EOF
+          echo "MAKEOPTS=\"-j$(nproc)\"" >> /etc/portage/env/gcc-ice-safe
+          cat > /etc/portage/package.env/gcc-ice-packages << 'EOF'
+          dev-util/spirv-tools gcc-ice-safe
+          media-libs/mesa gcc-ice-safe
+          EOF
+
+          cat > /etc/portage/package.use/graphics << 'USE'
+          media-libs/mesa -abi_x86_32
+          media-libs/vulkan-loader -abi_x86_32
+          USE
 
           BASE_LIST=(media-libs/mesa media-libs/vulkan-loader dev-util/spirv-tools media-video/pipewire media-video/wireplumber)
           for i in 1 2; do emerge --deep --newuse "${BASE_LIST[@]}" 2>&1 && break || etc-update --automode -5; done
@@ -395,7 +467,7 @@ jobs:
           path: job_out/
           retention-days: 1
 
-  # JOB C: BASE ISOLATION (Now Sweeps Up Missing Overlay Packages)
+  # JOB C: BASE ISOLATION
   build-base:
     name: Vanguard Base
     needs: overlay-scan
@@ -431,11 +503,13 @@ jobs:
           verify-signature = false
           REPOCONF
 
+          # UNIVERSAL ENVIRONMENT
           cat > /etc/portage/make.conf << 'MAKECONF'
           COMMON_FLAGS="-O2 -march=x86-64-v3 -pipe"
           CFLAGS="${COMMON_FLAGS}"; CXXFLAGS="${COMMON_FLAGS}"; RUSTFLAGS="-C target-cpu=x86-64-v3 -C opt-level=2"
-          USE="-daemon -systemd -aqua -cups"
-          FEATURES="-ipc-sandbox -network-sandbox -pid-sandbox buildpkg parallel-install getbinpkg -binpkg-request-signature ccache"
+          USE="wayland X vulkan pipewire dbus udev opengl dri gbm vaapi vdpau ffmpeg -daemon -systemd -aqua -cups"
+          VIDEO_CARDS="amdgpu radeon radeonsi intel iris nouveau virgl"
+          FEATURES="-ipc-sandbox -network-sandbox -pid-sandbox buildpkg parallel-install getbinpkg -binpkg-request-signature"
           CCACHE_DIR="/var/cache/ccache"
           EMERGE_DEFAULT_OPTS="--getbinpkg --usepkg --binpkg-respect-use=y --autounmask=y --autounmask-write --keep-going --quiet"
           DISTDIR="/var/cache/distfiles"; PKGDIR="/overlay/job_out"; ACCEPT_LICENSE="*"
@@ -444,23 +518,38 @@ jobs:
 
           emerge --noreplace --quiet app-eselect/eselect-repository dev-vcs/git dev-util/ccache
           
+          # ARCHITECT FIX: Ccache permissions
+          mkdir -p /var/cache/ccache
+          chown -R portage:portage /var/cache/ccache
+          chmod -R 2777 /var/cache/ccache
+          echo 'FEATURES="${FEATURES} ccache"' >> /etc/portage/make.conf
+          
+          # Universal Overlay Sync
+          eselect repository enable guru steam-overlay 2>/dev/null || true
+          emaint sync -r guru steam-overlay 2>/dev/null || true
           cat > /etc/portage/repos.conf/gentoo-nexus.conf << 'REPOCONF'
           [gentoo-nexus]
           location = /overlay
-          masters = gentoo
+          masters = gentoo guru
           priority = 9999
           REPOCONF
           emaint sync -r gentoo-nexus 2>/dev/null || true
+
+          # Universal Unmasking
+          echo "*/*::guru **" >> /etc/portage/package.accept_keywords/guru
+          echo "*/*::steam-overlay **" >> /etc/portage/package.accept_keywords/steam
+          echo "*/*::gentoo-nexus **" >> /etc/portage/package.accept_keywords/nexus
           
           cat > /etc/portage/package.mask/fixes << 'MASK'
           sys-apps/systemd
           sys-apps/gentoo-systemd-integration
           MASK
+
           cat > /etc/portage/package.use/global << 'USE'
           */* -systemd -gpm
+          media-video/ffmpeg -sdl
+          media-video/pipewire -ffmpeg
           USE
-
-          echo "*/*::gentoo-nexus **" >> /etc/portage/package.accept_keywords/nexus
 
           BASE_LIST=(sys-boot/grub sys-boot/efibootmgr sys-auth/elogind sys-auth/seatd net-misc/networkmanager)
 
@@ -525,12 +614,13 @@ jobs:
           verify-signature = false
           REPOCONF
 
+          # UNIVERSAL ENVIRONMENT
           cat > /etc/portage/make.conf << 'MAKECONF'
           COMMON_FLAGS="-O2 -march=x86-64-v3 -pipe"
           CFLAGS="${COMMON_FLAGS}"; CXXFLAGS="${COMMON_FLAGS}"; RUSTFLAGS="-C target-cpu=x86-64-v3 -C opt-level=2"
-          USE="wayland X vulkan opengl dri gbm -daemon -systemd"
+          USE="wayland X vulkan pipewire dbus udev opengl dri gbm vaapi vdpau ffmpeg -daemon -systemd -aqua -cups"
           VIDEO_CARDS="amdgpu radeon radeonsi intel iris nouveau virgl"
-          FEATURES="-ipc-sandbox -network-sandbox -pid-sandbox buildpkg parallel-install getbinpkg -binpkg-request-signature ccache"
+          FEATURES="-ipc-sandbox -network-sandbox -pid-sandbox buildpkg parallel-install getbinpkg -binpkg-request-signature"
           CCACHE_DIR="/var/cache/ccache"
           EMERGE_DEFAULT_OPTS="--getbinpkg --usepkg --binpkg-respect-use=y --autounmask=y --autounmask-write --keep-going --quiet"
           DISTDIR="/var/cache/distfiles"; PKGDIR="/overlay/job_out"; ACCEPT_LICENSE="*"
@@ -538,8 +628,53 @@ jobs:
           echo "MAKEOPTS=\"-j$(nproc)\"" >> /etc/portage/make.conf
 
           emerge --noreplace --quiet app-eselect/eselect-repository dev-vcs/git dev-util/ccache
-          eselect repository enable steam-overlay 2>/dev/null || true
-          emaint sync -r steam-overlay 2>/dev/null || true
+          
+          # ARCHITECT FIX: Ccache permissions
+          mkdir -p /var/cache/ccache
+          chown -R portage:portage /var/cache/ccache
+          chmod -R 2777 /var/cache/ccache
+          echo 'FEATURES="${FEATURES} ccache"' >> /etc/portage/make.conf
+
+          # Universal Overlay Sync
+          eselect repository enable guru steam-overlay 2>/dev/null || true
+          emaint sync -r guru steam-overlay 2>/dev/null || true
+          cat > /etc/portage/repos.conf/gentoo-nexus.conf << 'REPOCONF'
+          [gentoo-nexus]
+          location = /overlay
+          masters = gentoo guru
+          priority = 9999
+          REPOCONF
+          emaint sync -r gentoo-nexus 2>/dev/null || true
+
+          # Universal Unmasking
+          echo "*/*::guru **" >> /etc/portage/package.accept_keywords/guru
+          echo "*/*::steam-overlay **" >> /etc/portage/package.accept_keywords/steam
+          echo "*/*::gentoo-nexus **" >> /etc/portage/package.accept_keywords/nexus
+          echo "media-libs/mesa **" >> /etc/portage/package.accept_keywords/nexus
+          echo "media-libs/vulkan-loader **" >> /etc/portage/package.accept_keywords/nexus
+
+          cat > /etc/portage/package.mask/fixes << 'MASK'
+          sys-apps/systemd
+          sys-apps/gentoo-systemd-integration
+          MASK
+
+          cat > /etc/portage/package.use/global << 'USE'
+          */* -systemd -gpm
+          media-video/ffmpeg -sdl
+          media-video/pipewire -ffmpeg
+          USE
+
+          # ARCHITECT FIX: GCC-ICE Workarounds
+          mkdir -p /etc/portage/env /etc/portage/package.env
+          cat > /etc/portage/env/gcc-ice-safe << 'EOF'
+          CFLAGS="-O1 -pipe -fno-tree-loop-vectorize -fno-tree-slp-vectorize"
+          CXXFLAGS="-O1 -pipe -fno-tree-loop-vectorize -fno-tree-slp-vectorize"
+          EOF
+          echo "MAKEOPTS=\"-j$(nproc)\"" >> /etc/portage/env/gcc-ice-safe
+          cat > /etc/portage/package.env/gcc-ice-packages << 'EOF'
+          dev-util/spirv-tools gcc-ice-safe
+          media-libs/mesa gcc-ice-safe
+          EOF
 
           cat > /etc/portage/package.use/steam << 'USE'
           media-libs/mesa abi_x86_32
@@ -547,7 +682,6 @@ jobs:
           dev-util/spirv-tools abi_x86_32
           x11-drivers/nvidia-drivers abi_x86_32
           USE
-          echo "*/*::steam-overlay **" >> /etc/portage/package.accept_keywords/steam
 
           STEAM_LIST=(media-libs/mesa media-libs/vulkan-loader games-util/steam-launcher)
           for i in 1 2; do emerge --deep --newuse "${STEAM_LIST[@]}" 2>&1 && break || etc-update --automode -5; done
@@ -590,37 +724,90 @@ jobs:
       - name: Execute Sniper Build
         if: steps.check_bin.outputs.skip == 'false'
         run: |
-          mkdir -p job_out /tmp/distfiles
-          chmod 777 /tmp/distfiles
+          mkdir -p job_out /tmp/distfiles /tmp/ccache
+          chmod 777 /tmp/distfiles /tmp/ccache
           cat > build_script.sh << 'BUILDEOF'
           #!/bin/bash
           set -euo pipefail
           mkdir -p /var/db/repos/gentoo /etc/portage/{repos.conf,binrepos.conf,env,package.{accept_keywords,license,use,mask,env}} /overlay/{distfiles,job_out}
           emerge-webrsync -q && getuto || true
           eselect profile set default/linux/amd64/23.0/desktop
+          
           cat > /etc/portage/binrepos.conf/gentoo.conf << 'REPOCONF'
           [gentoo]
           priority = 10000
           sync-uri = https://distfiles.gentoo.org/releases/amd64/binpackages/23.0/x86-64/
           verify-signature = false
           REPOCONF
+
+          # UNIVERSAL ENVIRONMENT
           cat > /etc/portage/make.conf << 'MAKECONF'
           COMMON_FLAGS="-O2 -march=x86-64-v3 -pipe"
           CFLAGS="${COMMON_FLAGS}"; CXXFLAGS="${COMMON_FLAGS}"; RUSTFLAGS="-C target-cpu=x86-64-v3 -C opt-level=2"
-          USE="-daemon -systemd -aqua -cups"
+          USE="wayland X vulkan pipewire dbus udev opengl dri gbm vaapi vdpau ffmpeg -daemon -systemd -aqua -cups"
+          VIDEO_CARDS="amdgpu radeon radeonsi intel iris nouveau virgl"
           FEATURES="-ipc-sandbox -network-sandbox -pid-sandbox buildpkg parallel-install getbinpkg -binpkg-request-signature"
+          CCACHE_DIR="/var/cache/ccache"
           EMERGE_DEFAULT_OPTS="--getbinpkg --usepkg --binpkg-respect-use=y --autounmask=y --autounmask-write --keep-going --quiet"
           DISTDIR="/var/cache/distfiles"; PKGDIR="/overlay/job_out"; ACCEPT_LICENSE="*"
           MAKECONF
           echo "MAKEOPTS=\"-j$(nproc)\"" >> /etc/portage/make.conf
-          emerge --noreplace --quiet app-eselect/eselect-repository dev-vcs/git
+
+          emerge --noreplace --quiet app-eselect/eselect-repository dev-vcs/git dev-util/ccache
+          
+          # ARCHITECT FIX: Ccache permissions
+          mkdir -p /var/cache/ccache
+          chown -R portage:portage /var/cache/ccache
+          chmod -R 2777 /var/cache/ccache
+          echo 'FEATURES="${FEATURES} ccache"' >> /etc/portage/make.conf
+
+          # Universal Overlay Sync
+          eselect repository enable guru steam-overlay 2>/dev/null || true
+          emaint sync -r guru steam-overlay 2>/dev/null || true
+          cat > /etc/portage/repos.conf/gentoo-nexus.conf << 'REPOCONF'
+          [gentoo-nexus]
+          location = /overlay
+          masters = gentoo guru
+          priority = 9999
+          REPOCONF
+          emaint sync -r gentoo-nexus 2>/dev/null || true
+
+          # Universal Unmasking
+          echo "*/*::guru **" >> /etc/portage/package.accept_keywords/guru
+          echo "*/*::steam-overlay **" >> /etc/portage/package.accept_keywords/steam
+          echo "*/*::gentoo-nexus **" >> /etc/portage/package.accept_keywords/nexus
+          echo "media-libs/mesa **" >> /etc/portage/package.accept_keywords/nexus
+          echo "media-libs/vulkan-loader **" >> /etc/portage/package.accept_keywords/nexus
+
+          cat > /etc/portage/package.mask/fixes << 'MASK'
+          sys-apps/systemd
+          sys-apps/gentoo-systemd-integration
+          MASK
+
+          cat > /etc/portage/package.use/global << 'USE'
+          */* -systemd -gpm
+          media-video/ffmpeg -sdl
+          media-video/pipewire -ffmpeg
+          USE
+
+          # ARCHITECT FIX: GCC-ICE Workarounds
+          mkdir -p /etc/portage/env /etc/portage/package.env
+          cat > /etc/portage/env/gcc-ice-safe << 'EOF'
+          CFLAGS="-O1 -pipe -fno-tree-loop-vectorize -fno-tree-slp-vectorize"
+          CXXFLAGS="-O1 -pipe -fno-tree-loop-vectorize -fno-tree-slp-vectorize"
+          EOF
+          echo "MAKEOPTS=\"-j$(nproc)\"" >> /etc/portage/env/gcc-ice-safe
+          cat > /etc/portage/package.env/gcc-ice-packages << 'EOF'
+          dev-util/spirv-tools gcc-ice-safe
+          media-libs/mesa gcc-ice-safe
+          EOF
           
           TARGET_PKG="${{ github.event.inputs.atom }}"
           for i in 1 2; do emerge --deep --newuse "$TARGET_PKG" 2>&1 && break || etc-update --automode -5; done
           emerge --deep --newuse "$TARGET_PKG"
           BUILDEOF
           chmod +x build_script.sh
-          docker run --rm --privileged -v "${{ github.workspace }}:/overlay" -v "/tmp/distfiles:/var/cache/distfiles" gentoo/stage3:amd64-desktop-openrc bash /overlay/build_script.sh
+          docker run --rm --privileged -v "${{ github.workspace }}:/overlay" -v "/tmp/distfiles:/var/cache/distfiles" -v "/tmp/ccache:/var/cache/ccache" gentoo/stage3:amd64-desktop-openrc bash /overlay/build_script.sh
       - uses: actions/upload-artifact@v4
         if: steps.check_bin.outputs.skip == 'false'
         with:
