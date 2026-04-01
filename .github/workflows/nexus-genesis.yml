@@ -1074,8 +1074,9 @@ jobs:
           cp /overlay/kernel-config/nexus-config-master /etc/portage/savedconfig/sys-kernel/gentoo-kernel || true
           
           TARGET_PKG="${{ github.event.inputs.atom }}"
-          for i in 1 2; do emerge --deep --newuse "$TARGET_PKG" 2>&1 && break || etc-update --automode -5; done
-          emerge --deep --newuse "$TARGET_PKG"
+          # ARCHITECT FIX: Unquoted $TARGET_PKG allows Bash to split the list by spaces
+          for i in 1 2; do emerge --deep --newuse $TARGET_PKG 2>&1 && break || etc-update --automode -5; done
+          emerge --deep --newuse $TARGET_PKG
           BUILDEOF
           chmod +x build_script.sh
           docker run --rm --privileged -v "${{ github.workspace }}:/overlay" -v "/tmp/distfiles:/var/cache/distfiles" -v "/tmp/ccache:/var/cache/ccache" gentoo/stage3:amd64-desktop-openrc bash /overlay/build_script.sh
