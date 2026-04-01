@@ -15,6 +15,11 @@ on:
         required: false
         type: boolean
         default: false
+      force_full_run:
+        description: 'Force Full Cluster Run (Bypass Scan & Audit)'
+        required: false
+        type: boolean
+        default: false
 
 concurrency:
   group: build-nexus-genesis
@@ -184,6 +189,7 @@ jobs:
           HTTP_STATUS=$(curl -sL -o gh_packages.txt -w "%{http_code}" --connect-timeout 15 --retry 3 "$BINHOST_URL" || echo "000")
           if [ "$HTTP_STATUS" != "200" ]; then touch gh_packages.txt; fi
           
+          echo ">>> Auditing Overlay Packages Against Binhost..."
           for ebuild in */*/*.ebuild; do
               [ -e "$ebuild" ] || continue
               pkg_dir=$(dirname "$ebuild")
@@ -193,16 +199,28 @@ jobs:
               
               if ! grep -q "^CPV: $CPV$" gh_packages.txt; then
                   echo "$pkg_dir" >> changed_packages.txt
+                  echo "Missing binary detected: $CPV"
               fi
           done
 
-          if [ -f changed_packages.txt ] && [ -s changed_packages.txt ]; then
+          echo ">>> Auditing Core OS Packages Against Binhost..."
+          CORE_ATOMS="sys-kernel/gentoo-kernel media-libs/mesa media-libs/vulkan-loader sys-boot/grub sys-auth/elogind"
+          for atom in $CORE_ATOMS; do
+              if ! grep -q "^CPV: $atom-" gh_packages.txt; then
+                  echo "🚨 Core package $atom is missing! Forcing cluster rebuild."
+                  touch core_missing.flag
+              fi
+          done
+
+          UPDATES="false"
+          if [ -f core_missing.flag ]; then UPDATES="true"; fi
+          if [ -f changed_packages.txt ] && [ -s changed_packages.txt ]; then 
               sort -u changed_packages.txt > changed_packages_unique.txt
               mv changed_packages_unique.txt changed_packages.txt
-              echo "updates_found=true" >> "$GITHUB_OUTPUT"
-          else
-              echo "updates_found=false" >> "$GITHUB_OUTPUT"
+              UPDATES="true"
           fi
+          
+          echo "updates_found=$UPDATES" >> "$GITHUB_OUTPUT"
 
       - name: Commit & Upload Overlay State
         run: |
@@ -231,7 +249,7 @@ jobs:
   build-kernel:
     name: Vanguard Kernel
     needs: overlay-scan
-    if: github.event.inputs.atom == '' && (needs.overlay-scan.outputs.updates_found == 'true' || github.event_name == 'schedule')
+    if: github.event.inputs.atom == '' && (needs.overlay-scan.outputs.updates_found == 'true' || github.event_name == 'schedule' || github.event.inputs.force_full_run == 'true')
     runs-on: ubuntu-latest
     timeout-minutes: 240
     steps:
@@ -300,7 +318,7 @@ jobs:
   build-graphics:
     name: Vanguard Graphics (64-bit)
     needs: overlay-scan
-    if: github.event.inputs.atom == '' && (needs.overlay-scan.outputs.updates_found == 'true' || github.event_name == 'schedule')
+    if: github.event.inputs.atom == '' && (needs.overlay-scan.outputs.updates_found == 'true' || github.event_name == 'schedule' || github.event.inputs.force_full_run == 'true')
     runs-on: ubuntu-latest
     timeout-minutes: 240
     steps:
@@ -374,11 +392,11 @@ jobs:
           path: job_out/
           retention-days: 1
 
-  # JOB C: BASE ISOLATION
+  # JOB C: BASE ISOLATION (Now Sweeps Up Missing Overlay Packages)
   build-base:
     name: Vanguard Base
     needs: overlay-scan
-    if: github.event.inputs.atom == '' && (needs.overlay-scan.outputs.updates_found == 'true' || github.event_name == 'schedule')
+    if: github.event.inputs.atom == '' && (needs.overlay-scan.outputs.updates_found == 'true' || github.event_name == 'schedule' || github.event.inputs.force_full_run == 'true')
     runs-on: ubuntu-latest
     timeout-minutes: 240
     steps:
@@ -422,6 +440,15 @@ jobs:
           echo "MAKEOPTS=\"-j$(nproc)\"" >> /etc/portage/make.conf
 
           emerge --noreplace --quiet app-eselect/eselect-repository dev-vcs/git dev-util/ccache
+          
+          cat > /etc/portage/repos.conf/gentoo-nexus.conf << 'REPOCONF'
+          [gentoo-nexus]
+          location = /overlay
+          masters = gentoo
+          priority = 9999
+          REPOCONF
+          emaint sync -r gentoo-nexus 2>/dev/null || true
+          
           cat > /etc/portage/package.mask/fixes << 'MASK'
           sys-apps/systemd
           sys-apps/gentoo-systemd-integration
@@ -430,7 +457,19 @@ jobs:
           */* -systemd -gpm
           USE
 
+          echo "*/*::gentoo-nexus **" >> /etc/portage/package.accept_keywords/nexus
+
           BASE_LIST=(sys-boot/grub sys-boot/efibootmgr sys-auth/elogind sys-auth/seatd net-misc/networkmanager)
+
+          # Architect Fix: Sweep up any missing/updated custom overlay packages
+          if [ -s /overlay/changed_packages.txt ]; then
+              echo ">>> Adding custom overlay packages to Base build target..."
+              while IFS= read -r pkg_dir; do
+                  [ -z "$pkg_dir" ] && continue
+                  BASE_LIST+=("$pkg_dir")
+              done < /overlay/changed_packages.txt
+          fi
+
           for i in 1 2; do emerge --deep --newuse "${BASE_LIST[@]}" 2>&1 && break || etc-update --automode -5; done
           emerge --deep --newuse "${BASE_LIST[@]}"
           BUILDEOF
