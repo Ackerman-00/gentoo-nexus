@@ -73,6 +73,36 @@ jobs:
               except Exception: pass
               return None
 
+          def get_rootapp_version():
+              print("    -> Downloading AppImage to detect version...")
+              appimage = "/tmp/Root.AppImage"
+              subprocess.run(["wget", "-qO", appimage, "https://installer.rootapp.com/installer/Linux/X64/Root.AppImage"])
+              if not os.path.exists(appimage): 
+                  print("    ❌ Failed to download Root.AppImage")
+                  return None
+              
+              os.chmod(appimage, stat.S_IRWXU)
+              subprocess.run([appimage, "--appimage-extract"], stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL)
+              
+              ver = None
+              if os.path.exists("squashfs-root"):
+                  for d_file in Path("squashfs-root").glob("*.desktop"):
+                      txt = d_file.read_text(encoding="utf-8")
+                      m = re.search(r'^X-AppImage-Version=(.+)', txt, re.M | re.I)
+                      if m: ver = m.group(1).strip()
+                      break
+                  
+                  if ver in (None, "1.0", "1.0.0"):
+                      print("    -> Desktop file empty, running Xvfb fallback...")
+                      os.system("xvfb-run -a ./squashfs-root/AppRun > /tmp/startup.log 2>&1 & sleep 5 && pkill -f AppRun || true")
+                      if os.path.exists("/tmp/startup.log"):
+                          log = Path("/tmp/startup.log").read_text(encoding="utf-8")
+                          m = re.search(r'Root Version:\s*([0-9]+\.[0-9]+\.[0-9]+)', log, re.I)
+                          if m: ver = m.group(1)
+                  shutil.rmtree("squashfs-root", ignore_errors=True)
+              os.remove(appimage)
+              return ver
+
           for ebuild_path in Path('.').rglob('*.ebuild'):
               if 'cache' in ebuild_path.parts or 'job_out' in ebuild_path.parts: continue
               pkg_dir = ebuild_path.parent
@@ -82,6 +112,23 @@ jobs:
               content = ebuild_path.read_text(encoding="utf-8")
               is_live = ebuild_path.name.endswith('-9999.ebuild') or 'git-r3' in content
               
+              print(f"\n🔍 Scanning {pkg_cat_name} (Live: {is_live})...")
+
+              if pkg_name == "rootapp-bin":
+                  new_ver = get_rootapp_version()
+                  if new_ver:
+                      curr_ver_m = re.search(r'-([0-9][0-9.]*(?:_p[0-9]+)?(?:-r[0-9]+)?)\.ebuild$', ebuild_path.name)
+                      curr_ver = curr_ver_m.group(1) if curr_ver_m else None
+                      print(f"    -> Current: {curr_ver} | Found Upstream: {new_ver}")
+                      if curr_ver and new_ver != curr_ver:
+                          new_path = pkg_dir / f"{pkg_name}-{new_ver}.ebuild"
+                          ebuild_path.rename(new_path)
+                          updated_atoms.add(pkg_cat_name)
+                          print(f"    ✅ Bumping to {new_ver}")
+                      else:
+                          print("    ✅ Up to date.")
+                  continue
+
               repo_m = re.search(r'https://github\.com/([A-Za-z0-9_.-]+/[A-Za-z0-9_.-]+?)(?:\.git|/archive|/releases|/tarball|"\s|\n)', content)
               if not repo_m: continue
               repo = repo_m.group(1)
@@ -97,9 +144,14 @@ jobs:
                           new_content = re.sub(r'(EGIT_COMMIT=["\']?)[a-fA-F0-9]{7,40}(["\']?)', r"\g<1>" + short_commit + r"\2", new_content)
                       else:
                           new_content = re.sub(r"(^EAPI=.*)", r'\1\nEGIT_COMMIT="' + short_commit + '"', new_content, count=1, flags=re.MULTILINE)
+                      if "_commit=" in new_content:
+                          new_content = re.sub(r'(_commit=["\']?)[a-fA-F0-9]{7,40}(["\']?)', r"\g<1>" + new_commit + r"\2", new_content)
                       if new_content != content:
                           ebuild_path.write_text(new_content, encoding="utf-8")
                           updated_atoms.add(pkg_cat_name)
+                          print(f"    ✅ Updated commit hash to {short_commit}")
+                      else:
+                          print("    ✅ Up to date.")
               else:
                   curr_ver_m = re.search(r'-([0-9][0-9.]*(?:_p[0-9]+)?(?:-r[0-9]+)?)\.ebuild$', ebuild_path.name)
                   if not curr_ver_m: continue
@@ -113,6 +165,9 @@ jobs:
                           new_path = pkg_dir / f"{pkg_name}-{latest_ver}.ebuild"
                           ebuild_path.rename(new_path)
                           updated_atoms.add(pkg_cat_name)
+                          print(f"    ✅ Bumping to {latest_ver}")
+                      else:
+                          print("    ✅ Up to date.")
 
           if updated_atoms:
               Path('changed_packages.txt').write_text('\n'.join(updated_atoms) + '\n', encoding="utf-8")

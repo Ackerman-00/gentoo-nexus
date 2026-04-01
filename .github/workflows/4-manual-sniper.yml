@@ -7,11 +7,6 @@ on:
         description: 'Package atom to build (e.g. games-util/steam-launcher)'
         required: true
         type: string
-      force_rebuild:
-        description: 'Force rebuild even if binary exists'
-        required: false
-        type: boolean
-        default: false
 
 concurrency:
   group: build-${{ github.event.inputs.atom }}
@@ -28,46 +23,7 @@ jobs:
       - name: Checkout
         uses: actions/checkout@v4
 
-      - name: Check GitHub Pages Binhost Status
-        id: check_bin
-        run: |
-          PKG="${{ github.event.inputs.atom }}"
-          BINHOST="https://${{ github.repository_owner }}.github.io/${{ github.event.repository.name }}/Packages"
-
-          if [ "${{ github.event.inputs.force_rebuild }}" = "true" ]; then
-            echo "skip=false" >> "$GITHUB_OUTPUT"
-            exit 0
-          fi
-
-          EBUILD_FILE=$(ls -1v "${PKG}"/*.ebuild 2>/dev/null | tail -n 1)
-          if [ -z "$EBUILD_FILE" ]; then
-            echo "skip=false" >> "$GITHUB_OUTPUT"
-            exit 0
-          fi
-          
-          PN=$(basename "${PKG}")
-          VER=$(basename "${EBUILD_FILE}" | sed -E "s/^${PN}-//; s/\.ebuild$//")
-          
-          HTTP_STATUS=$(curl -sL -o gh_packages.txt -w "%{http_code}" --connect-timeout 15 --retry 3 "$BINHOST" || echo "000")
-          
-          if [ "$HTTP_STATUS" -eq 200 ]; then
-            if grep -q "^CPV: ${PKG}-${VER}$" gh_packages.txt; then
-              echo "✅ Binary for ${PKG}-${VER} exists on Pages. Skipping!"
-              echo "skip=true" >> "$GITHUB_OUTPUT"
-            else
-              echo "🚀 No binary found. Proceeding to build."
-              echo "skip=false" >> "$GITHUB_OUTPUT"
-            fi
-          elif [ "$HTTP_STATUS" -eq 404 ]; then
-            echo "🚀 Index is 404 (Empty Binhost). Proceeding to build."
-            echo "skip=false" >> "$GITHUB_OUTPUT"
-          else
-             echo "🚨 Timeout ($HTTP_STATUS). Skipping to prevent damage."
-             echo "skip=true" >> "$GITHUB_OUTPUT"
-          fi
-
       - name: Build Binary Package
-        if: steps.check_bin.outputs.skip == 'false'
         run: |
           mkdir -p job_out /tmp/distfiles
           chmod 777 /tmp/distfiles
@@ -76,85 +32,25 @@ jobs:
           #!/bin/bash
           set -euo pipefail
           
-          echo ">>> Initializing Gentoo Stage3 Container..."
-          mkdir -p /var/db/repos/gentoo
-          rm -rf /var/db/repos/gentoo/*
-          emerge-webrsync -q
-          eselect news read all >/dev/null 2>&1 || true
-          command -v getuto >/dev/null 2>&1 && getuto || true
-          eselect profile set default/linux/amd64/23.0/desktop
+          mkdir -p /var/db/repos/gentoo /etc/portage/{repos.conf,binrepos.conf,env,package.{accept_keywords,license,use,mask,env}} /overlay/{distfiles,job_out}
+          emerge-webrsync -q; eselect profile set default/linux/amd64/23.0/desktop
           
-          emerge --unmerge --quiet sys-libs/gpm 2>/dev/null || true
-          
-          mkdir -p /etc/portage/{repos.conf,binrepos.conf,env,package.{accept_keywords,license,use,mask,env}}
-          mkdir -p /overlay/{distfiles,job_out}
-          mkdir -p /etc/portage/savedconfig/sys-kernel/
-
-          if [ -f /overlay/kernel-config/nexus-config-master ]; then
-              cp /overlay/kernel-config/nexus-config-master /etc/portage/savedconfig/sys-kernel/gentoo-kernel
-          fi
-
-          echo ">>> Configuring Repository Overlays..."
           emerge --noreplace --quiet dev-lang/go dev-lang/rust-bin app-eselect/eselect-repository dev-vcs/git
-          eselect repository enable guru 2>/dev/null || true
-          emaint sync -r guru 2>/dev/null || true
+          eselect repository enable guru steam-overlay 2>/dev/null || true
+          emaint sync -r guru steam-overlay 2>/dev/null || true
 
-          eselect repository enable steam-overlay 2>/dev/null || true
-          emaint sync -r steam-overlay 2>/dev/null || true
-
-          cat > /etc/portage/repos.conf/gentoo-nexus.conf << 'REPOCONF'
-          [gentoo-nexus]
-          location = /overlay
-          masters = gentoo
-          priority = 9999
-          REPOCONF
-
-          cat > /etc/portage/repos.conf/guru.conf << 'REPOCONF'
-          [guru]
-          location = /var/db/repos/guru
-          masters = gentoo
-          REPOCONF
-
-          echo ">>> Applying GURU-specific ebuild hotfixes..."
-          for pkg in gui-libs/wlroots gui-libs/scenefx; do
-            if [ -d "/var/db/repos/guru/$pkg" ]; then
-              sed -i 's/media-libs\/mesa\/\[gbm\]/media-libs\/mesa/g' "/var/db/repos/guru/$pkg"/*.ebuild 2>/dev/null || true
-              sed -i 's/media-libs\/mesa\/\[gbm(+)\]/media-libs\/mesa/g' "/var/db/repos/guru/$pkg"/*.ebuild 2>/dev/null || true
-            fi
-          done
-
-          echo ">>> Configuring Universal Make.conf (x86-64-v3)..."
           cat > /etc/portage/make.conf << 'MAKECONF'
           COMMON_FLAGS="-O2 -march=x86-64-v3 -pipe"
-          CFLAGS="${COMMON_FLAGS}"
-          CXXFLAGS="${COMMON_FLAGS}"
-          RUSTFLAGS="-C target-cpu=x86-64-v3 -C opt-level=2"
+          CFLAGS="${COMMON_FLAGS}"; CXXFLAGS="${COMMON_FLAGS}"; RUSTFLAGS="-C target-cpu=x86-64-v3 -C opt-level=2"
           USE="wayland X vulkan pipewire dbus elogind udev opengl dri gbm vaapi vdpau ffmpeg bluetooth screencast gstreamer minizip -daemon -systemd -aqua -cups"
           VIDEO_CARDS="amdgpu radeon radeonsi intel iris nouveau virgl"
           LINUX_FIRMWARE="amd-ucode intel-ucode amdgpu nvidia i915 rtl_nic ath10k ath11k iwlwifi mt76 rtw88 rtw89"
-          FEATURES="-userfetch -userpriv -usersandbox -ipc-sandbox -network-sandbox -pid-sandbox getbinpkg buildpkg parallel-install"
-          EMERGE_DEFAULT_OPTS="--getbinpkg --usepkg --binpkg-respect-use=y --binpkg-changed-deps=n --rebuilt-binaries=n --autounmask=y --autounmask-write --autounmask-backtrack=y --keep-going --quiet --update"
-          DISTDIR="/var/cache/distfiles"
-          PKGDIR="/overlay/job_out"
-          EGIT_CLONE_TYPE="single"
-          ACCEPT_LICENSE="*"
-          PORTAGE_BINPKG_TAR_OPTS="--warning=no-unknown-keyword"
+          FEATURES="-userfetch -userpriv -usersandbox -ipc-sandbox -network-sandbox -pid-sandbox buildpkg parallel-install"
+          EMERGE_DEFAULT_OPTS="--usepkg --binpkg-respect-use=y --binpkg-changed-deps=n --rebuilt-binaries=n --autounmask=y --autounmask-write --autounmask-backtrack=y --keep-going --quiet"
+          DISTDIR="/var/cache/distfiles"; PKGDIR="/overlay/job_out"; ACCEPT_LICENSE="*"
           MAKECONF
 
-          CORES=$(nproc)
-          echo "MAKEOPTS=\"-j${CORES} -l${CORES}\"" >> /etc/portage/make.conf
-
-          echo ">>> Applying GCC ICE Workarounds..."
-          cat > /etc/portage/env/gcc-ice-safe << 'EOF'
-          CFLAGS="-O1 -pipe -fno-tree-loop-vectorize -fno-tree-slp-vectorize"
-          CXXFLAGS="-O1 -pipe -fno-tree-loop-vectorize -fno-tree-slp-vectorize"
-          EOF
-          echo "MAKEOPTS=\"-j${CORES}\"" >> /etc/portage/env/gcc-ice-safe
-
-          cat > /etc/portage/package.env/gcc-ice-packages << 'EOF'
-          dev-util/spirv-tools gcc-ice-safe
-          media-libs/mesa gcc-ice-safe
-          EOF
+          CORES=$(nproc); echo "MAKEOPTS=\"-j${CORES} -l${CORES}\"" >> /etc/portage/make.conf
 
           cat > /etc/portage/package.mask/fixes << 'MASK'
           sys-apps/systemd
@@ -167,232 +63,25 @@ jobs:
           cat > /etc/portage/package.use/global << 'USE'
           */* -systemd -gpm
           sys-libs/ncurses -abi_x86_32
-          sys-libs/zlib minizip
           media-video/pipewire extra sound-server
           media-video/wireplumber extra
           sys-kernel/gentoo-kernel savedconfig initramfs
           sys-kernel/installkernel dracut grub
-          llvm-core/llvm xml zstd static-analyzer
-          llvm-core/clang extra xml static-analyzer
-          media-video/ffmpeg -sdl
-          media-libs/libsdl2 -pipewire
           USE
 
-          cat > /etc/portage/package.use/steam << 'USE'
-          app-accessibility/at-spi2-core abi_x86_32
-          app-arch/bzip2 abi_x86_32
-          app-arch/lz4 abi_x86_32
-          app-arch/xz-utils abi_x86_32
-          app-arch/zstd abi_x86_32
-          app-crypt/p11-kit abi_x86_32
-          dev-db/sqlite abi_x86_32
-          dev-lang/rust abi_x86_32
-          dev-lang/rust-bin abi_x86_32
-          dev-libs/dbus-glib abi_x86_32
-          dev-libs/elfutils abi_x86_32
-          dev-libs/expat abi_x86_32
-          dev-libs/fribidi abi_x86_32
-          dev-libs/glib abi_x86_32
-          dev-libs/gmp abi_x86_32
-          dev-libs/icu abi_x86_32
-          dev-libs/json-glib abi_x86_32
-          dev-libs/leancrypto abi_x86_32
-          dev-libs/libevdev abi_x86_32
-          dev-libs/libffi abi_x86_32
-          dev-libs/libgcrypt abi_x86_32
-          dev-libs/libgpg-error abi_x86_32
-          dev-libs/libgudev abi_x86_32
-          dev-libs/libgusb abi_x86_32
-          dev-libs/libpcre2 abi_x86_32
-          dev-libs/libtasn1 abi_x86_32
-          dev-libs/libunistring abi_x86_32
-          dev-libs/libusb abi_x86_32
-          dev-libs/libxml2 abi_x86_32
-          dev-libs/lzo abi_x86_32
-          dev-libs/nettle abi_x86_32
-          dev-libs/nspr abi_x86_32
-          dev-libs/nss abi_x86_32
-          dev-libs/openssl abi_x86_32
-          dev-libs/wayland abi_x86_32
-          dev-util/glslang abi_x86_32
-          dev-util/spirv-tools abi_x86_32
-          dev-util/sysprof-capture abi_x86_32
-          dev-util/vulkan-utility-libraries abi_x86_32
-          gnome-base/librsvg abi_x86_32
-          gui-libs/libdecor abi_x86_32
-          llvm-core/clang abi_x86_32
-          llvm-core/llvm abi_x86_32
-          media-gfx/graphite2 abi_x86_32
-          media-libs/alsa-lib abi_x86_32
-          media-libs/flac abi_x86_32
-          media-libs/fontconfig abi_x86_32
-          media-libs/freetype abi_x86_32
-          media-libs/glu abi_x86_32
-          media-libs/harfbuzz abi_x86_32
-          media-libs/lcms abi_x86_32
-          media-libs/libdisplay-info abi_x86_32
-          media-libs/libepoxy abi_x86_32
-          media-libs/libglvnd abi_x86_32
-          media-libs/libjpeg-turbo abi_x86_32
-          media-libs/libogg abi_x86_32
-          media-libs/libpng abi_x86_32
-          media-libs/libpulse abi_x86_32
-          media-libs/libsdl2 abi_x86_32
-          media-libs/libsndfile abi_x86_32
-          media-libs/libva abi_x86_32
-          media-libs/libvorbis abi_x86_32
-          media-libs/libwebp abi_x86_32
-          media-libs/mesa abi_x86_32
-          media-libs/openal abi_x86_32
-          media-libs/opus abi_x86_32
-          media-libs/tiff abi_x86_32
-          media-libs/vulkan-layers abi_x86_32
-          media-libs/vulkan-loader abi_x86_32 layers
-          media-sound/lame abi_x86_32
-          media-sound/mpg123-base abi_x86_32
-          media-video/pipewire abi_x86_32
-          net-dns/c-ares abi_x86_32
-          net-dns/libidn2 abi_x86_32
-          net-libs/gnutls abi_x86_32
-          net-libs/libasyncns abi_x86_32
-          net-libs/libndp abi_x86_32
-          net-libs/libpsl abi_x86_32
-          net-libs/nghttp2 abi_x86_32
-          net-libs/nghttp3 abi_x86_32
-          net-libs/ngtcp2 abi_x86_32
-          net-misc/curl abi_x86_32
-          net-misc/networkmanager abi_x86_32
-          net-print/cups abi_x86_32
-          sys-apps/dbus abi_x86_32
-          sys-apps/lm-sensors abi_x86_32
-          sys-apps/systemd abi_x86_32
-          sys-apps/systemd-utils abi_x86_32
-          sys-apps/util-linux abi_x86_32
-          sys-libs/gdbm abi_x86_32
-          sys-libs/gpm abi_x86_32
-          sys-libs/libcap abi_x86_32
-          sys-libs/libudev-compat abi_x86_32
-          sys-libs/ncurses abi_x86_32
-          sys-libs/pam abi_x86_32
-          sys-libs/readline abi_x86_32
-          sys-libs/zlib abi_x86_32
-          virtual/glu abi_x86_32
-          virtual/libelf abi_x86_32
-          virtual/libiconv abi_x86_32
-          virtual/libintl abi_x86_32
-          virtual/libudev abi_x86_32
-          virtual/libusb abi_x86_32
-          virtual/opengl abi_x86_32
-          virtual/zlib abi_x86_32
-          x11-libs/cairo abi_x86_32
-          x11-libs/extest abi_x86_32
-          x11-libs/gdk-pixbuf abi_x86_32
-          x11-libs/gtk+ abi_x86_32
-          x11-libs/libdrm abi_x86_32
-          x11-libs/libICE abi_x86_32
-          x11-libs/libpciaccess abi_x86_32
-          x11-libs/libSM abi_x86_32
-          x11-libs/libvdpau abi_x86_32
-          x11-libs/libX11 abi_x86_32
-          x11-libs/libXau abi_x86_32
-          x11-libs/libxcb abi_x86_32
-          x11-libs/libXcomposite abi_x86_32
-          x11-libs/libXcursor abi_x86_32
-          x11-libs/libXdamage abi_x86_32
-          x11-libs/libXdmcp abi_x86_32
-          x11-libs/libXext abi_x86_32
-          x11-libs/libXfixes abi_x86_32
-          x11-libs/libXft abi_x86_32
-          x11-libs/libXi abi_x86_32
-          x11-libs/libXinerama abi_x86_32
-          x11-libs/libxkbcommon abi_x86_32
-          x11-libs/libXrandr abi_x86_32
-          x11-libs/libXrender abi_x86_32
-          x11-libs/libXScrnSaver abi_x86_32
-          x11-libs/libxshmfence abi_x86_32
-          x11-libs/libXtst abi_x86_32
-          x11-libs/libXxf86vm abi_x86_32
-          x11-libs/pango abi_x86_32
-          x11-libs/pixman abi_x86_32
-          x11-libs/xcb-util-keysyms abi_x86_32
-          x11-misc/colord abi_x86_32
-          gui-libs/egl-gbm abi_x86_32
-          gui-libs/egl-wayland abi_x86_32
-          gui-libs/egl-wayland2 abi_x86_32
-          gui-libs/egl-x11 abi_x86_32
-          x11-drivers/nvidia-drivers abi_x86_32
-          
-          sys-libs/glibc hash-sysv-compat
-          USE
-
-          echo ">>> Wiring Binhosts..."
-          cat > /etc/portage/binrepos.conf/gentoo.conf << 'REPOCONF'
-          [gentoo]
-          priority = 10000
-          sync-uri = https://distfiles.gentoo.org/releases/amd64/binpackages/23.0/x86-64/
-          verify-signature = false
-          REPOCONF
-
-          cat > /etc/portage/binrepos.conf/nexus.conf << 'REPOCONF'
-          [gentoo-nexus-gh]
-          priority = 9999
-          sync-uri = https://${{ github.repository_owner }}.github.io/${{ github.event.repository.name }}/
-          verify-signature = false
-          REPOCONF
-
-          echo "*/*::gentoo-nexus **" >> /etc/portage/package.accept_keywords/nexus
-          echo "*/*::guru **" >> /etc/portage/package.accept_keywords/guru
           echo "*/* *" >> /etc/portage/package.license/all
-
-          cat > /etc/portage/package.accept_keywords/steam << 'EOF'
-          */*::steam-overlay **
-          games-util/game-device-udev-rules ~amd64
-          sys-libs/libudev-compat ~amd64
-          EOF
-
-          echo "sys-kernel/gentoo-kernel **" >> /etc/portage/package.accept_keywords/nexus
-          echo "virtual/dist-kernel **" >> /etc/portage/package.accept_keywords/nexus
-          echo "sys-kernel/linux-firmware **" >> /etc/portage/package.accept_keywords/nexus
-          echo "media-libs/mesa **" >> /etc/portage/package.accept_keywords/nexus
-          echo "media-libs/vulkan-loader **" >> /etc/portage/package.accept_keywords/nexus
-          echo "dev-util/spirv-tools **" >> /etc/portage/package.accept_keywords/nexus
-          echo "dev-util/mesa_clc **" >> /etc/portage/package.accept_keywords/nexus
-          echo "dev-util/spirv-headers **" >> /etc/portage/package.accept_keywords/nexus
-
-          echo ">>> Shielding gentoo-nexus packages from Guru overrides..."
-          for pkg in /overlay/*/*/*.ebuild; do
-            [ -e "$pkg" ] || continue
-            cat_pkg=$(echo "$pkg" | awk -F'/' '{print $(NF-2)"/"$(NF-1)}')
-            echo "$cat_pkg::guru" >> /etc/portage/package.mask/guru_shield
-          done
-
-          EXCLUDES="--usepkg-exclude sys-auth/polkit --usepkg-exclude dev-libs/libei --usepkg-exclude media-video/wireplumber --usepkg-exclude media-libs/libpulse --usepkg-exclude sys-apps/accountsservice --usepkg-exclude sys-auth/elogind"
-
+          echo "*/*::steam-overlay **" >> /etc/portage/package.accept_keywords/steam
+          
           TARGET_PKG="${{ github.event.inputs.atom }}"
 
-          echo ">>> Updating Dependency Graph & Compiling Target..."
-          FORCE_REBUILD="${{ github.event.inputs.force_rebuild }}"
-          if [ "$FORCE_REBUILD" == "true" ]; then
-              rm -f /etc/portage/binrepos.conf/nexus.conf
-          fi
-
-          for i in 1 2 3 4; do
-              emerge $EXCLUDES --deep --newuse "$TARGET_PKG" 2>&1 && break || true
-              etc-update --automode -5 2>/dev/null || true
-          done
-
-          emerge $EXCLUDES --deep --newuse "$TARGET_PKG"
-          
+          for i in 1 2 3; do emerge --deep --newuse "$TARGET_PKG" 2>&1 && break || etc-update --automode -5; done
+          emerge --deep --newuse "$TARGET_PKG"
           BUILDEOF
           chmod +x build_script.sh
 
-          docker run --rm --privileged \
-            -v "${{ github.workspace }}:/overlay" \
-            -v "/tmp/distfiles:/var/cache/distfiles" \
-            gentoo/stage3:amd64-desktop-openrc bash /overlay/build_script.sh
+          docker run --rm --privileged -v "${{ github.workspace }}:/overlay" -v "/tmp/distfiles:/var/cache/distfiles" gentoo/stage3:amd64-desktop-openrc bash /overlay/build_script.sh
 
       - name: Deploy to GitHub Releases & Pages
-        if: steps.check_bin.outputs.skip == 'false'
         env:
           GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
         run: |
