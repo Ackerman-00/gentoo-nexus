@@ -72,8 +72,8 @@ jobs:
           LINUX_FIRMWARE="amd-ucode intel-ucode amdgpu nvidia i915 rtl_nic ath10k ath11k iwlwifi mt76 rtw88 rtw89"
           FEATURES="-userfetch -userpriv -usersandbox -ipc-sandbox -network-sandbox -pid-sandbox getbinpkg buildpkg parallel-install -binpkg-request-signature"
           
-          # Architect Fix: Changed deps=n to force binary pulling
-          EMERGE_DEFAULT_OPTS="--getbinpkg --usepkg --binpkg-respect-use=y --binpkg-changed-deps=n --autounmask=y --autounmask-write --autounmask-backtrack=y --keep-going --quiet --update"
+          # Architect Fix: --rebuilt-binaries=n forces Portage to accept the binary
+          EMERGE_DEFAULT_OPTS="--getbinpkg --usepkg --binpkg-respect-use=y --binpkg-changed-deps=n --rebuilt-binaries=n --autounmask=y --autounmask-write --autounmask-backtrack=y --keep-going --quiet --update"
           
           DISTDIR="/var/cache/distfiles"
           PKGDIR="/overlay/job_out"
@@ -97,13 +97,13 @@ jobs:
           media-libs/mesa gcc-ice-safe
           EOF
 
-          cat > /etc/portage/package.mask/systemd << 'MASK'
+          # Architect Fix: Cleanly mask broken upstream packages
+          cat > /etc/portage/package.mask/fixes << 'MASK'
           sys-apps/systemd
           sys-apps/gentoo-systemd-integration
-          MASK
-
-          cat > /etc/portage/package.mask/gpm << 'MASK'
           sys-libs/gpm
+          =x11-misc/ly-9999
+          =gui-libs/scenefx-9999
           MASK
 
           cat > /etc/portage/package.use/global << 'USE'
@@ -129,7 +129,6 @@ jobs:
           dev-lang/rust abi_x86_32
           dev-lang/rust-bin abi_x86_32
           dev-libs/dbus-glib abi_x86_32
-          dev-libs/elfutils abi_x86_32
           dev-libs/expat abi_x86_32
           dev-libs/fribidi abi_x86_32
           dev-libs/glib abi_x86_32
@@ -261,7 +260,6 @@ jobs:
           gui-libs/egl-wayland2 abi_x86_32
           gui-libs/egl-x11 abi_x86_32
           x11-drivers/nvidia-drivers abi_x86_32
-          
           sys-libs/glibc hash-sysv-compat
           USE
 
@@ -293,6 +291,8 @@ jobs:
           echo "media-libs/mesa **" >> /etc/portage/package.accept_keywords/nexus
           echo "media-libs/vulkan-loader **" >> /etc/portage/package.accept_keywords/nexus
           echo "dev-util/spirv-tools **" >> /etc/portage/package.accept_keywords/nexus
+          echo "dev-util/mesa_clc **" >> /etc/portage/package.accept_keywords/nexus
+          echo "dev-util/spirv-headers **" >> /etc/portage/package.accept_keywords/nexus
 
           # GRAPHICS & STEAM PACKAGES ONLY
           BASE_LIST=(
@@ -403,6 +403,9 @@ jobs:
           EOF
           chmod +x deploy_script.sh
           docker run --rm -v "${{ github.workspace }}:/overlay" -w /overlay gentoo/stage3:amd64-desktop-openrc bash /overlay/deploy_script.sh
+
+          echo ">>> Creating remote directory if it doesn't exist..."
+          ssh -o StrictHostKeyChecking=no $SF_USERNAME@web.sourceforge.net "mkdir -p /home/project-web/gentoo-nexus/htdocs/" || true
 
           echo ">>> Deploying updated packages additively to SourceForge..."
           rsync -avz -e "ssh -o StrictHostKeyChecking=no" job_out/ $SF_USERNAME@web.sourceforge.net:/home/project-web/gentoo-nexus/htdocs/
