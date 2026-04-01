@@ -345,10 +345,8 @@ jobs:
           echo "*/*::guru **" >> /etc/portage/package.accept_keywords/guru
           echo "*/*::steam-overlay **" >> /etc/portage/package.accept_keywords/steam
           echo "*/*::gentoo-nexus **" >> /etc/portage/package.accept_keywords/nexus
-          echo "media-libs/mesa **" >> /etc/portage/package.accept_keywords/nexus
-          echo "media-libs/vulkan-loader **" >> /etc/portage/package.accept_keywords/nexus
-          echo "dev-util/mesa_clc **" >> /etc/portage/package.accept_keywords/nexus
-          echo "dev-util/spirv-tools **" >> /etc/portage/package.accept_keywords/nexus
+          echo "sys-kernel/gentoo-kernel **" >> /etc/portage/package.accept_keywords/nexus
+          echo "sys-kernel/linux-firmware **" >> /etc/portage/package.accept_keywords/nexus
 
           cat > /etc/portage/package.mask/fixes << 'MASK'
           sys-apps/systemd
@@ -925,7 +923,7 @@ jobs:
           emerge --deep --newuse "${STEAM_LIST[@]}"
           BUILDEOF
           chmod +x build_script.sh
-          docker run --rm --privileged -v "${{ github.workspace }}:/overlay" -v "/tmp/distfiles:/var/cache/distfiles" -v "/tmp/ccache:/var/cache/ccache" gentoo/stage3:amd64-desktop-openrc bash /overlay/build_script.sh
+          docker run --rm --privileged -v "${{ workspace }}:/overlay" -v "/tmp/distfiles:/var/cache/distfiles" -v "/tmp/ccache:/var/cache/ccache" gentoo/stage3:amd64-desktop-openrc bash /overlay/build_script.sh
       - uses: actions/upload-artifact@v4
         with:
           name: harmony-binaries
@@ -1041,6 +1039,12 @@ jobs:
           echo "*/*::guru **" >> /etc/portage/package.accept_keywords/guru
           echo "*/*::steam-overlay **" >> /etc/portage/package.accept_keywords/steam
           echo "*/*::gentoo-nexus **" >> /etc/portage/package.accept_keywords/nexus
+          echo "media-libs/mesa **" >> /etc/portage/package.accept_keywords/nexus
+          echo "media-libs/vulkan-loader **" >> /etc/portage/package.accept_keywords/nexus
+          echo "dev-util/mesa_clc **" >> /etc/portage/package.accept_keywords/nexus
+          echo "dev-util/spirv-tools **" >> /etc/portage/package.accept_keywords/nexus
+          echo "sys-kernel/gentoo-kernel **" >> /etc/portage/package.accept_keywords/nexus
+          echo "sys-kernel/linux-firmware **" >> /etc/portage/package.accept_keywords/nexus
           
           cat > /etc/portage/package.mask/fixes << 'MASK'
           sys-apps/systemd
@@ -1059,6 +1063,15 @@ jobs:
           dev-util/spirv-tools gcc-ice-safe
           media-libs/mesa gcc-ice-safe
           EOF
+
+          cat > /etc/portage/package.use/kernel << 'USE'
+          sys-kernel/gentoo-kernel savedconfig initramfs
+          sys-kernel/installkernel dracut grub
+          USE
+          
+          echo ">>> Injecting Nexus Master Config for Sniper Mode..."
+          mkdir -p /etc/portage/savedconfig/sys-kernel/
+          cp /overlay/kernel-config/nexus-config-master /etc/portage/savedconfig/sys-kernel/gentoo-kernel || true
           
           TARGET_PKG="${{ github.event.inputs.atom }}"
           for i in 1 2; do emerge --deep --newuse "$TARGET_PKG" 2>&1 && break || etc-update --automode -5; done
