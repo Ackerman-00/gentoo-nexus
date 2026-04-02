@@ -291,8 +291,9 @@ jobs:
           CFLAGS="${COMMON_FLAGS}"
           CXXFLAGS="${COMMON_FLAGS}"
           RUSTFLAGS="-C target-cpu=x86-64 -C opt-level=2"
-          USE="-wayland -X -vulkan -pipewire -opengl -dri -gbm -vaapi -vdpau -ffmpeg dbus udev minizip -daemon -systemd -aqua -cups"
-          VIDEO_CARDS=""
+          # ARCHITECT FIX: Standardized global USE flags to guarantee flawless binhost matching
+          USE="wayland X vulkan pipewire dbus udev opengl dri gbm vaapi vdpau ffmpeg minizip -daemon -systemd -aqua -cups"
+          VIDEO_CARDS="amdgpu radeon radeonsi intel iris nouveau virgl"
           FEATURES="-sandbox -usersandbox -ipc-sandbox -network-sandbox -pid-sandbox buildpkg parallel-install getbinpkg -binpkg-request-signature ccache"
           CCACHE_DIR="/var/cache/ccache"
           CCACHE_UMASK="002"
@@ -343,20 +344,43 @@ jobs:
           priority = 9999
           EOF
 
+          cat > /etc/portage/package.mask/no-live-core << 'MASK'
+          =media-libs/mesa-9999*
+          =dev-util/mesa_clc-9999*
+          =dev-util/spirv-tools-9999*
+          =media-libs/vulkan-loader-9999*
+          MASK
+
           echo "*/*::guru **" >> /etc/portage/package.accept_keywords/guru
           echo "*/*::steam-overlay **" >> /etc/portage/package.accept_keywords/steam
           echo "*/*::gentoo-nexus **" >> /etc/portage/package.accept_keywords/nexus
+          echo "media-libs/mesa ~amd64" >> /etc/portage/package.accept_keywords/nexus
+          echo "media-libs/vulkan-loader ~amd64" >> /etc/portage/package.accept_keywords/nexus
+          echo "dev-util/mesa_clc ~amd64" >> /etc/portage/package.accept_keywords/nexus
+          echo "dev-util/spirv-tools ~amd64" >> /etc/portage/package.accept_keywords/nexus
           echo "sys-kernel/gentoo-kernel ~amd64" >> /etc/portage/package.accept_keywords/nexus
           echo "sys-kernel/linux-firmware ~amd64" >> /etc/portage/package.accept_keywords/nexus
 
           cat > /etc/portage/package.mask/fixes << 'MASK'
           sys-apps/systemd
           sys-apps/gentoo-systemd-integration
+          =games-util/steam-launcher-1.0.0.85-r3::steam-overlay
           MASK
 
-          # ARCHITECT FIX: Force Pinentry to bypass Qt/GTK dependencies on Headless servers
           echo "sys-libs/zlib minizip" >> /etc/portage/package.use/global
-          echo "app-crypt/pinentry -qt5 -qt6 -gtk -gnome ncurses" >> /etc/portage/package.use/global
+          echo "dev-qt/qtbase wayland X eglfs" >> /etc/portage/package.use/global
+          echo "media-video/pipewire extra" >> /etc/portage/package.use/global
+
+          mkdir -p /etc/portage/env /etc/portage/package.env
+          cat > /etc/portage/env/gcc-ice-safe << 'EOF'
+          CFLAGS="-O1 -pipe -fno-tree-loop-vectorize -fno-tree-slp-vectorize"
+          CXXFLAGS="-O1 -pipe -fno-tree-loop-vectorize -fno-tree-slp-vectorize"
+          EOF
+          echo "MAKEOPTS=\"-j$(nproc)\"" >> /etc/portage/env/gcc-ice-safe
+          cat > /etc/portage/package.env/gcc-ice-packages << 'EOF'
+          dev-util/spirv-tools gcc-ice-safe
+          media-libs/mesa gcc-ice-safe
+          EOF
 
           cat > /etc/portage/package.use/kernel << 'USE'
           sys-kernel/gentoo-kernel savedconfig initramfs
@@ -486,15 +510,21 @@ jobs:
           echo "*/*::steam-overlay **" >> /etc/portage/package.accept_keywords/steam
           echo "*/*::gentoo-nexus **" >> /etc/portage/package.accept_keywords/nexus
           echo "media-libs/mesa ~amd64" >> /etc/portage/package.accept_keywords/nexus
+          echo "media-libs/vulkan-loader ~amd64" >> /etc/portage/package.accept_keywords/nexus
           echo "dev-util/mesa_clc ~amd64" >> /etc/portage/package.accept_keywords/nexus
           echo "dev-util/spirv-tools ~amd64" >> /etc/portage/package.accept_keywords/nexus
+          echo "sys-kernel/gentoo-kernel ~amd64" >> /etc/portage/package.accept_keywords/nexus
+          echo "sys-kernel/linux-firmware ~amd64" >> /etc/portage/package.accept_keywords/nexus
 
           cat > /etc/portage/package.mask/fixes << 'MASK'
           sys-apps/systemd
           sys-apps/gentoo-systemd-integration
+          =games-util/steam-launcher-1.0.0.85-r3::steam-overlay
           MASK
 
           echo "sys-libs/zlib minizip" >> /etc/portage/package.use/global
+          echo "dev-qt/qtbase wayland X eglfs" >> /etc/portage/package.use/global
+          echo "media-video/pipewire extra" >> /etc/portage/package.use/global
 
           mkdir -p /etc/portage/env /etc/portage/package.env
           cat > /etc/portage/env/gcc-ice-safe << 'EOF'
@@ -647,13 +677,15 @@ jobs:
           cat > /etc/portage/package.mask/fixes << 'MASK'
           sys-apps/systemd
           sys-apps/gentoo-systemd-integration
+          =games-util/steam-launcher-1.0.0.85-r3::steam-overlay
           MASK
 
           echo "sys-libs/zlib minizip" >> /etc/portage/package.use/global
+          echo "dev-qt/qtbase wayland X eglfs" >> /etc/portage/package.use/global
+          echo "media-video/pipewire extra" >> /etc/portage/package.use/global
 
           cat > /etc/portage/package.use/graphics << 'USE'
           media-libs/vulkan-loader -abi_x86_32
-          media-video/pipewire extra
           USE
 
           CORE_LIST=(media-libs/vulkan-loader media-video/pipewire media-video/wireplumber media-video/ffmpeg)
@@ -786,6 +818,7 @@ jobs:
           cat > /etc/portage/package.mask/fixes << 'MASK'
           sys-apps/systemd
           sys-apps/gentoo-systemd-integration
+          =games-util/steam-launcher-1.0.0.85-r3::steam-overlay
           MASK
 
           echo "sys-libs/zlib minizip" >> /etc/portage/package.use/global
@@ -933,11 +966,12 @@ jobs:
           cat > /etc/portage/package.mask/fixes << 'MASK'
           sys-apps/systemd
           sys-apps/gentoo-systemd-integration
-          # ARCHITECT FIX: Hard-mask the corrupted upstream Steam ebuild to force fallback
           =games-util/steam-launcher-1.0.0.85-r3::steam-overlay
           MASK
 
           echo "sys-libs/zlib minizip" >> /etc/portage/package.use/global
+          echo "dev-qt/qtbase wayland X eglfs" >> /etc/portage/package.use/global
+          echo "media-video/pipewire extra" >> /etc/portage/package.use/global
 
           mkdir -p /etc/portage/env /etc/portage/package.env
           cat > /etc/portage/env/gcc-ice-safe << 'EOF'
@@ -1024,6 +1058,8 @@ jobs:
           CFLAGS="${COMMON_FLAGS}"
           CXXFLAGS="${COMMON_FLAGS}"
           RUSTFLAGS="-C target-cpu=x86-64 -C opt-level=2"
+          USE="wayland X vulkan pipewire dbus udev opengl dri gbm vaapi vdpau ffmpeg minizip -daemon -systemd -aqua -cups"
+          VIDEO_CARDS="amdgpu radeon radeonsi intel iris nouveau virgl"
           FEATURES="-sandbox -usersandbox -ipc-sandbox -network-sandbox -pid-sandbox buildpkg parallel-install getbinpkg -binpkg-request-signature ccache"
           CCACHE_DIR="/var/cache/ccache"
           CCACHE_UMASK="002"
@@ -1033,18 +1069,6 @@ jobs:
           ACCEPT_LICENSE="*"
           EVCS_OFFLINE=1
           MAKECONF
-          
-          TARGET_PKG="${{ github.event.inputs.atom }}"
-          if [[ "$TARGET_PKG" == *"sys-kernel"* ]]; then
-            echo 'USE="-wayland -X -vulkan -pipewire -opengl -dri -gbm -vaapi -vdpau -ffmpeg dbus udev minizip -daemon -systemd -aqua -cups"' >> /etc/portage/make.conf
-            echo 'VIDEO_CARDS=""' >> /etc/portage/make.conf
-            echo "app-crypt/pinentry -qt5 -qt6 -gtk -gnome ncurses" >> /etc/portage/package.use/global
-          else
-            echo 'USE="wayland X vulkan pipewire dbus udev opengl dri gbm vaapi vdpau ffmpeg minizip -daemon -systemd -aqua -cups"' >> /etc/portage/make.conf
-            echo 'VIDEO_CARDS="amdgpu radeon radeonsi intel iris nouveau virgl"' >> /etc/portage/make.conf
-            echo "dev-qt/qtbase wayland X eglfs" >> /etc/portage/package.use/global
-            echo "media-video/pipewire extra" >> /etc/portage/package.use/global
-          fi
           echo "MAKEOPTS=\"-j$(nproc)\"" >> /etc/portage/make.conf
 
           emerge-webrsync -q || true
@@ -1110,6 +1134,8 @@ jobs:
           MASK
 
           echo "sys-libs/zlib minizip" >> /etc/portage/package.use/global
+          echo "dev-qt/qtbase wayland X eglfs" >> /etc/portage/package.use/global
+          echo "media-video/pipewire extra" >> /etc/portage/package.use/global
 
           mkdir -p /etc/portage/env /etc/portage/package.env
           cat > /etc/portage/env/gcc-ice-safe << 'EOF'
@@ -1131,6 +1157,7 @@ jobs:
           mkdir -p /etc/portage/savedconfig/sys-kernel/
           cp /overlay/kernel-config/nexus-config-master /etc/portage/savedconfig/sys-kernel/gentoo-kernel || true
           
+          TARGET_PKG="${{ github.event.inputs.atom }}"
           for i in 1 2; do emerge --deep --newuse $TARGET_PKG 2>&1 && break || etc-update --automode -5; done
           emerge --deep --newuse $TARGET_PKG
           BUILDEOF
