@@ -357,6 +357,7 @@ jobs:
           =media-libs/vulkan-loader-9999*
           MASK
 
+          # UNIFIED DNA - ALL NODES
           echo "*/*::guru **" >> /etc/portage/package.accept_keywords/guru
           echo "*/*::steam-overlay **" >> /etc/portage/package.accept_keywords/steam
           echo "*/*::gentoo-nexus **" >> /etc/portage/package.accept_keywords/nexus
@@ -364,6 +365,10 @@ jobs:
           echo "media-libs/vulkan-loader ~amd64" >> /etc/portage/package.accept_keywords/nexus
           echo "dev-util/mesa_clc ~amd64" >> /etc/portage/package.accept_keywords/nexus
           echo "dev-util/spirv-tools ~amd64" >> /etc/portage/package.accept_keywords/nexus
+          echo "dev-util/spirv-headers ~amd64" >> /etc/portage/package.accept_keywords/nexus
+          echo "dev-util/vulkan-headers ~amd64" >> /etc/portage/package.accept_keywords/nexus
+          echo "dev-util/glslang ~amd64" >> /etc/portage/package.accept_keywords/nexus
+          echo "dev-util/vulkan-utility-libraries ~amd64" >> /etc/portage/package.accept_keywords/nexus
           echo "sys-kernel/gentoo-kernel ~amd64" >> /etc/portage/package.accept_keywords/nexus
           echo "sys-kernel/linux-firmware ~amd64" >> /etc/portage/package.accept_keywords/nexus
           echo "virtual/dist-kernel ~amd64" >> /etc/portage/package.accept_keywords/nexus
@@ -371,13 +376,15 @@ jobs:
           cat > /etc/portage/package.mask/fixes << 'MASK'
           sys-apps/systemd
           sys-apps/gentoo-systemd-integration
+          =games-util/steam-launcher-1.0.0.85-r3::steam-overlay
           MASK
 
           cat > /etc/portage/package.use/global << 'EOF'
           sys-libs/zlib minizip
           media-video/pipewire extra
           media-video/ffmpeg -sdl
-          dev-qt/qtbase wayland X eglfs
+          dev-qt/qtbase wayland X -icu -sql -sqlite
+          sys-libs/ncurses -gpm
           EOF
 
           mkdir -p /etc/portage/env /etc/portage/package.env
@@ -619,7 +626,7 @@ jobs:
           echo ">>> Cloning Overlays..."
           git clone --depth 1 https://github.com/gentoo-mirror/guru.git /var/db/repos/guru || true
           git clone --depth 1 https://github.com/anyc/steam-overlay.git /var/db/repos/steam-overlay || true
-          
+
           echo ">>> Fixing upstream Steam Overlay corruptions..."
           if [ -d /var/db/repos/steam-overlay/games-util/steam-launcher ]; then
             cd /var/db/repos/steam-overlay/games-util/steam-launcher
@@ -666,6 +673,10 @@ jobs:
           echo "media-libs/vulkan-loader ~amd64" >> /etc/portage/package.accept_keywords/nexus
           echo "dev-util/mesa_clc ~amd64" >> /etc/portage/package.accept_keywords/nexus
           echo "dev-util/spirv-tools ~amd64" >> /etc/portage/package.accept_keywords/nexus
+          echo "dev-util/spirv-headers ~amd64" >> /etc/portage/package.accept_keywords/nexus
+          echo "dev-util/vulkan-headers ~amd64" >> /etc/portage/package.accept_keywords/nexus
+          echo "dev-util/glslang ~amd64" >> /etc/portage/package.accept_keywords/nexus
+          echo "dev-util/vulkan-utility-libraries ~amd64" >> /etc/portage/package.accept_keywords/nexus
           echo "sys-kernel/gentoo-kernel ~amd64" >> /etc/portage/package.accept_keywords/nexus
           echo "sys-kernel/linux-firmware ~amd64" >> /etc/portage/package.accept_keywords/nexus
           echo "virtual/dist-kernel ~amd64" >> /etc/portage/package.accept_keywords/nexus
@@ -673,13 +684,15 @@ jobs:
           cat > /etc/portage/package.mask/fixes << 'MASK'
           sys-apps/systemd
           sys-apps/gentoo-systemd-integration
+          =games-util/steam-launcher-1.0.0.85-r3::steam-overlay
           MASK
 
           cat > /etc/portage/package.use/global << 'EOF'
           sys-libs/zlib minizip
           media-video/pipewire extra
           media-video/ffmpeg -sdl
-          dev-qt/qtbase wayland X eglfs
+          dev-qt/qtbase wayland X -icu -sql -sqlite
+          sys-libs/ncurses -gpm
           EOF
 
           mkdir -p /etc/portage/env /etc/portage/package.env
@@ -966,6 +979,7 @@ jobs:
           =media-libs/vulkan-loader-9999*
           MASK
 
+          # UNIFIED DNA - ALL NODES
           echo "*/*::guru **" >> /etc/portage/package.accept_keywords/guru
           echo "*/*::steam-overlay **" >> /etc/portage/package.accept_keywords/steam
           echo "*/*::gentoo-nexus **" >> /etc/portage/package.accept_keywords/nexus
@@ -973,6 +987,10 @@ jobs:
           echo "media-libs/vulkan-loader ~amd64" >> /etc/portage/package.accept_keywords/nexus
           echo "dev-util/mesa_clc ~amd64" >> /etc/portage/package.accept_keywords/nexus
           echo "dev-util/spirv-tools ~amd64" >> /etc/portage/package.accept_keywords/nexus
+          echo "dev-util/spirv-headers ~amd64" >> /etc/portage/package.accept_keywords/nexus
+          echo "dev-util/vulkan-headers ~amd64" >> /etc/portage/package.accept_keywords/nexus
+          echo "dev-util/glslang ~amd64" >> /etc/portage/package.accept_keywords/nexus
+          echo "dev-util/vulkan-utility-libraries ~amd64" >> /etc/portage/package.accept_keywords/nexus
           echo "sys-kernel/gentoo-kernel ~amd64" >> /etc/portage/package.accept_keywords/nexus
           echo "sys-kernel/linux-firmware ~amd64" >> /etc/portage/package.accept_keywords/nexus
           echo "virtual/dist-kernel ~amd64" >> /etc/portage/package.accept_keywords/nexus
@@ -980,13 +998,15 @@ jobs:
           cat > /etc/portage/package.mask/fixes << 'MASK'
           sys-apps/systemd
           sys-apps/gentoo-systemd-integration
+          =games-util/steam-launcher-1.0.0.85-r3::steam-overlay
           MASK
 
           cat > /etc/portage/package.use/global << 'EOF'
           sys-libs/zlib minizip
           media-video/pipewire extra
           media-video/ffmpeg -sdl
-          dev-qt/qtbase wayland X eglfs
+          dev-qt/qtbase wayland X -icu -sql -sqlite
+          sys-libs/ncurses -gpm
           EOF
 
           mkdir -p /etc/portage/env /etc/portage/package.env
@@ -1267,6 +1287,7 @@ jobs:
           =media-libs/vulkan-loader-9999*
           MASK
 
+          # UNIFIED DNA - ALL NODES
           echo "*/*::guru **" >> /etc/portage/package.accept_keywords/guru
           echo "*/*::steam-overlay **" >> /etc/portage/package.accept_keywords/steam
           echo "*/*::gentoo-nexus **" >> /etc/portage/package.accept_keywords/nexus
@@ -1274,6 +1295,10 @@ jobs:
           echo "media-libs/vulkan-loader ~amd64" >> /etc/portage/package.accept_keywords/nexus
           echo "dev-util/mesa_clc ~amd64" >> /etc/portage/package.accept_keywords/nexus
           echo "dev-util/spirv-tools ~amd64" >> /etc/portage/package.accept_keywords/nexus
+          echo "dev-util/spirv-headers ~amd64" >> /etc/portage/package.accept_keywords/nexus
+          echo "dev-util/vulkan-headers ~amd64" >> /etc/portage/package.accept_keywords/nexus
+          echo "dev-util/glslang ~amd64" >> /etc/portage/package.accept_keywords/nexus
+          echo "dev-util/vulkan-utility-libraries ~amd64" >> /etc/portage/package.accept_keywords/nexus
           echo "sys-kernel/gentoo-kernel ~amd64" >> /etc/portage/package.accept_keywords/nexus
           echo "sys-kernel/linux-firmware ~amd64" >> /etc/portage/package.accept_keywords/nexus
           echo "virtual/dist-kernel ~amd64" >> /etc/portage/package.accept_keywords/nexus
@@ -1281,13 +1306,15 @@ jobs:
           cat > /etc/portage/package.mask/fixes << 'MASK'
           sys-apps/systemd
           sys-apps/gentoo-systemd-integration
+          =games-util/steam-launcher-1.0.0.85-r3::steam-overlay
           MASK
 
           cat > /etc/portage/package.use/global << 'EOF'
           sys-libs/zlib minizip
           media-video/pipewire extra
           media-video/ffmpeg -sdl
-          dev-qt/qtbase wayland X eglfs
+          dev-qt/qtbase wayland X -icu -sql -sqlite
+          sys-libs/ncurses -gpm
           EOF
 
           mkdir -p /etc/portage/env /etc/portage/package.env
@@ -1514,7 +1541,7 @@ jobs:
           CFLAGS="${COMMON_FLAGS}"
           CXXFLAGS="${COMMON_FLAGS}"
           RUSTFLAGS="-C target-cpu=x86-64 -C opt-level=2"
-          USE="wayland X vulkan pipewire dbus udev opengl dri gbm vaapi vdpau ffmpeg minizip -daemon -systemd -aqua -cups"
+          USE="wayland X vulkan opengl dri gbm minizip -daemon -systemd"
           VIDEO_CARDS="amdgpu radeon radeonsi intel iris nouveau virgl"
           FEATURES="-sandbox -usersandbox -ipc-sandbox -network-sandbox -pid-sandbox buildpkg parallel-install getbinpkg -binpkg-request-signature ccache"
           CCACHE_DIR="/var/cache/ccache"
@@ -1580,6 +1607,7 @@ jobs:
           =media-libs/vulkan-loader-9999*
           MASK
 
+          # UNIFIED DNA - ALL NODES
           echo "*/*::guru **" >> /etc/portage/package.accept_keywords/guru
           echo "*/*::steam-overlay **" >> /etc/portage/package.accept_keywords/steam
           echo "*/*::gentoo-nexus **" >> /etc/portage/package.accept_keywords/nexus
@@ -1587,6 +1615,10 @@ jobs:
           echo "media-libs/vulkan-loader ~amd64" >> /etc/portage/package.accept_keywords/nexus
           echo "dev-util/mesa_clc ~amd64" >> /etc/portage/package.accept_keywords/nexus
           echo "dev-util/spirv-tools ~amd64" >> /etc/portage/package.accept_keywords/nexus
+          echo "dev-util/spirv-headers ~amd64" >> /etc/portage/package.accept_keywords/nexus
+          echo "dev-util/vulkan-headers ~amd64" >> /etc/portage/package.accept_keywords/nexus
+          echo "dev-util/glslang ~amd64" >> /etc/portage/package.accept_keywords/nexus
+          echo "dev-util/vulkan-utility-libraries ~amd64" >> /etc/portage/package.accept_keywords/nexus
           echo "sys-kernel/gentoo-kernel ~amd64" >> /etc/portage/package.accept_keywords/nexus
           echo "sys-kernel/linux-firmware ~amd64" >> /etc/portage/package.accept_keywords/nexus
           echo "virtual/dist-kernel ~amd64" >> /etc/portage/package.accept_keywords/nexus
@@ -1594,13 +1626,15 @@ jobs:
           cat > /etc/portage/package.mask/fixes << 'MASK'
           sys-apps/systemd
           sys-apps/gentoo-systemd-integration
+          =games-util/steam-launcher-1.0.0.85-r3::steam-overlay
           MASK
 
           cat > /etc/portage/package.use/global << 'EOF'
           sys-libs/zlib minizip
           media-video/pipewire extra
           media-video/ffmpeg -sdl
-          dev-qt/qtbase wayland X eglfs
+          dev-qt/qtbase wayland X -icu -sql -sqlite
+          sys-libs/ncurses -gpm
           EOF
 
           mkdir -p /etc/portage/env /etc/portage/package.env
@@ -1885,6 +1919,7 @@ jobs:
           =media-libs/vulkan-loader-9999*
           MASK
 
+          # UNIFIED DNA - ALL NODES
           echo "*/*::guru **" >> /etc/portage/package.accept_keywords/guru
           echo "*/*::steam-overlay **" >> /etc/portage/package.accept_keywords/steam
           echo "*/*::gentoo-nexus **" >> /etc/portage/package.accept_keywords/nexus
@@ -1892,6 +1927,10 @@ jobs:
           echo "media-libs/vulkan-loader ~amd64" >> /etc/portage/package.accept_keywords/nexus
           echo "dev-util/mesa_clc ~amd64" >> /etc/portage/package.accept_keywords/nexus
           echo "dev-util/spirv-tools ~amd64" >> /etc/portage/package.accept_keywords/nexus
+          echo "dev-util/spirv-headers ~amd64" >> /etc/portage/package.accept_keywords/nexus
+          echo "dev-util/vulkan-headers ~amd64" >> /etc/portage/package.accept_keywords/nexus
+          echo "dev-util/glslang ~amd64" >> /etc/portage/package.accept_keywords/nexus
+          echo "dev-util/vulkan-utility-libraries ~amd64" >> /etc/portage/package.accept_keywords/nexus
           echo "sys-kernel/gentoo-kernel ~amd64" >> /etc/portage/package.accept_keywords/nexus
           echo "sys-kernel/linux-firmware ~amd64" >> /etc/portage/package.accept_keywords/nexus
           echo "virtual/dist-kernel ~amd64" >> /etc/portage/package.accept_keywords/nexus
@@ -1899,13 +1938,15 @@ jobs:
           cat > /etc/portage/package.mask/fixes << 'MASK'
           sys-apps/systemd
           sys-apps/gentoo-systemd-integration
+          =games-util/steam-launcher-1.0.0.85-r3::steam-overlay
           MASK
 
           cat > /etc/portage/package.use/global << 'EOF'
           sys-libs/zlib minizip
           media-video/pipewire extra
           media-video/ffmpeg -sdl
-          dev-qt/qtbase wayland X eglfs
+          dev-qt/qtbase wayland X -icu -sql -sqlite
+          sys-libs/ncurses -gpm
           EOF
 
           mkdir -p /etc/portage/env /etc/portage/package.env
