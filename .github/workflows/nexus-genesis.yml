@@ -270,12 +270,17 @@ jobs:
           =dev-util/mesa_clc-9999*
           =dev-util/spirv-tools-9999*
           =media-libs/vulkan-loader-9999*
+          =gui-wm/mangowc-9999*
+          =gui-libs/scenefx-9999*
+          =gui-apps/quickshell-9999*
+          =gui-apps/noctalia-qs-9999*
+          =gui-wm/niri-9999*
           EOF
 
           cat > /etc/portage/package.mask/no-systemd << 'EOF'
           sys-apps/systemd
           sys-apps/gentoo-systemd-integration
-          =games-util/steam-launcher-1.0.0.85-r3
+          =games-util/steam-launcher-1.0.0.85-r3::steam-overlay
           EOF
 
           echo "*/*::guru **" >> /etc/portage/package.accept_keywords/guru
