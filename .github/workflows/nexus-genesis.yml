@@ -6,7 +6,7 @@ on:
   workflow_dispatch:
     inputs:
       atom:
-        description: 'Sniper Mode: Package atom to build (e.g., games-util/steam-launcher)'
+        description: 'Sniper Mode: Package atom to build (e.g., gui-wm/niri)'
         required: false
         type: string
         default: ''
@@ -31,7 +31,7 @@ permissions:
 
 jobs:
   # =====================================================================
-  # PHASE 1: OVERLAY SCAN & PATCHING
+  # PHASE 1: OVERLAY SCAN, PATCHING & DNA GENERATION
   # =====================================================================
   overlay-scan:
     name: Overlay Deep Scan
@@ -53,7 +53,7 @@ jobs:
 
       - name: Install System Dependencies
         run: |
-          sudo apt-get update
+          sudo apt-get update -qq
           sudo apt-get install -y squashfs-tools xvfb jq
           pip install requests packaging
 
@@ -62,10 +62,12 @@ jobs:
         env:
           GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
         run: |
-          find . -path ./cache -prune -o -type f -name '*.ebuild' -exec sed -i 's/LLVM_COMPAT=( {18..21} )/LLVM_COMPAT=( {18..22} )/g' {} + || true
-          find . -path ./cache -prune -o -type f -name '*.ebuild' -exec sed -i 's/gui-libs\/display-info/media-libs\/libdisplay-info/g' {} + || true
-          find . -path ./cache -prune -o -type f -name '*.ebuild' -exec sed -i 's/media-libs\/mesa\[gbm\]/media-libs\/mesa/g' {} + || true
-          find . -path ./cache -prune -o -type f -name '*.ebuild' -exec sed -i 's/media-libs\/mesa\[gbm(+)\]/media-libs\/mesa/g' {} + || true
+          find . -path ./cache -prune -o -type f -name '*.ebuild' -exec sed -i \
+            -e 's/LLVM_COMPAT=( {18..21} )/LLVM_COMPAT=( {18..22} )/g' \
+            -e 's/gui-libs\/display-info/media-libs\/libdisplay-info/g' \
+            -e 's/media-libs\/mesa\[gbm\]/media-libs\/mesa/g' \
+            -e 's/media-libs\/mesa\[gbm(+)\]/media-libs\/mesa/g' \
+            {} + || true
           find gui-wm/mangowc -type f -name '*.ebuild' -exec sed -i 's/mangowm\/mangowc/mangowm\/mango/g' {} + || true
 
           python3 << 'EOF'
@@ -75,7 +77,7 @@ jobs:
 
           updated_atoms = set()
           gh_token = os.environ.get('GITHUB_TOKEN')
-          hdrs = {"Authorization": f"token {gh_token}"} if gh_token else dict()
+          hdrs = {"Authorization": f"token {gh_token}"} if gh_token else {}
 
           def get_latest_github_release(repo):
               try:
@@ -142,10 +144,9 @@ jobs:
                           updated_atoms.add(pkg_cat_name)
                   continue
 
-              repo_m = re.search(r'https://github\.com/([A-Za-z0-9_.-]+/[A-Za-z0-9_.-]+?)(?:\.git|/archive|/releases|/tarball|"\s|\n)', content)
+              repo_m = re.search(r'https://github\.com/([A-Za-z0-9_.-]+/[A-Za-z0-9_.-]+?)(?:\.git|/archive|/releases|/tarball|["\s])', content)
               if not repo_m: continue
-              repo = repo_m.group(1)
-              if repo.endswith('.git'): repo = repo[:-4]
+              repo = repo_m.group(1).rstrip('.')
 
               if is_live:
                   repo_url = f"https://github.com/{repo}.git"
@@ -180,8 +181,288 @@ jobs:
                           updated_atoms.add(pkg_cat_name)
 
           if updated_atoms:
-              Path('changed_packages.txt').write_text('\n'.join(updated_atoms) + '\n', encoding="utf-8")
+              Path('changed_packages.txt').write_text('\n'.join(sorted(updated_atoms)) + '\n', encoding="utf-8")
           EOF
+
+      - name: Generate Portage DNA Script
+        run: |
+          cat > portage_dna.sh << 'DNA_EOF'
+          #!/bin/bash
+          set -euo pipefail
+          
+          echo ">>> Injecting Nexus Portage DNA..."
+          mkdir -p /var/db/repos/{gentoo,guru,steam-overlay}
+          mkdir -p /etc/portage/{repos.conf,binrepos.conf,env,package.{accept_keywords,license,use,mask,env}}
+          mkdir -p /overlay/job_out
+
+          cat > /etc/portage/binrepos.conf/gentoo.conf << 'EOF'
+          [gentoo]
+          priority = 10000
+          sync-uri = https://distfiles.gentoo.org/releases/amd64/binpackages/23.0/x86-64/
+          verify-signature = false
+          EOF
+
+          cat > /etc/portage/binrepos.conf/nexus.conf << EOF
+          [gentoo-nexus]
+          priority = 9999
+          sync-uri = https://${GITHUB_REPOSITORY_OWNER}.github.io/${GITHUB_REPOSITORY#*/}/
+          verify-signature = false
+          EOF
+
+          # ARCHITECT FIX: Unlocked EVCS offline and enabled binpkg-respect-use=n
+          cat > /etc/portage/make.conf << 'EOF'
+          COMMON_FLAGS="-O2 -march=x86-64 -pipe"
+          CFLAGS="${COMMON_FLAGS}"
+          CXXFLAGS="${COMMON_FLAGS}"
+          RUSTFLAGS="-C target-cpu=x86-64 -C opt-level=2"
+          USE="wayland X vulkan pipewire dbus udev opengl dri gbm vaapi vdpau ffmpeg minizip -daemon -systemd -aqua -cups -gpm"
+          VIDEO_CARDS="amdgpu radeon radeonsi intel iris nouveau virgl"
+          FEATURES="-sandbox -usersandbox -ipc-sandbox -network-sandbox -pid-sandbox buildpkg parallel-install getbinpkg -binpkg-request-signature ccache"
+          CCACHE_DIR="/var/cache/ccache"
+          CCACHE_UMASK="002"
+          EMERGE_DEFAULT_OPTS="--getbinpkg --usepkg --binpkg-respect-use=n --binpkg-changed-deps=n --autounmask=y --autounmask-write --keep-going --quiet"
+          DISTDIR="/var/cache/distfiles"
+          PKGDIR="/overlay/job_out"
+          ACCEPT_LICENSE="*"
+          EOF
+          echo "MAKEOPTS=\"-j$(nproc)\"" >> /etc/portage/make.conf
+
+          emerge-webrsync -q || true
+          getuto || true
+          eselect profile set default/linux/amd64/23.0/desktop
+          
+          emerge --noreplace --quiet dev-vcs/git dev-util/ccache
+          chown -R portage:portage /var/cache/ccache
+          chmod -R 2777 /var/cache/ccache
+
+          git clone --depth 1 https://github.com/gentoo-mirror/guru.git /var/db/repos/guru 2>/dev/null || true
+          git clone --depth 1 https://github.com/anyc/steam-overlay.git /var/db/repos/steam-overlay 2>/dev/null || true
+
+          mkdir -p /var/db/repos/guru/metadata /var/db/repos/steam-overlay/metadata
+          echo -e "[repo]\nrepo-name = guru\nmasters = gentoo" > /var/db/repos/guru/metadata/layout.conf
+          echo -e "[repo]\nrepo-name = steam-overlay\nmasters = gentoo" > /var/db/repos/steam-overlay/metadata/layout.conf
+
+          cat > /etc/portage/repos.conf/guru.conf << 'EOF'
+          [guru]
+          location = /var/db/repos/guru
+          masters = gentoo
+          priority = 50
+          EOF
+
+          cat > /etc/portage/repos.conf/steam-overlay.conf << 'EOF'
+          [steam-overlay]
+          location = /var/db/repos/steam-overlay
+          masters = gentoo
+          priority = 50
+          EOF
+
+          cat > /etc/portage/repos.conf/gentoo-nexus.conf << 'EOF'
+          [gentoo-nexus]
+          location = /overlay
+          masters = gentoo guru
+          priority = 9999
+          EOF
+
+          cat > /etc/portage/package.mask/no-live-core << 'EOF'
+          =media-libs/mesa-9999*
+          =dev-util/mesa_clc-9999*
+          =dev-util/spirv-tools-9999*
+          =media-libs/vulkan-loader-9999*
+          EOF
+
+          cat > /etc/portage/package.mask/no-systemd << 'EOF'
+          sys-apps/systemd
+          sys-apps/gentoo-systemd-integration
+          =games-util/steam-launcher-1.0.0.85-r3
+          EOF
+
+          echo "*/*::guru **" >> /etc/portage/package.accept_keywords/guru
+          echo "*/*::steam-overlay **" >> /etc/portage/package.accept_keywords/steam
+          echo "*/*::gentoo-nexus **" >> /etc/portage/package.accept_keywords/nexus
+          cat >> /etc/portage/package.accept_keywords/nexus << 'EOF'
+          media-libs/mesa ~amd64
+          media-libs/vulkan-loader ~amd64
+          dev-util/mesa_clc ~amd64
+          dev-util/spirv-tools ~amd64
+          dev-util/spirv-headers ~amd64
+          dev-util/vulkan-headers ~amd64
+          dev-util/glslang ~amd64
+          dev-util/vulkan-utility-libraries ~amd64
+          sys-kernel/gentoo-kernel ~amd64
+          sys-kernel/linux-firmware ~amd64
+          virtual/dist-kernel ~amd64
+          EOF
+
+          cat > /etc/portage/package.use/global << 'EOF'
+          sys-libs/zlib minizip
+          media-video/pipewire extra
+          media-video/ffmpeg -sdl
+          sys-libs/ncurses -gpm
+          EOF
+
+          cat > /etc/portage/env/no-lto << 'EOF'
+          CFLAGS="-O1 -pipe -fno-lto -fno-tree-loop-vectorize -fno-tree-slp-vectorize"
+          CXXFLAGS="-O1 -pipe -fno-lto -fno-tree-loop-vectorize -fno-tree-slp-vectorize"
+          EOF
+          echo "MAKEOPTS=\"-j$(nproc)\"" >> /etc/portage/env/no-lto
+
+          cat > /etc/portage/package.env/no-lto-packages << 'EOF'
+          dev-util/spirv-tools no-lto
+          media-libs/mesa no-lto
+          gui-libs/gtk no-lto
+          dev-qt/qtbase no-lto
+          dev-qt/qtwayland no-lto
+          EOF
+
+          # ARCHITECT FIX: 100% compliant Steam Wiki 32-bit package list
+          cat > /etc/portage/package.use/steam-32bit << 'EOF'
+          app-accessibility/at-spi2-core abi_x86_32
+          app-arch/bzip2 abi_x86_32
+          app-arch/lz4 abi_x86_32
+          app-arch/xz-utils abi_x86_32
+          app-arch/zstd abi_x86_32
+          app-crypt/p11-kit abi_x86_32
+          dev-db/sqlite abi_x86_32
+          dev-lang/rust abi_x86_32
+          dev-lang/rust-bin abi_x86_32
+          dev-libs/dbus-glib abi_x86_32
+          dev-libs/elfutils abi_x86_32
+          dev-libs/expat abi_x86_32
+          dev-libs/fribidi abi_x86_32
+          dev-libs/glib abi_x86_32
+          dev-libs/gmp abi_x86_32
+          dev-libs/icu abi_x86_32
+          dev-libs/json-glib abi_x86_32
+          dev-libs/leancrypto abi_x86_32
+          dev-libs/libevdev abi_x86_32
+          dev-libs/libffi abi_x86_32
+          dev-libs/libgcrypt abi_x86_32
+          dev-libs/libgpg-error abi_x86_32
+          dev-libs/libgudev abi_x86_32
+          dev-libs/libgusb abi_x86_32
+          dev-libs/libpcre2 abi_x86_32
+          dev-libs/libtasn1 abi_x86_32
+          dev-libs/libunistring abi_x86_32
+          dev-libs/libusb abi_x86_32
+          dev-libs/libxml2 abi_x86_32
+          dev-libs/lzo abi_x86_32
+          dev-libs/nettle abi_x86_32
+          dev-libs/nspr abi_x86_32
+          dev-libs/nss abi_x86_32
+          dev-libs/openssl abi_x86_32
+          dev-libs/wayland abi_x86_32
+          dev-util/glslang abi_x86_32
+          dev-util/spirv-tools abi_x86_32
+          dev-util/sysprof-capture abi_x86_32
+          dev-util/vulkan-utility-libraries abi_x86_32
+          gnome-base/librsvg abi_x86_32
+          gui-libs/libdecor abi_x86_32
+          llvm-core/clang abi_x86_32
+          llvm-core/llvm abi_x86_32
+          media-gfx/graphite2 abi_x86_32
+          media-libs/alsa-lib abi_x86_32
+          media-libs/flac abi_x86_32
+          media-libs/fontconfig abi_x86_32
+          media-libs/freetype abi_x86_32
+          media-libs/glu abi_x86_32
+          media-libs/harfbuzz abi_x86_32
+          media-libs/lcms abi_x86_32
+          media-libs/libdisplay-info abi_x86_32
+          media-libs/libepoxy abi_x86_32
+          media-libs/libglvnd abi_x86_32
+          media-libs/libjpeg-turbo abi_x86_32
+          media-libs/libogg abi_x86_32
+          media-libs/libpng abi_x86_32
+          media-libs/libpulse abi_x86_32
+          media-libs/libsdl2 abi_x86_32
+          media-libs/libsndfile abi_x86_32
+          media-libs/libva abi_x86_32
+          media-libs/libvorbis abi_x86_32
+          media-libs/libwebp abi_x86_32
+          media-libs/mesa abi_x86_32
+          media-libs/openal abi_x86_32
+          media-libs/opus abi_x86_32
+          media-libs/tiff abi_x86_32
+          media-libs/vulkan-layers abi_x86_32
+          media-libs/vulkan-loader abi_x86_32 layers
+          media-sound/lame abi_x86_32
+          media-sound/mpg123-base abi_x86_32
+          media-video/pipewire abi_x86_32
+          net-dns/c-ares abi_x86_32
+          net-dns/libidn2 abi_x86_32
+          net-libs/gnutls abi_x86_32
+          net-libs/libasyncns abi_x86_32
+          net-libs/libndp abi_x86_32
+          net-libs/libpsl abi_x86_32
+          net-libs/nghttp2 abi_x86_32
+          net-libs/nghttp3 abi_x86_32
+          net-libs/ngtcp2 abi_x86_32
+          net-misc/curl abi_x86_32
+          net-misc/networkmanager abi_x86_32
+          net-print/cups abi_x86_32
+          sys-apps/dbus abi_x86_32
+          sys-apps/lm-sensors abi_x86_32
+          sys-apps/systemd abi_x86_32
+          sys-apps/systemd-utils abi_x86_32
+          sys-apps/util-linux abi_x86_32
+          sys-libs/gdbm abi_x86_32
+          sys-libs/gpm abi_x86_32
+          sys-libs/libcap abi_x86_32
+          sys-libs/libudev-compat abi_x86_32
+          sys-libs/ncurses abi_x86_32
+          sys-libs/pam abi_x86_32
+          sys-libs/readline abi_x86_32
+          sys-libs/zlib abi_x86_32
+          virtual/glu abi_x86_32
+          virtual/libelf abi_x86_32
+          virtual/libiconv abi_x86_32
+          virtual/libintl abi_x86_32
+          virtual/libudev abi_x86_32
+          virtual/libusb abi_x86_32
+          virtual/opengl abi_x86_32
+          virtual/zlib abi_x86_32
+          x11-libs/cairo abi_x86_32
+          x11-libs/extest abi_x86_32
+          x11-libs/gdk-pixbuf abi_x86_32
+          x11-libs/gtk+ abi_x86_32
+          x11-libs/libdrm abi_x86_32
+          x11-libs/libICE abi_x86_32
+          x11-libs/libpciaccess abi_x86_32
+          x11-libs/libSM abi_x86_32
+          x11-libs/libvdpau abi_x86_32
+          x11-libs/libX11 abi_x86_32
+          x11-libs/libXau abi_x86_32
+          x11-libs/libxcb abi_x86_32
+          x11-libs/libXcomposite abi_x86_32
+          x11-libs/libXcursor abi_x86_32
+          x11-libs/libXdamage abi_x86_32
+          x11-libs/libXdmcp abi_x86_32
+          x11-libs/libXext abi_x86_32
+          x11-libs/libXfixes abi_x86_32
+          x11-libs/libXft abi_x86_32
+          x11-libs/libXi abi_x86_32
+          x11-libs/libXinerama abi_x86_32
+          x11-libs/libxkbcommon abi_x86_32
+          x11-libs/libXrandr abi_x86_32
+          x11-libs/libXrender abi_x86_32
+          x11-libs/libXScrnSaver abi_x86_32
+          x11-libs/libxshmfence abi_x86_32
+          x11-libs/libXtst abi_x86_32
+          x11-libs/libXxf86vm abi_x86_32
+          x11-libs/pango abi_x86_32
+          x11-libs/pixman abi_x86_32
+          x11-libs/xcb-util-keysyms abi_x86_32
+          x11-misc/colord abi_x86_32
+          gui-libs/egl-gbm abi_x86_32
+          gui-libs/egl-wayland abi_x86_32
+          gui-libs/egl-wayland2 abi_x86_32
+          gui-libs/egl-x11 abi_x86_32
+          x11-drivers/nvidia-drivers abi_x86_32
+          EOF
+
+          emaint binhost --fix 2>/dev/null || true
+          DNA_EOF
+          chmod +x portage_dna.sh
 
       - name: Smart Binhost Audit
         id: audit
@@ -190,7 +471,6 @@ jobs:
           HTTP_STATUS=$(curl -sL -o gh_packages.txt -w "%{http_code}" --connect-timeout 15 --retry 3 "$BINHOST_URL" || echo "000")
           if [ "$HTTP_STATUS" != "200" ]; then touch gh_packages.txt; fi
           
-          echo ">>> Auditing Overlay Packages Against Binhost..."
           for ebuild in */*/*.ebuild; do
               [ -e "$ebuild" ] || continue
               pkg_dir=$(dirname "$ebuild")
@@ -198,17 +478,14 @@ jobs:
               EBUILD_NAME=$(basename "$ebuild" .ebuild)
               CPV="${CATEGORY}/${EBUILD_NAME}"
               
-              if ! grep -q "^CPV: $CPV$" gh_packages.txt; then
+              if ! grep -qF "CPV: ${CPV}" gh_packages.txt; then
                   echo "$pkg_dir" >> changed_packages.txt
-                  echo "Missing binary detected: $CPV"
               fi
           done
 
-          echo ">>> Auditing Core OS Packages Against Binhost..."
           CORE_ATOMS="sys-kernel/gentoo-kernel media-libs/mesa media-libs/vulkan-loader sys-boot/grub sys-auth/elogind"
           for atom in $CORE_ATOMS; do
-              if ! grep -q "^CPV: $atom-" gh_packages.txt; then
-                  echo "🚨 Core package $atom is missing! Forcing cluster rebuild."
+              if ! grep -qF "CPV: ${atom}-" gh_packages.txt; then
                   touch core_missing.flag
               fi
           done
@@ -216,11 +493,9 @@ jobs:
           UPDATES="false"
           if [ -f core_missing.flag ]; then UPDATES="true"; fi
           if [ -f changed_packages.txt ] && [ -s changed_packages.txt ]; then 
-              sort -u changed_packages.txt > changed_packages_unique.txt
-              mv changed_packages_unique.txt changed_packages.txt
+              sort -u changed_packages.txt -o changed_packages.txt
               UPDATES="true"
           fi
-          
           echo "updates_found=$UPDATES" >> "$GITHUB_OUTPUT"
 
       - name: Commit & Upload Overlay State
@@ -243,15 +518,14 @@ jobs:
 
 
   # =====================================================================
-  # TIER 1: VANGUARD ISOLATION (Kernel & Mesa run first, in parallel)
+  # TIER 1A: KERNEL
   # =====================================================================
-  
   build-kernel:
     name: Vanguard Kernel
     needs: overlay-scan
     if: github.event.inputs.atom == '' && (needs.overlay-scan.outputs.updates_found == 'true' || github.event_name == 'schedule' || github.event.inputs.force_full_run == 'true')
     runs-on: ubuntu-latest
-    timeout-minutes: 240
+    timeout-minutes: 360
     steps:
       - uses: actions/download-artifact@v4
         with:
@@ -265,287 +539,24 @@ jobs:
             ccache-kernel-
       - name: Execute Kernel Build
         run: |
-          mkdir -p job_out /tmp/distfiles /tmp/ccache
-          chmod 777 /tmp/distfiles /tmp/ccache
           cat > build_script.sh << 'BUILDEOF'
           #!/bin/bash
           set -euo pipefail
-          mkdir -p /var/db/repos/{gentoo,guru,steam-overlay} /etc/portage/{repos.conf,binrepos.conf,env,package.{accept_keywords,license,use,mask,env}} /overlay/{distfiles,job_out} /etc/portage/savedconfig/sys-kernel/
+          source /overlay/portage_dna.sh
           
-          cat > /etc/portage/binrepos.conf/gentoo.conf << 'EOF'
-          [gentoo]
-          priority = 10000
-          sync-uri = https://distfiles.gentoo.org/releases/amd64/binpackages/23.0/x86-64/
-          verify-signature = false
-          EOF
-
-          cat > /etc/portage/binrepos.conf/nexus.conf << 'EOF'
-          [gentoo-nexus-gh]
-          priority = 9999
-          sync-uri = https://${{ github.repository_owner }}.github.io/${{ github.event.repository.name }}/
-          verify-signature = false
-          EOF
-
-          cat >> /etc/portage/make.conf << 'MAKECONF'
-          COMMON_FLAGS="-O2 -march=x86-64 -pipe"
-          CFLAGS="${COMMON_FLAGS}"
-          CXXFLAGS="${COMMON_FLAGS}"
-          RUSTFLAGS="-C target-cpu=x86-64 -C opt-level=2"
-          USE="wayland X vulkan pipewire dbus udev opengl dri gbm vaapi vdpau ffmpeg minizip -daemon -systemd -aqua -cups"
-          VIDEO_CARDS="amdgpu radeon radeonsi intel iris nouveau virgl"
-          FEATURES="-sandbox -usersandbox -ipc-sandbox -network-sandbox -pid-sandbox buildpkg parallel-install getbinpkg -binpkg-request-signature ccache"
-          CCACHE_DIR="/var/cache/ccache"
-          CCACHE_UMASK="002"
-          EMERGE_DEFAULT_OPTS="--getbinpkg --usepkg --binpkg-respect-use=y --binpkg-changed-deps=y --autounmask=y --autounmask-write --keep-going --quiet"
-          DISTDIR="/var/cache/distfiles"
-          PKGDIR="/overlay/job_out"
-          ACCEPT_LICENSE="*"
-          EVCS_OFFLINE=1
-          MAKECONF
-          echo "MAKEOPTS=\"-j$(nproc)\"" >> /etc/portage/make.conf
-
-          emerge-webrsync -q || true
-          getuto || true
-          eselect profile set default/linux/amd64/23.0/desktop
+          mkdir -p /etc/portage/savedconfig/sys-kernel/
+          cp /overlay/kernel-config/nexus-config-master /etc/portage/savedconfig/sys-kernel/gentoo-kernel 2>/dev/null || true
           
-          echo ">>> Bootstrapping Tools..."
-          emerge --noreplace --quiet dev-vcs/git dev-util/ccache
-          
-          chown -R portage:portage /var/cache/ccache
-          chmod -R 2777 /var/cache/ccache
-          
-          echo ">>> Cloning Overlays..."
-          git clone --depth 1 https://github.com/gentoo-mirror/guru.git /var/db/repos/guru || true
-          git clone --depth 1 https://github.com/anyc/steam-overlay.git /var/db/repos/steam-overlay || true
-
-          echo ">>> Fixing upstream Steam Overlay corruptions..."
-          if [ -d /var/db/repos/steam-overlay/games-util/steam-launcher ]; then
-            cd /var/db/repos/steam-overlay/games-util/steam-launcher
-            ebuild $(ls *.ebuild | tail -n1) manifest || true
-            cd /
-          fi
-          
-          mkdir -p /var/db/repos/guru/metadata /var/db/repos/steam-overlay/metadata
-          echo "masters = gentoo" > /var/db/repos/guru/metadata/layout.conf
-          echo "masters = gentoo" > /var/db/repos/steam-overlay/metadata/layout.conf
-
-          cat > /etc/portage/repos.conf/guru.conf << 'EOF'
-          [guru]
-          location = /var/db/repos/guru
-          priority = 50
-          masters = gentoo
-          EOF
-          
-          cat > /etc/portage/repos.conf/steam-overlay.conf << 'EOF'
-          [steam-overlay]
-          location = /var/db/repos/steam-overlay
-          priority = 50
-          masters = gentoo
-          EOF
-
-          cat > /etc/portage/repos.conf/gentoo-nexus.conf << 'EOF'
-          [gentoo-nexus]
-          location = /overlay
-          masters = gentoo guru
-          priority = 9999
-          EOF
-
-          cat > /etc/portage/package.mask/no-live-core << 'MASK'
-          =media-libs/mesa-9999*
-          =dev-util/mesa_clc-9999*
-          =dev-util/spirv-tools-9999*
-          =media-libs/vulkan-loader-9999*
-          MASK
-
-          # UNIFIED DNA - ALL NODES
-          echo "*/*::guru **" >> /etc/portage/package.accept_keywords/guru
-          echo "*/*::steam-overlay **" >> /etc/portage/package.accept_keywords/steam
-          echo "*/*::gentoo-nexus **" >> /etc/portage/package.accept_keywords/nexus
-          echo "media-libs/mesa ~amd64" >> /etc/portage/package.accept_keywords/nexus
-          echo "media-libs/vulkan-loader ~amd64" >> /etc/portage/package.accept_keywords/nexus
-          echo "dev-util/mesa_clc ~amd64" >> /etc/portage/package.accept_keywords/nexus
-          echo "dev-util/spirv-tools ~amd64" >> /etc/portage/package.accept_keywords/nexus
-          echo "dev-util/spirv-headers ~amd64" >> /etc/portage/package.accept_keywords/nexus
-          echo "dev-util/vulkan-headers ~amd64" >> /etc/portage/package.accept_keywords/nexus
-          echo "dev-util/glslang ~amd64" >> /etc/portage/package.accept_keywords/nexus
-          echo "dev-util/vulkan-utility-libraries ~amd64" >> /etc/portage/package.accept_keywords/nexus
-          echo "sys-kernel/gentoo-kernel ~amd64" >> /etc/portage/package.accept_keywords/nexus
-          echo "sys-kernel/linux-firmware ~amd64" >> /etc/portage/package.accept_keywords/nexus
-          echo "virtual/dist-kernel ~amd64" >> /etc/portage/package.accept_keywords/nexus
-
-          cat > /etc/portage/package.mask/fixes << 'MASK'
-          sys-apps/systemd
-          sys-apps/gentoo-systemd-integration
-          =games-util/steam-launcher-1.0.0.85-r3::steam-overlay
-          MASK
-
-          cat > /etc/portage/package.use/global << 'EOF'
-          sys-libs/zlib minizip
-          media-video/pipewire extra
-          media-video/ffmpeg -sdl
-          dev-qt/qtbase wayland X -icu -sql -sqlite
-          sys-libs/ncurses -gpm
-          EOF
-
-          mkdir -p /etc/portage/env /etc/portage/package.env
-          cat > /etc/portage/env/gcc-ice-safe << 'EOF'
-          CFLAGS="-O1 -pipe -fno-tree-loop-vectorize -fno-tree-slp-vectorize"
-          CXXFLAGS="-O1 -pipe -fno-tree-loop-vectorize -fno-tree-slp-vectorize"
-          EOF
-          echo "MAKEOPTS=\"-j$(nproc)\"" >> /etc/portage/env/gcc-ice-safe
-          cat > /etc/portage/package.env/gcc-ice-packages << 'EOF'
-          dev-util/spirv-tools gcc-ice-safe
-          media-libs/mesa gcc-ice-safe
-          EOF
-
-          cat > /etc/portage/package.use/steam << 'USE'
-          media-libs/mesa abi_x86_32
-          media-libs/vulkan-loader abi_x86_32 layers
-          dev-util/spirv-tools abi_x86_32
-          x11-drivers/nvidia-drivers abi_x86_32
-          app-accessibility/at-spi2-core abi_x86_32
-          app-arch/bzip2 abi_x86_32
-          app-arch/lz4 abi_x86_32
-          app-arch/xz-utils abi_x86_32
-          app-arch/zstd abi_x86_32
-          app-crypt/p11-kit abi_x86_32
-          dev-db/sqlite abi_x86_32
-          dev-libs/dbus-glib abi_x86_32
-          dev-libs/elfutils abi_x86_32
-          dev-libs/expat abi_x86_32
-          dev-libs/fribidi abi_x86_32
-          dev-libs/glib abi_x86_32
-          dev-libs/gmp abi_x86_32
-          dev-libs/icu abi_x86_32
-          dev-libs/json-glib abi_x86_32
-          dev-libs/libevdev abi_x86_32
-          dev-libs/libffi abi_x86_32
-          dev-libs/libgcrypt abi_x86_32
-          dev-libs/libgpg-error abi_x86_32
-          dev-libs/libgudev abi_x86_32
-          dev-libs/libgusb abi_x86_32
-          dev-libs/libpcre2 abi_x86_32
-          dev-libs/libtasn1 abi_x86_32
-          dev-libs/libunistring abi_x86_32
-          dev-libs/libusb abi_x86_32
-          dev-libs/libxml2 abi_x86_32
-          dev-libs/lzo abi_x86_32
-          dev-libs/nettle abi_x86_32
-          dev-libs/nspr abi_x86_32
-          dev-libs/nss abi_x86_32
-          dev-libs/openssl abi_x86_32
-          dev-libs/wayland abi_x86_32
-          dev-util/glslang abi_x86_32
-          dev-util/sysprof-capture abi_x86_32
-          dev-util/vulkan-utility-libraries abi_x86_32
-          gnome-base/librsvg abi_x86_32
-          gui-libs/libdecor abi_x86_32
-          llvm-core/clang abi_x86_32
-          llvm-core/llvm abi_x86_32
-          media-gfx/graphite2 abi_x86_32
-          media-libs/alsa-lib abi_x86_32
-          media-libs/flac abi_x86_32
-          media-libs/fontconfig abi_x86_32
-          media-libs/freetype abi_x86_32
-          media-libs/glu abi_x86_32
-          media-libs/harfbuzz abi_x86_32
-          media-libs/lcms abi_x86_32
-          media-libs/libdisplay-info abi_x86_32
-          media-libs/libepoxy abi_x86_32
-          media-libs/libglvnd abi_x86_32
-          media-libs/libjpeg-turbo abi_x86_32
-          media-libs/libogg abi_x86_32
-          media-libs/libpng abi_x86_32
-          media-libs/libpulse abi_x86_32
-          media-libs/libsdl2 abi_x86_32
-          media-libs/libsndfile abi_x86_32
-          media-libs/libva abi_x86_32
-          media-libs/libvorbis abi_x86_32
-          media-libs/libwebp abi_x86_32
-          media-libs/openal abi_x86_32
-          media-libs/opus abi_x86_32
-          media-libs/tiff abi_x86_32
-          media-libs/vulkan-layers abi_x86_32
-          media-sound/lame abi_x86_32
-          media-sound/mpg123-base abi_x86_32
-          media-video/pipewire abi_x86_32
-          net-dns/c-ares abi_x86_32
-          net-dns/libidn2 abi_x86_32
-          net-libs/gnutls abi_x86_32
-          net-libs/libasyncns abi_x86_32
-          net-libs/libndp abi_x86_32
-          net-libs/libpsl abi_x86_32
-          net-libs/nghttp2 abi_x86_32
-          net-libs/nghttp3 abi_x86_32
-          net-misc/curl abi_x86_32
-          net-misc/networkmanager abi_x86_32
-          net-print/cups abi_x86_32
-          sys-apps/dbus abi_x86_32
-          sys-apps/lm-sensors abi_x86_32
-          sys-apps/systemd abi_x86_32
-          sys-apps/systemd-utils abi_x86_32
-          sys-apps/util-linux abi_x86_32
-          sys-libs/gdbm abi_x86_32
-          sys-libs/gpm abi_x86_32
-          sys-libs/libcap abi_x86_32
-          sys-libs/libudev-compat abi_x86_32
-          sys-libs/ncurses abi_x86_32
-          sys-libs/pam abi_x86_32
-          sys-libs/readline abi_x86_32
-          sys-libs/zlib abi_x86_32
-          virtual/glu abi_x86_32
-          virtual/libelf abi_x86_32
-          virtual/libiconv abi_x86_32
-          virtual/libintl abi_x86_32
-          virtual/libudev abi_x86_32
-          virtual/libusb abi_x86_32
-          virtual/opengl abi_x86_32
-          virtual/zlib abi_x86_32
-          x11-libs/cairo abi_x86_32
-          x11-libs/extest abi_x86_32
-          x11-libs/gdk-pixbuf abi_x86_32
-          x11-libs/gtk+ abi_x86_32
-          x11-libs/libdrm abi_x86_32
-          x11-libs/libICE abi_x86_32
-          x11-libs/libpciaccess abi_x86_32
-          x11-libs/libSM abi_x86_32
-          x11-libs/libvdpau abi_x86_32
-          x11-libs/libX11 abi_x86_32
-          x11-libs/libXau abi_x86_32
-          x11-libs/libxcb abi_x86_32
-          x11-libs/libXcomposite abi_x86_32
-          x11-libs/libXcursor abi_x86_32
-          x11-libs/libXdamage abi_x86_32
-          x11-libs/libXdmcp abi_x86_32
-          x11-libs/libXext abi_x86_32
-          x11-libs/libXfixes abi_x86_32
-          x11-libs/libXft abi_x86_32
-          x11-libs/libXi abi_x86_32
-          x11-libs/libXinerama abi_x86_32
-          x11-libs/libxkbcommon abi_x86_32
-          x11-libs/libXrandr abi_x86_32
-          x11-libs/libXrender abi_x86_32
-          x11-libs/libXScrnSaver abi_x86_32
-          x11-libs/libxshmfence abi_x86_32
-          x11-libs/libXtst abi_x86_32
-          x11-libs/libXxf86vm abi_x86_32
-          x11-libs/pango abi_x86_32
-          x11-libs/pixman abi_x86_32
-          x11-libs/xcb-util-keysyms abi_x86_32
-          x11-misc/colord abi_x86_32
-          USE
-
-          cat > /etc/portage/package.use/kernel << 'USE'
+          cat > /etc/portage/package.use/kernel << 'EOF'
           sys-kernel/gentoo-kernel savedconfig initramfs
           sys-kernel/installkernel dracut grub
-          USE
-          
-          echo ">>> Injecting Nexus Master Config..."
-          cp /overlay/kernel-config/nexus-config-master /etc/portage/savedconfig/sys-kernel/gentoo-kernel || echo "Warning: nexus-config-master not found!"
+          EOF
 
-          BASE_LIST=(sys-kernel/gentoo-kernel sys-kernel/linux-firmware sys-kernel/dracut)
-          for i in 1 2; do emerge --deep --newuse "${BASE_LIST[@]}" 2>&1 && break || etc-update --automode -5; done
-          emerge --deep --newuse "${BASE_LIST[@]}"
+          # Pull binaries instantly if DNA matches
+          emerge --oneshot --quiet sys-kernel/gentoo-kernel sys-kernel/linux-firmware sys-kernel/dracut || true
+          
+          for i in 1 2; do emerge --deep --newuse sys-kernel/gentoo-kernel sys-kernel/linux-firmware sys-kernel/dracut 2>&1 && break || etc-update --automode -5; done
+          emerge --deep --newuse sys-kernel/gentoo-kernel sys-kernel/linux-firmware sys-kernel/dracut
           BUILDEOF
           chmod +x build_script.sh
           docker run --rm --privileged -v "${{ github.workspace }}:/overlay" -v "/tmp/distfiles:/var/cache/distfiles" -v "/tmp/ccache:/var/cache/ccache" gentoo/stage3:amd64-desktop-openrc bash /overlay/build_script.sh
@@ -555,12 +566,16 @@ jobs:
           path: job_out/
           retention-days: 1
 
+
+  # =====================================================================
+  # TIER 1B: MESA VANGUARD
+  # =====================================================================
   build-mesa-vanguard:
-    name: Vanguard Mesa (64-bit Core)
+    name: Vanguard Mesa (64/32-bit Core)
     needs: overlay-scan
     if: github.event.inputs.atom == '' && (needs.overlay-scan.outputs.updates_found == 'true' || github.event_name == 'schedule' || github.event.inputs.force_full_run == 'true')
     runs-on: ubuntu-latest
-    timeout-minutes: 240
+    timeout-minutes: 360
     steps:
       - uses: actions/download-artifact@v4
         with:
@@ -574,281 +589,13 @@ jobs:
             ccache-graphics-
       - name: Execute Mesa Build
         run: |
-          mkdir -p job_out /tmp/distfiles /tmp/ccache
-          chmod 777 /tmp/distfiles /tmp/ccache
           cat > build_script.sh << 'BUILDEOF'
           #!/bin/bash
           set -euo pipefail
-          mkdir -p /var/db/repos/{gentoo,guru,steam-overlay} /etc/portage/{repos.conf,binrepos.conf,env,package.{accept_keywords,license,use,mask,env}} /overlay/{distfiles,job_out}
+          source /overlay/portage_dna.sh
           
-          cat > /etc/portage/binrepos.conf/gentoo.conf << 'EOF'
-          [gentoo]
-          priority = 10000
-          sync-uri = https://distfiles.gentoo.org/releases/amd64/binpackages/23.0/x86-64/
-          verify-signature = false
-          EOF
-
-          cat > /etc/portage/binrepos.conf/nexus.conf << 'EOF'
-          [gentoo-nexus-gh]
-          priority = 9999
-          sync-uri = https://${{ github.repository_owner }}.github.io/${{ github.event.repository.name }}/
-          verify-signature = false
-          EOF
-
-          cat >> /etc/portage/make.conf << 'MAKECONF'
-          COMMON_FLAGS="-O2 -march=x86-64 -pipe"
-          CFLAGS="${COMMON_FLAGS}"
-          CXXFLAGS="${COMMON_FLAGS}"
-          RUSTFLAGS="-C target-cpu=x86-64 -C opt-level=2"
-          USE="wayland X vulkan pipewire dbus udev opengl dri gbm vaapi vdpau ffmpeg minizip -daemon -systemd -aqua -cups"
-          VIDEO_CARDS="amdgpu radeon radeonsi intel iris nouveau virgl"
-          FEATURES="-sandbox -usersandbox -ipc-sandbox -network-sandbox -pid-sandbox buildpkg parallel-install getbinpkg -binpkg-request-signature ccache"
-          CCACHE_DIR="/var/cache/ccache"
-          CCACHE_UMASK="002"
-          EMERGE_DEFAULT_OPTS="--getbinpkg --usepkg --binpkg-respect-use=y --binpkg-changed-deps=y --autounmask=y --autounmask-write --keep-going --quiet"
-          DISTDIR="/var/cache/distfiles"
-          PKGDIR="/overlay/job_out"
-          ACCEPT_LICENSE="*"
-          EVCS_OFFLINE=1
-          MAKECONF
-          echo "MAKEOPTS=\"-j$(nproc)\"" >> /etc/portage/make.conf
-
-          emerge-webrsync -q || true
-          getuto || true
-          eselect profile set default/linux/amd64/23.0/desktop
-          
-          echo ">>> Bootstrapping Tools..."
-          emerge --noreplace --quiet dev-vcs/git dev-util/ccache
-          
-          chown -R portage:portage /var/cache/ccache
-          chmod -R 2777 /var/cache/ccache
-          
-          echo ">>> Cloning Overlays..."
-          git clone --depth 1 https://github.com/gentoo-mirror/guru.git /var/db/repos/guru || true
-          git clone --depth 1 https://github.com/anyc/steam-overlay.git /var/db/repos/steam-overlay || true
-
-          echo ">>> Fixing upstream Steam Overlay corruptions..."
-          if [ -d /var/db/repos/steam-overlay/games-util/steam-launcher ]; then
-            cd /var/db/repos/steam-overlay/games-util/steam-launcher
-            ebuild $(ls *.ebuild | tail -n1) manifest || true
-            cd /
-          fi
-          
-          mkdir -p /var/db/repos/guru/metadata /var/db/repos/steam-overlay/metadata
-          echo "masters = gentoo" > /var/db/repos/guru/metadata/layout.conf
-          echo "masters = gentoo" > /var/db/repos/steam-overlay/metadata/layout.conf
-
-          cat > /etc/portage/repos.conf/guru.conf << 'EOF'
-          [guru]
-          location = /var/db/repos/guru
-          priority = 50
-          masters = gentoo
-          EOF
-          
-          cat > /etc/portage/repos.conf/steam-overlay.conf << 'EOF'
-          [steam-overlay]
-          location = /var/db/repos/steam-overlay
-          priority = 50
-          masters = gentoo
-          EOF
-
-          cat > /etc/portage/repos.conf/gentoo-nexus.conf << 'EOF'
-          [gentoo-nexus]
-          location = /overlay
-          masters = gentoo guru
-          priority = 9999
-          EOF
-
-          cat > /etc/portage/package.mask/no-live-core << 'MASK'
-          =media-libs/mesa-9999*
-          =dev-util/mesa_clc-9999*
-          =dev-util/spirv-tools-9999*
-          =media-libs/vulkan-loader-9999*
-          MASK
-
-          echo "*/*::guru **" >> /etc/portage/package.accept_keywords/guru
-          echo "*/*::steam-overlay **" >> /etc/portage/package.accept_keywords/steam
-          echo "*/*::gentoo-nexus **" >> /etc/portage/package.accept_keywords/nexus
-          echo "media-libs/mesa ~amd64" >> /etc/portage/package.accept_keywords/nexus
-          echo "media-libs/vulkan-loader ~amd64" >> /etc/portage/package.accept_keywords/nexus
-          echo "dev-util/mesa_clc ~amd64" >> /etc/portage/package.accept_keywords/nexus
-          echo "dev-util/spirv-tools ~amd64" >> /etc/portage/package.accept_keywords/nexus
-          echo "dev-util/spirv-headers ~amd64" >> /etc/portage/package.accept_keywords/nexus
-          echo "dev-util/vulkan-headers ~amd64" >> /etc/portage/package.accept_keywords/nexus
-          echo "dev-util/glslang ~amd64" >> /etc/portage/package.accept_keywords/nexus
-          echo "dev-util/vulkan-utility-libraries ~amd64" >> /etc/portage/package.accept_keywords/nexus
-          echo "sys-kernel/gentoo-kernel ~amd64" >> /etc/portage/package.accept_keywords/nexus
-          echo "sys-kernel/linux-firmware ~amd64" >> /etc/portage/package.accept_keywords/nexus
-          echo "virtual/dist-kernel ~amd64" >> /etc/portage/package.accept_keywords/nexus
-
-          cat > /etc/portage/package.mask/fixes << 'MASK'
-          sys-apps/systemd
-          sys-apps/gentoo-systemd-integration
-          =games-util/steam-launcher-1.0.0.85-r3::steam-overlay
-          MASK
-
-          cat > /etc/portage/package.use/global << 'EOF'
-          sys-libs/zlib minizip
-          media-video/pipewire extra
-          media-video/ffmpeg -sdl
-          dev-qt/qtbase wayland X -icu -sql -sqlite
-          sys-libs/ncurses -gpm
-          EOF
-
-          mkdir -p /etc/portage/env /etc/portage/package.env
-          cat > /etc/portage/env/gcc-ice-safe << 'EOF'
-          CFLAGS="-O1 -pipe -fno-tree-loop-vectorize -fno-tree-slp-vectorize"
-          CXXFLAGS="-O1 -pipe -fno-tree-loop-vectorize -fno-tree-slp-vectorize"
-          EOF
-          echo "MAKEOPTS=\"-j$(nproc)\"" >> /etc/portage/env/gcc-ice-safe
-          cat > /etc/portage/package.env/gcc-ice-packages << 'EOF'
-          dev-util/spirv-tools gcc-ice-safe
-          media-libs/mesa gcc-ice-safe
-          EOF
-
-          # FULL 32-bit STEAM SUPPORT ACROSS ALL NODES TO ENSURE MATCHING SIGS
-          cat > /etc/portage/package.use/steam << 'USE'
-          media-libs/mesa abi_x86_32
-          media-libs/vulkan-loader abi_x86_32 layers
-          dev-util/spirv-tools abi_x86_32
-          x11-drivers/nvidia-drivers abi_x86_32
-          app-accessibility/at-spi2-core abi_x86_32
-          app-arch/bzip2 abi_x86_32
-          app-arch/lz4 abi_x86_32
-          app-arch/xz-utils abi_x86_32
-          app-arch/zstd abi_x86_32
-          app-crypt/p11-kit abi_x86_32
-          dev-db/sqlite abi_x86_32
-          dev-libs/dbus-glib abi_x86_32
-          dev-libs/elfutils abi_x86_32
-          dev-libs/expat abi_x86_32
-          dev-libs/fribidi abi_x86_32
-          dev-libs/glib abi_x86_32
-          dev-libs/gmp abi_x86_32
-          dev-libs/icu abi_x86_32
-          dev-libs/json-glib abi_x86_32
-          dev-libs/libevdev abi_x86_32
-          dev-libs/libffi abi_x86_32
-          dev-libs/libgcrypt abi_x86_32
-          dev-libs/libgpg-error abi_x86_32
-          dev-libs/libgudev abi_x86_32
-          dev-libs/libgusb abi_x86_32
-          dev-libs/libpcre2 abi_x86_32
-          dev-libs/libtasn1 abi_x86_32
-          dev-libs/libunistring abi_x86_32
-          dev-libs/libusb abi_x86_32
-          dev-libs/libxml2 abi_x86_32
-          dev-libs/lzo abi_x86_32
-          dev-libs/nettle abi_x86_32
-          dev-libs/nspr abi_x86_32
-          dev-libs/nss abi_x86_32
-          dev-libs/openssl abi_x86_32
-          dev-libs/wayland abi_x86_32
-          dev-util/glslang abi_x86_32
-          dev-util/sysprof-capture abi_x86_32
-          dev-util/vulkan-utility-libraries abi_x86_32
-          gnome-base/librsvg abi_x86_32
-          gui-libs/libdecor abi_x86_32
-          llvm-core/clang abi_x86_32
-          llvm-core/llvm abi_x86_32
-          media-gfx/graphite2 abi_x86_32
-          media-libs/alsa-lib abi_x86_32
-          media-libs/flac abi_x86_32
-          media-libs/fontconfig abi_x86_32
-          media-libs/freetype abi_x86_32
-          media-libs/glu abi_x86_32
-          media-libs/harfbuzz abi_x86_32
-          media-libs/lcms abi_x86_32
-          media-libs/libdisplay-info abi_x86_32
-          media-libs/libepoxy abi_x86_32
-          media-libs/libglvnd abi_x86_32
-          media-libs/libjpeg-turbo abi_x86_32
-          media-libs/libogg abi_x86_32
-          media-libs/libpng abi_x86_32
-          media-libs/libpulse abi_x86_32
-          media-libs/libsdl2 abi_x86_32
-          media-libs/libsndfile abi_x86_32
-          media-libs/libva abi_x86_32
-          media-libs/libvorbis abi_x86_32
-          media-libs/libwebp abi_x86_32
-          media-libs/openal abi_x86_32
-          media-libs/opus abi_x86_32
-          media-libs/tiff abi_x86_32
-          media-libs/vulkan-layers abi_x86_32
-          media-sound/lame abi_x86_32
-          media-sound/mpg123-base abi_x86_32
-          media-video/pipewire abi_x86_32
-          net-dns/c-ares abi_x86_32
-          net-dns/libidn2 abi_x86_32
-          net-libs/gnutls abi_x86_32
-          net-libs/libasyncns abi_x86_32
-          net-libs/libndp abi_x86_32
-          net-libs/libpsl abi_x86_32
-          net-libs/nghttp2 abi_x86_32
-          net-libs/nghttp3 abi_x86_32
-          net-misc/curl abi_x86_32
-          net-misc/networkmanager abi_x86_32
-          net-print/cups abi_x86_32
-          sys-apps/dbus abi_x86_32
-          sys-apps/lm-sensors abi_x86_32
-          sys-apps/systemd abi_x86_32
-          sys-apps/systemd-utils abi_x86_32
-          sys-apps/util-linux abi_x86_32
-          sys-libs/gdbm abi_x86_32
-          sys-libs/gpm abi_x86_32
-          sys-libs/libcap abi_x86_32
-          sys-libs/libudev-compat abi_x86_32
-          sys-libs/ncurses abi_x86_32
-          sys-libs/pam abi_x86_32
-          sys-libs/readline abi_x86_32
-          sys-libs/zlib abi_x86_32
-          virtual/glu abi_x86_32
-          virtual/libelf abi_x86_32
-          virtual/libiconv abi_x86_32
-          virtual/libintl abi_x86_32
-          virtual/libudev abi_x86_32
-          virtual/libusb abi_x86_32
-          virtual/opengl abi_x86_32
-          virtual/zlib abi_x86_32
-          x11-libs/cairo abi_x86_32
-          x11-libs/extest abi_x86_32
-          x11-libs/gdk-pixbuf abi_x86_32
-          x11-libs/gtk+ abi_x86_32
-          x11-libs/libdrm abi_x86_32
-          x11-libs/libICE abi_x86_32
-          x11-libs/libpciaccess abi_x86_32
-          x11-libs/libSM abi_x86_32
-          x11-libs/libvdpau abi_x86_32
-          x11-libs/libX11 abi_x86_32
-          x11-libs/libXau abi_x86_32
-          x11-libs/libxcb abi_x86_32
-          x11-libs/libXcomposite abi_x86_32
-          x11-libs/libXcursor abi_x86_32
-          x11-libs/libXdamage abi_x86_32
-          x11-libs/libXdmcp abi_x86_32
-          x11-libs/libXext abi_x86_32
-          x11-libs/libXfixes abi_x86_32
-          x11-libs/libXft abi_x86_32
-          x11-libs/libXi abi_x86_32
-          x11-libs/libXinerama abi_x86_32
-          x11-libs/libxkbcommon abi_x86_32
-          x11-libs/libXrandr abi_x86_32
-          x11-libs/libXrender abi_x86_32
-          x11-libs/libXScrnSaver abi_x86_32
-          x11-libs/libxshmfence abi_x86_32
-          x11-libs/libXtst abi_x86_32
-          x11-libs/libXxf86vm abi_x86_32
-          x11-libs/pango abi_x86_32
-          x11-libs/pixman abi_x86_32
-          x11-libs/xcb-util-keysyms abi_x86_32
-          x11-misc/colord abi_x86_32
-          USE
-
-          MESA_LIST=(dev-util/spirv-tools dev-util/mesa_clc media-libs/mesa)
-          for i in 1 2; do emerge --deep --newuse "${MESA_LIST[@]}" 2>&1 && break || etc-update --automode -5; done
-          emerge --deep --newuse "${MESA_LIST[@]}"
-          
-          emaint binhost --fix
+          for i in 1 2; do emerge --deep --newuse dev-util/spirv-tools dev-util/mesa_clc media-libs/mesa media-libs/vulkan-loader media-libs/libglvnd 2>&1 && break || etc-update --automode -5; done
+          emerge --deep --newuse dev-util/spirv-tools dev-util/mesa_clc media-libs/mesa media-libs/vulkan-loader media-libs/libglvnd
           BUILDEOF
           chmod +x build_script.sh
           docker run --rm --privileged -v "${{ github.workspace }}:/overlay" -v "/tmp/distfiles:/var/cache/distfiles" -v "/tmp/ccache:/var/cache/ccache" gentoo/stage3:amd64-desktop-openrc bash /overlay/build_script.sh
@@ -860,14 +607,13 @@ jobs:
 
 
   # =====================================================================
-  # TIER 2: CASCADE CONSUMERS (Waits for Mesa, runs in parallel)
+  # TIER 2: CASCADE CONSUMERS
   # =====================================================================
-
   build-graphics-core:
     name: Graphics Core (Vulkan/Pipewire)
     needs: build-mesa-vanguard
     runs-on: ubuntu-latest
-    timeout-minutes: 240
+    timeout-minutes: 360
     steps:
       - uses: actions/download-artifact@v4
         with:
@@ -885,280 +631,12 @@ jobs:
             ccache-graphics-
       - name: Execute Graphics Core Build
         run: |
-          mkdir -p /tmp/distfiles /tmp/ccache
-          chmod 777 /tmp/distfiles /tmp/ccache
           cat > build_script.sh << 'BUILDEOF'
           #!/bin/bash
           set -euo pipefail
-          mkdir -p /var/db/repos/{gentoo,guru,steam-overlay} /etc/portage/{repos.conf,binrepos.conf,env,package.{accept_keywords,license,use,mask,env}} /overlay/{distfiles,job_out}
+          source /overlay/portage_dna.sh
           
-          emaint binhost --fix
-
-          cat > /etc/portage/binrepos.conf/gentoo.conf << 'EOF'
-          [gentoo]
-          priority = 10000
-          sync-uri = https://distfiles.gentoo.org/releases/amd64/binpackages/23.0/x86-64/
-          verify-signature = false
-          EOF
-
-          cat > /etc/portage/binrepos.conf/nexus.conf << 'EOF'
-          [gentoo-nexus-gh]
-          priority = 9999
-          sync-uri = https://${{ github.repository_owner }}.github.io/${{ github.event.repository.name }}/
-          verify-signature = false
-          EOF
-
-          cat >> /etc/portage/make.conf << 'MAKECONF'
-          COMMON_FLAGS="-O2 -march=x86-64 -pipe"
-          CFLAGS="${COMMON_FLAGS}"
-          CXXFLAGS="${COMMON_FLAGS}"
-          RUSTFLAGS="-C target-cpu=x86-64 -C opt-level=2"
-          USE="wayland X vulkan pipewire dbus udev opengl dri gbm vaapi vdpau ffmpeg minizip -daemon -systemd -aqua -cups"
-          VIDEO_CARDS="amdgpu radeon radeonsi intel iris nouveau virgl"
-          FEATURES="-sandbox -usersandbox -ipc-sandbox -network-sandbox -pid-sandbox buildpkg parallel-install getbinpkg -binpkg-request-signature ccache"
-          CCACHE_DIR="/var/cache/ccache"
-          CCACHE_UMASK="002"
-          EMERGE_DEFAULT_OPTS="--getbinpkg --usepkg --binpkg-respect-use=y --binpkg-changed-deps=y --autounmask=y --autounmask-write --keep-going --quiet"
-          DISTDIR="/var/cache/distfiles"
-          PKGDIR="/overlay/job_out"
-          ACCEPT_LICENSE="*"
-          EVCS_OFFLINE=1
-          MAKECONF
-          echo "MAKEOPTS=\"-j$(nproc)\"" >> /etc/portage/make.conf
-
-          emerge-webrsync -q || true
-          getuto || true
-          eselect profile set default/linux/amd64/23.0/desktop
-          
-          echo ">>> Bootstrapping Tools..."
-          emerge --noreplace --quiet dev-vcs/git dev-util/ccache
-          
-          chown -R portage:portage /var/cache/ccache
-          chmod -R 2777 /var/cache/ccache
-          
-          echo ">>> Cloning Overlays..."
-          git clone --depth 1 https://github.com/gentoo-mirror/guru.git /var/db/repos/guru || true
-          git clone --depth 1 https://github.com/anyc/steam-overlay.git /var/db/repos/steam-overlay || true
-
-          echo ">>> Fixing upstream Steam Overlay corruptions..."
-          if [ -d /var/db/repos/steam-overlay/games-util/steam-launcher ]; then
-            cd /var/db/repos/steam-overlay/games-util/steam-launcher
-            ebuild $(ls *.ebuild | tail -n1) manifest || true
-            cd /
-          fi
-          
-          mkdir -p /var/db/repos/guru/metadata /var/db/repos/steam-overlay/metadata
-          echo "masters = gentoo" > /var/db/repos/guru/metadata/layout.conf
-          echo "masters = gentoo" > /var/db/repos/steam-overlay/metadata/layout.conf
-
-          cat > /etc/portage/repos.conf/guru.conf << 'EOF'
-          [guru]
-          location = /var/db/repos/guru
-          priority = 50
-          masters = gentoo
-          EOF
-          
-          cat > /etc/portage/repos.conf/steam-overlay.conf << 'EOF'
-          [steam-overlay]
-          location = /var/db/repos/steam-overlay
-          priority = 50
-          masters = gentoo
-          EOF
-
-          cat > /etc/portage/repos.conf/gentoo-nexus.conf << 'EOF'
-          [gentoo-nexus]
-          location = /overlay
-          masters = gentoo guru
-          priority = 9999
-          EOF
-
-          cat > /etc/portage/package.mask/no-live-core << 'MASK'
-          =media-libs/mesa-9999*
-          =dev-util/mesa_clc-9999*
-          =dev-util/spirv-tools-9999*
-          =media-libs/vulkan-loader-9999*
-          MASK
-
-          # UNIFIED DNA - ALL NODES
-          echo "*/*::guru **" >> /etc/portage/package.accept_keywords/guru
-          echo "*/*::steam-overlay **" >> /etc/portage/package.accept_keywords/steam
-          echo "*/*::gentoo-nexus **" >> /etc/portage/package.accept_keywords/nexus
-          echo "media-libs/mesa ~amd64" >> /etc/portage/package.accept_keywords/nexus
-          echo "media-libs/vulkan-loader ~amd64" >> /etc/portage/package.accept_keywords/nexus
-          echo "dev-util/mesa_clc ~amd64" >> /etc/portage/package.accept_keywords/nexus
-          echo "dev-util/spirv-tools ~amd64" >> /etc/portage/package.accept_keywords/nexus
-          echo "dev-util/spirv-headers ~amd64" >> /etc/portage/package.accept_keywords/nexus
-          echo "dev-util/vulkan-headers ~amd64" >> /etc/portage/package.accept_keywords/nexus
-          echo "dev-util/glslang ~amd64" >> /etc/portage/package.accept_keywords/nexus
-          echo "dev-util/vulkan-utility-libraries ~amd64" >> /etc/portage/package.accept_keywords/nexus
-          echo "sys-kernel/gentoo-kernel ~amd64" >> /etc/portage/package.accept_keywords/nexus
-          echo "sys-kernel/linux-firmware ~amd64" >> /etc/portage/package.accept_keywords/nexus
-          echo "virtual/dist-kernel ~amd64" >> /etc/portage/package.accept_keywords/nexus
-
-          cat > /etc/portage/package.mask/fixes << 'MASK'
-          sys-apps/systemd
-          sys-apps/gentoo-systemd-integration
-          =games-util/steam-launcher-1.0.0.85-r3::steam-overlay
-          MASK
-
-          cat > /etc/portage/package.use/global << 'EOF'
-          sys-libs/zlib minizip
-          media-video/pipewire extra
-          media-video/ffmpeg -sdl
-          dev-qt/qtbase wayland X -icu -sql -sqlite
-          sys-libs/ncurses -gpm
-          EOF
-
-          mkdir -p /etc/portage/env /etc/portage/package.env
-          cat > /etc/portage/env/gcc-ice-safe << 'EOF'
-          CFLAGS="-O1 -pipe -fno-tree-loop-vectorize -fno-tree-slp-vectorize"
-          CXXFLAGS="-O1 -pipe -fno-tree-loop-vectorize -fno-tree-slp-vectorize"
-          EOF
-          echo "MAKEOPTS=\"-j$(nproc)\"" >> /etc/portage/env/gcc-ice-safe
-          cat > /etc/portage/package.env/gcc-ice-packages << 'EOF'
-          dev-util/spirv-tools gcc-ice-safe
-          media-libs/mesa gcc-ice-safe
-          EOF
-
-          # FULL 32-bit STEAM SUPPORT ACROSS ALL NODES TO ENSURE MATCHING SIGS
-          cat > /etc/portage/package.use/steam << 'USE'
-          media-libs/mesa abi_x86_32
-          media-libs/vulkan-loader abi_x86_32 layers
-          dev-util/spirv-tools abi_x86_32
-          x11-drivers/nvidia-drivers abi_x86_32
-          app-accessibility/at-spi2-core abi_x86_32
-          app-arch/bzip2 abi_x86_32
-          app-arch/lz4 abi_x86_32
-          app-arch/xz-utils abi_x86_32
-          app-arch/zstd abi_x86_32
-          app-crypt/p11-kit abi_x86_32
-          dev-db/sqlite abi_x86_32
-          dev-libs/dbus-glib abi_x86_32
-          dev-libs/elfutils abi_x86_32
-          dev-libs/expat abi_x86_32
-          dev-libs/fribidi abi_x86_32
-          dev-libs/glib abi_x86_32
-          dev-libs/gmp abi_x86_32
-          dev-libs/icu abi_x86_32
-          dev-libs/json-glib abi_x86_32
-          dev-libs/libevdev abi_x86_32
-          dev-libs/libffi abi_x86_32
-          dev-libs/libgcrypt abi_x86_32
-          dev-libs/libgpg-error abi_x86_32
-          dev-libs/libgudev abi_x86_32
-          dev-libs/libgusb abi_x86_32
-          dev-libs/libpcre2 abi_x86_32
-          dev-libs/libtasn1 abi_x86_32
-          dev-libs/libunistring abi_x86_32
-          dev-libs/libusb abi_x86_32
-          dev-libs/libxml2 abi_x86_32
-          dev-libs/lzo abi_x86_32
-          dev-libs/nettle abi_x86_32
-          dev-libs/nspr abi_x86_32
-          dev-libs/nss abi_x86_32
-          dev-libs/openssl abi_x86_32
-          dev-libs/wayland abi_x86_32
-          dev-util/glslang abi_x86_32
-          dev-util/sysprof-capture abi_x86_32
-          dev-util/vulkan-utility-libraries abi_x86_32
-          gnome-base/librsvg abi_x86_32
-          gui-libs/libdecor abi_x86_32
-          llvm-core/clang abi_x86_32
-          llvm-core/llvm abi_x86_32
-          media-gfx/graphite2 abi_x86_32
-          media-libs/alsa-lib abi_x86_32
-          media-libs/flac abi_x86_32
-          media-libs/fontconfig abi_x86_32
-          media-libs/freetype abi_x86_32
-          media-libs/glu abi_x86_32
-          media-libs/harfbuzz abi_x86_32
-          media-libs/lcms abi_x86_32
-          media-libs/libdisplay-info abi_x86_32
-          media-libs/libepoxy abi_x86_32
-          media-libs/libglvnd abi_x86_32
-          media-libs/libjpeg-turbo abi_x86_32
-          media-libs/libogg abi_x86_32
-          media-libs/libpng abi_x86_32
-          media-libs/libpulse abi_x86_32
-          media-libs/libsdl2 abi_x86_32
-          media-libs/libsndfile abi_x86_32
-          media-libs/libva abi_x86_32
-          media-libs/libvorbis abi_x86_32
-          media-libs/libwebp abi_x86_32
-          media-libs/openal abi_x86_32
-          media-libs/opus abi_x86_32
-          media-libs/tiff abi_x86_32
-          media-libs/vulkan-layers abi_x86_32
-          media-sound/lame abi_x86_32
-          media-sound/mpg123-base abi_x86_32
-          media-video/pipewire abi_x86_32
-          net-dns/c-ares abi_x86_32
-          net-dns/libidn2 abi_x86_32
-          net-libs/gnutls abi_x86_32
-          net-libs/libasyncns abi_x86_32
-          net-libs/libndp abi_x86_32
-          net-libs/libpsl abi_x86_32
-          net-libs/nghttp2 abi_x86_32
-          net-libs/nghttp3 abi_x86_32
-          net-misc/curl abi_x86_32
-          net-misc/networkmanager abi_x86_32
-          net-print/cups abi_x86_32
-          sys-apps/dbus abi_x86_32
-          sys-apps/lm-sensors abi_x86_32
-          sys-apps/systemd abi_x86_32
-          sys-apps/systemd-utils abi_x86_32
-          sys-apps/util-linux abi_x86_32
-          sys-libs/gdbm abi_x86_32
-          sys-libs/gpm abi_x86_32
-          sys-libs/libcap abi_x86_32
-          sys-libs/libudev-compat abi_x86_32
-          sys-libs/ncurses abi_x86_32
-          sys-libs/pam abi_x86_32
-          sys-libs/readline abi_x86_32
-          sys-libs/zlib abi_x86_32
-          virtual/glu abi_x86_32
-          virtual/libelf abi_x86_32
-          virtual/libiconv abi_x86_32
-          virtual/libintl abi_x86_32
-          virtual/libudev abi_x86_32
-          virtual/libusb abi_x86_32
-          virtual/opengl abi_x86_32
-          virtual/zlib abi_x86_32
-          x11-libs/cairo abi_x86_32
-          x11-libs/extest abi_x86_32
-          x11-libs/gdk-pixbuf abi_x86_32
-          x11-libs/gtk+ abi_x86_32
-          x11-libs/libdrm abi_x86_32
-          x11-libs/libICE abi_x86_32
-          x11-libs/libpciaccess abi_x86_32
-          x11-libs/libSM abi_x86_32
-          x11-libs/libvdpau abi_x86_32
-          x11-libs/libX11 abi_x86_32
-          x11-libs/libXau abi_x86_32
-          x11-libs/libxcb abi_x86_32
-          x11-libs/libXcomposite abi_x86_32
-          x11-libs/libXcursor abi_x86_32
-          x11-libs/libXdamage abi_x86_32
-          x11-libs/libXdmcp abi_x86_32
-          x11-libs/libXext abi_x86_32
-          x11-libs/libXfixes abi_x86_32
-          x11-libs/libXft abi_x86_32
-          x11-libs/libXi abi_x86_32
-          x11-libs/libXinerama abi_x86_32
-          x11-libs/libxkbcommon abi_x86_32
-          x11-libs/libXrandr abi_x86_32
-          x11-libs/libXrender abi_x86_32
-          x11-libs/libXScrnSaver abi_x86_32
-          x11-libs/libxshmfence abi_x86_32
-          x11-libs/libXtst abi_x86_32
-          x11-libs/libXxf86vm abi_x86_32
-          x11-libs/pango abi_x86_32
-          x11-libs/pixman abi_x86_32
-          x11-libs/xcb-util-keysyms abi_x86_32
-          x11-misc/colord abi_x86_32
-          USE
-
-          CORE_LIST=(media-libs/vulkan-loader media-video/pipewire media-video/wireplumber media-video/ffmpeg)
+          CORE_LIST=(media-libs/vulkan-loader media-video/pipewire media-video/wireplumber media-video/ffmpeg dev-util/glslang gui-libs/gtk dev-qt/qtbase dev-qt/qtwayland)
           for i in 1 2; do emerge --deep --newuse "${CORE_LIST[@]}" 2>&1 && break || etc-update --automode -5; done
           emerge --deep --newuse "${CORE_LIST[@]}"
           BUILDEOF
@@ -1170,12 +648,11 @@ jobs:
           path: job_out/
           retention-days: 1
 
-
   build-base:
     name: Vanguard Base
     needs: build-mesa-vanguard
     runs-on: ubuntu-latest
-    timeout-minutes: 240
+    timeout-minutes: 360
     steps:
       - uses: actions/download-artifact@v4
         with:
@@ -1193,286 +670,18 @@ jobs:
             ccache-base-
       - name: Execute Base Build
         run: |
-          mkdir -p /tmp/distfiles /tmp/ccache
-          chmod 777 /tmp/distfiles /tmp/ccache
           cat > build_script.sh << 'BUILDEOF'
           #!/bin/bash
           set -euo pipefail
-          mkdir -p /var/db/repos/{gentoo,guru,steam-overlay} /etc/portage/{repos.conf,binrepos.conf,env,package.{accept_keywords,license,use,mask,env}} /overlay/{distfiles,job_out}
+          source /overlay/portage_dna.sh
           
-          emaint binhost --fix
-
-          cat > /etc/portage/binrepos.conf/gentoo.conf << 'EOF'
-          [gentoo]
-          priority = 10000
-          sync-uri = https://distfiles.gentoo.org/releases/amd64/binpackages/23.0/x86-64/
-          verify-signature = false
-          EOF
-
-          cat > /etc/portage/binrepos.conf/nexus.conf << 'EOF'
-          [gentoo-nexus-gh]
-          priority = 9999
-          sync-uri = https://${{ github.repository_owner }}.github.io/${{ github.event.repository.name }}/
-          verify-signature = false
-          EOF
-
-          cat >> /etc/portage/make.conf << 'MAKECONF'
-          COMMON_FLAGS="-O2 -march=x86-64 -pipe"
-          CFLAGS="${COMMON_FLAGS}"
-          CXXFLAGS="${COMMON_FLAGS}"
-          RUSTFLAGS="-C target-cpu=x86-64 -C opt-level=2"
-          USE="wayland X vulkan pipewire dbus udev opengl dri gbm vaapi vdpau ffmpeg minizip -daemon -systemd -aqua -cups"
-          VIDEO_CARDS="amdgpu radeon radeonsi intel iris nouveau virgl"
-          FEATURES="-sandbox -usersandbox -ipc-sandbox -network-sandbox -pid-sandbox buildpkg parallel-install getbinpkg -binpkg-request-signature ccache"
-          CCACHE_DIR="/var/cache/ccache"
-          CCACHE_UMASK="002"
-          EMERGE_DEFAULT_OPTS="--getbinpkg --usepkg --binpkg-respect-use=y --binpkg-changed-deps=y --autounmask=y --autounmask-write --keep-going --quiet"
-          DISTDIR="/var/cache/distfiles"
-          PKGDIR="/overlay/job_out"
-          ACCEPT_LICENSE="*"
-          EVCS_OFFLINE=1
-          MAKECONF
-          echo "MAKEOPTS=\"-j$(nproc)\"" >> /etc/portage/make.conf
-
-          emerge-webrsync -q || true
-          getuto || true
-          eselect profile set default/linux/amd64/23.0/desktop
-          
-          echo ">>> Bootstrapping Tools..."
-          emerge --noreplace --quiet dev-vcs/git dev-util/ccache
-          
-          chown -R portage:portage /var/cache/ccache
-          chmod -R 2777 /var/cache/ccache
-          
-          echo ">>> Cloning Overlays..."
-          git clone --depth 1 https://github.com/gentoo-mirror/guru.git /var/db/repos/guru || true
-          git clone --depth 1 https://github.com/anyc/steam-overlay.git /var/db/repos/steam-overlay || true
-
-          echo ">>> Fixing upstream Steam Overlay corruptions..."
-          if [ -d /var/db/repos/steam-overlay/games-util/steam-launcher ]; then
-            cd /var/db/repos/steam-overlay/games-util/steam-launcher
-            ebuild $(ls *.ebuild | tail -n1) manifest || true
-            cd /
-          fi
-          
-          mkdir -p /var/db/repos/guru/metadata /var/db/repos/steam-overlay/metadata
-          echo "masters = gentoo" > /var/db/repos/guru/metadata/layout.conf
-          echo "masters = gentoo" > /var/db/repos/steam-overlay/metadata/layout.conf
-
-          cat > /etc/portage/repos.conf/guru.conf << 'EOF'
-          [guru]
-          location = /var/db/repos/guru
-          priority = 50
-          masters = gentoo
-          EOF
-          
-          cat > /etc/portage/repos.conf/steam-overlay.conf << 'EOF'
-          [steam-overlay]
-          location = /var/db/repos/steam-overlay
-          priority = 50
-          masters = gentoo
-          EOF
-
-          cat > /etc/portage/repos.conf/gentoo-nexus.conf << 'EOF'
-          [gentoo-nexus]
-          location = /overlay
-          masters = gentoo guru
-          priority = 9999
-          EOF
-
-          cat > /etc/portage/package.mask/no-live-core << 'MASK'
-          =media-libs/mesa-9999*
-          =dev-util/mesa_clc-9999*
-          =dev-util/spirv-tools-9999*
-          =media-libs/vulkan-loader-9999*
-          MASK
-
-          # UNIFIED DNA - ALL NODES
-          echo "*/*::guru **" >> /etc/portage/package.accept_keywords/guru
-          echo "*/*::steam-overlay **" >> /etc/portage/package.accept_keywords/steam
-          echo "*/*::gentoo-nexus **" >> /etc/portage/package.accept_keywords/nexus
-          echo "media-libs/mesa ~amd64" >> /etc/portage/package.accept_keywords/nexus
-          echo "media-libs/vulkan-loader ~amd64" >> /etc/portage/package.accept_keywords/nexus
-          echo "dev-util/mesa_clc ~amd64" >> /etc/portage/package.accept_keywords/nexus
-          echo "dev-util/spirv-tools ~amd64" >> /etc/portage/package.accept_keywords/nexus
-          echo "dev-util/spirv-headers ~amd64" >> /etc/portage/package.accept_keywords/nexus
-          echo "dev-util/vulkan-headers ~amd64" >> /etc/portage/package.accept_keywords/nexus
-          echo "dev-util/glslang ~amd64" >> /etc/portage/package.accept_keywords/nexus
-          echo "dev-util/vulkan-utility-libraries ~amd64" >> /etc/portage/package.accept_keywords/nexus
-          echo "sys-kernel/gentoo-kernel ~amd64" >> /etc/portage/package.accept_keywords/nexus
-          echo "sys-kernel/linux-firmware ~amd64" >> /etc/portage/package.accept_keywords/nexus
-          echo "virtual/dist-kernel ~amd64" >> /etc/portage/package.accept_keywords/nexus
-
-          cat > /etc/portage/package.mask/fixes << 'MASK'
-          sys-apps/systemd
-          sys-apps/gentoo-systemd-integration
-          =games-util/steam-launcher-1.0.0.85-r3::steam-overlay
-          MASK
-
-          cat > /etc/portage/package.use/global << 'EOF'
-          sys-libs/zlib minizip
-          media-video/pipewire extra
-          media-video/ffmpeg -sdl
-          dev-qt/qtbase wayland X -icu -sql -sqlite
-          sys-libs/ncurses -gpm
-          EOF
-
-          mkdir -p /etc/portage/env /etc/portage/package.env
-          cat > /etc/portage/env/gcc-ice-safe << 'EOF'
-          CFLAGS="-O1 -pipe -fno-tree-loop-vectorize -fno-tree-slp-vectorize"
-          CXXFLAGS="-O1 -pipe -fno-tree-loop-vectorize -fno-tree-slp-vectorize"
-          EOF
-          echo "MAKEOPTS=\"-j$(nproc)\"" >> /etc/portage/env/gcc-ice-safe
-          cat > /etc/portage/package.env/gcc-ice-packages << 'EOF'
-          dev-util/spirv-tools gcc-ice-safe
-          media-libs/mesa gcc-ice-safe
-          EOF
-
-          # FULL 32-bit STEAM SUPPORT ACROSS ALL NODES TO ENSURE MATCHING SIGS
-          cat > /etc/portage/package.use/steam << 'USE'
-          media-libs/mesa abi_x86_32
-          media-libs/vulkan-loader abi_x86_32 layers
-          dev-util/spirv-tools abi_x86_32
-          x11-drivers/nvidia-drivers abi_x86_32
-          app-accessibility/at-spi2-core abi_x86_32
-          app-arch/bzip2 abi_x86_32
-          app-arch/lz4 abi_x86_32
-          app-arch/xz-utils abi_x86_32
-          app-arch/zstd abi_x86_32
-          app-crypt/p11-kit abi_x86_32
-          dev-db/sqlite abi_x86_32
-          dev-libs/dbus-glib abi_x86_32
-          dev-libs/elfutils abi_x86_32
-          dev-libs/expat abi_x86_32
-          dev-libs/fribidi abi_x86_32
-          dev-libs/glib abi_x86_32
-          dev-libs/gmp abi_x86_32
-          dev-libs/icu abi_x86_32
-          dev-libs/json-glib abi_x86_32
-          dev-libs/libevdev abi_x86_32
-          dev-libs/libffi abi_x86_32
-          dev-libs/libgcrypt abi_x86_32
-          dev-libs/libgpg-error abi_x86_32
-          dev-libs/libgudev abi_x86_32
-          dev-libs/libgusb abi_x86_32
-          dev-libs/libpcre2 abi_x86_32
-          dev-libs/libtasn1 abi_x86_32
-          dev-libs/libunistring abi_x86_32
-          dev-libs/libusb abi_x86_32
-          dev-libs/libxml2 abi_x86_32
-          dev-libs/lzo abi_x86_32
-          dev-libs/nettle abi_x86_32
-          dev-libs/nspr abi_x86_32
-          dev-libs/nss abi_x86_32
-          dev-libs/openssl abi_x86_32
-          dev-libs/wayland abi_x86_32
-          dev-util/glslang abi_x86_32
-          dev-util/sysprof-capture abi_x86_32
-          dev-util/vulkan-utility-libraries abi_x86_32
-          gnome-base/librsvg abi_x86_32
-          gui-libs/libdecor abi_x86_32
-          llvm-core/clang abi_x86_32
-          llvm-core/llvm abi_x86_32
-          media-gfx/graphite2 abi_x86_32
-          media-libs/alsa-lib abi_x86_32
-          media-libs/flac abi_x86_32
-          media-libs/fontconfig abi_x86_32
-          media-libs/freetype abi_x86_32
-          media-libs/glu abi_x86_32
-          media-libs/harfbuzz abi_x86_32
-          media-libs/lcms abi_x86_32
-          media-libs/libdisplay-info abi_x86_32
-          media-libs/libepoxy abi_x86_32
-          media-libs/libglvnd abi_x86_32
-          media-libs/libjpeg-turbo abi_x86_32
-          media-libs/libogg abi_x86_32
-          media-libs/libpng abi_x86_32
-          media-libs/libpulse abi_x86_32
-          media-libs/libsdl2 abi_x86_32
-          media-libs/libsndfile abi_x86_32
-          media-libs/libva abi_x86_32
-          media-libs/libvorbis abi_x86_32
-          media-libs/libwebp abi_x86_32
-          media-libs/openal abi_x86_32
-          media-libs/opus abi_x86_32
-          media-libs/tiff abi_x86_32
-          media-libs/vulkan-layers abi_x86_32
-          media-sound/lame abi_x86_32
-          media-sound/mpg123-base abi_x86_32
-          media-video/pipewire abi_x86_32
-          net-dns/c-ares abi_x86_32
-          net-dns/libidn2 abi_x86_32
-          net-libs/gnutls abi_x86_32
-          net-libs/libasyncns abi_x86_32
-          net-libs/libndp abi_x86_32
-          net-libs/libpsl abi_x86_32
-          net-libs/nghttp2 abi_x86_32
-          net-libs/nghttp3 abi_x86_32
-          net-misc/curl abi_x86_32
-          net-misc/networkmanager abi_x86_32
-          net-print/cups abi_x86_32
-          sys-apps/dbus abi_x86_32
-          sys-apps/lm-sensors abi_x86_32
-          sys-apps/systemd abi_x86_32
-          sys-apps/systemd-utils abi_x86_32
-          sys-apps/util-linux abi_x86_32
-          sys-libs/gdbm abi_x86_32
-          sys-libs/gpm abi_x86_32
-          sys-libs/libcap abi_x86_32
-          sys-libs/libudev-compat abi_x86_32
-          sys-libs/ncurses abi_x86_32
-          sys-libs/pam abi_x86_32
-          sys-libs/readline abi_x86_32
-          sys-libs/zlib abi_x86_32
-          virtual/glu abi_x86_32
-          virtual/libelf abi_x86_32
-          virtual/libiconv abi_x86_32
-          virtual/libintl abi_x86_32
-          virtual/libudev abi_x86_32
-          virtual/libusb abi_x86_32
-          virtual/opengl abi_x86_32
-          virtual/zlib abi_x86_32
-          x11-libs/cairo abi_x86_32
-          x11-libs/extest abi_x86_32
-          x11-libs/gdk-pixbuf abi_x86_32
-          x11-libs/gtk+ abi_x86_32
-          x11-libs/libdrm abi_x86_32
-          x11-libs/libICE abi_x86_32
-          x11-libs/libpciaccess abi_x86_32
-          x11-libs/libSM abi_x86_32
-          x11-libs/libvdpau abi_x86_32
-          x11-libs/libX11 abi_x86_32
-          x11-libs/libXau abi_x86_32
-          x11-libs/libxcb abi_x86_32
-          x11-libs/libXcomposite abi_x86_32
-          x11-libs/libXcursor abi_x86_32
-          x11-libs/libXdamage abi_x86_32
-          x11-libs/libXdmcp abi_x86_32
-          x11-libs/libXext abi_x86_32
-          x11-libs/libXfixes abi_x86_32
-          x11-libs/libXft abi_x86_32
-          x11-libs/libXi abi_x86_32
-          x11-libs/libXinerama abi_x86_32
-          x11-libs/libxkbcommon abi_x86_32
-          x11-libs/libXrandr abi_x86_32
-          x11-libs/libXrender abi_x86_32
-          x11-libs/libXScrnSaver abi_x86_32
-          x11-libs/libxshmfence abi_x86_32
-          x11-libs/libXtst abi_x86_32
-          x11-libs/libXxf86vm abi_x86_32
-          x11-libs/pango abi_x86_32
-          x11-libs/pixman abi_x86_32
-          x11-libs/xcb-util-keysyms abi_x86_32
-          x11-misc/colord abi_x86_32
-          USE
-
           BASE_LIST=(sys-boot/grub sys-boot/efibootmgr sys-auth/elogind sys-auth/seatd net-misc/networkmanager)
 
           if [ -s /overlay/changed_packages.txt ]; then
-              echo ">>> Filtering conflicting packages..."
               sed -i '/gui-apps\/quickshell/d' /overlay/changed_packages.txt || true
               sed -i '/gui-wm\/dank-material-shell/d' /overlay/changed_packages.txt || true
-              echo ">>> Adding custom overlay packages to Base build target..."
+              sed -i '/gui-wm\/noctalia-shell/d' /overlay/changed_packages.txt || true
+              sed -i '/sys-kernel\//d' /overlay/changed_packages.txt || true
               while IFS= read -r pkg_dir; do
                   [ -z "$pkg_dir" ] && continue
                   BASE_LIST+=("$pkg_dir")
@@ -1490,12 +699,11 @@ jobs:
           path: job_out/
           retention-days: 1
 
-
   build-harmony-32bit:
-    name: Harmony Multilib (32-bit)
+    name: Harmony Multilib (Steam)
     needs: build-mesa-vanguard
     runs-on: ubuntu-latest
-    timeout-minutes: 240
+    timeout-minutes: 360
     steps:
       - uses: actions/download-artifact@v4
         with:
@@ -1511,282 +719,14 @@ jobs:
           key: ccache-harmony-${{ github.run_id }}
           restore-keys: |
             ccache-graphics-
-      - name: Execute 32-Bit Harmony Build
+      - name: Execute 32-Bit Steam Build
         run: |
-          mkdir -p /tmp/distfiles /tmp/ccache
-          chmod 777 /tmp/distfiles /tmp/ccache
           cat > build_script.sh << 'BUILDEOF'
           #!/bin/bash
           set -euo pipefail
-          mkdir -p /var/db/repos/{gentoo,guru,steam-overlay} /etc/portage/{repos.conf,binrepos.conf,env,package.{accept_keywords,license,use,mask,env}} /overlay/{distfiles,job_out}
+          source /overlay/portage_dna.sh
           
-          emaint binhost --fix
-
-          cat > /etc/portage/binrepos.conf/gentoo.conf << 'EOF'
-          [gentoo]
-          priority = 10000
-          sync-uri = https://distfiles.gentoo.org/releases/amd64/binpackages/23.0/x86-64/
-          verify-signature = false
-          EOF
-
-          cat > /etc/portage/binrepos.conf/nexus.conf << 'EOF'
-          [gentoo-nexus-gh]
-          priority = 9999
-          sync-uri = https://${{ github.repository_owner }}.github.io/${{ github.event.repository.name }}/
-          verify-signature = false
-          EOF
-
-          cat >> /etc/portage/make.conf << 'MAKECONF'
-          COMMON_FLAGS="-O2 -march=x86-64 -pipe"
-          CFLAGS="${COMMON_FLAGS}"
-          CXXFLAGS="${COMMON_FLAGS}"
-          RUSTFLAGS="-C target-cpu=x86-64 -C opt-level=2"
-          USE="wayland X vulkan opengl dri gbm minizip -daemon -systemd"
-          VIDEO_CARDS="amdgpu radeon radeonsi intel iris nouveau virgl"
-          FEATURES="-sandbox -usersandbox -ipc-sandbox -network-sandbox -pid-sandbox buildpkg parallel-install getbinpkg -binpkg-request-signature ccache"
-          CCACHE_DIR="/var/cache/ccache"
-          CCACHE_UMASK="002"
-          EMERGE_DEFAULT_OPTS="--getbinpkg --usepkg --binpkg-respect-use=y --binpkg-changed-deps=y --autounmask=y --autounmask-write --keep-going --quiet"
-          DISTDIR="/var/cache/distfiles"
-          PKGDIR="/overlay/job_out"
-          ACCEPT_LICENSE="*"
-          EVCS_OFFLINE=1
-          MAKECONF
-          echo "MAKEOPTS=\"-j$(nproc)\"" >> /etc/portage/make.conf
-
-          emerge-webrsync -q || true
-          getuto || true
-          eselect profile set default/linux/amd64/23.0/desktop
-          
-          echo ">>> Bootstrapping Tools..."
-          emerge --noreplace --quiet dev-vcs/git dev-util/ccache
-          
-          chown -R portage:portage /var/cache/ccache
-          chmod -R 2777 /var/cache/ccache
-          
-          echo ">>> Cloning Overlays..."
-          git clone --depth 1 https://github.com/gentoo-mirror/guru.git /var/db/repos/guru || true
-          git clone --depth 1 https://github.com/anyc/steam-overlay.git /var/db/repos/steam-overlay || true
-          
-          echo ">>> Fixing upstream Steam Overlay corruptions..."
-          if [ -d /var/db/repos/steam-overlay/games-util/steam-launcher ]; then
-            cd /var/db/repos/steam-overlay/games-util/steam-launcher
-            ebuild $(ls *.ebuild | tail -n1) manifest || true
-            cd /
-          fi
-          
-          mkdir -p /var/db/repos/guru/metadata /var/db/repos/steam-overlay/metadata
-          echo "masters = gentoo" > /var/db/repos/guru/metadata/layout.conf
-          echo "masters = gentoo" > /var/db/repos/steam-overlay/metadata/layout.conf
-
-          cat > /etc/portage/repos.conf/guru.conf << 'EOF'
-          [guru]
-          location = /var/db/repos/guru
-          priority = 50
-          masters = gentoo
-          EOF
-          
-          cat > /etc/portage/repos.conf/steam-overlay.conf << 'EOF'
-          [steam-overlay]
-          location = /var/db/repos/steam-overlay
-          priority = 50
-          masters = gentoo
-          EOF
-
-          cat > /etc/portage/repos.conf/gentoo-nexus.conf << 'EOF'
-          [gentoo-nexus]
-          location = /overlay
-          masters = gentoo guru
-          priority = 9999
-          EOF
-
-          cat > /etc/portage/package.mask/no-live-core << 'MASK'
-          =media-libs/mesa-9999*
-          =dev-util/mesa_clc-9999*
-          =dev-util/spirv-tools-9999*
-          =media-libs/vulkan-loader-9999*
-          MASK
-
-          # UNIFIED DNA - ALL NODES
-          echo "*/*::guru **" >> /etc/portage/package.accept_keywords/guru
-          echo "*/*::steam-overlay **" >> /etc/portage/package.accept_keywords/steam
-          echo "*/*::gentoo-nexus **" >> /etc/portage/package.accept_keywords/nexus
-          echo "media-libs/mesa ~amd64" >> /etc/portage/package.accept_keywords/nexus
-          echo "media-libs/vulkan-loader ~amd64" >> /etc/portage/package.accept_keywords/nexus
-          echo "dev-util/mesa_clc ~amd64" >> /etc/portage/package.accept_keywords/nexus
-          echo "dev-util/spirv-tools ~amd64" >> /etc/portage/package.accept_keywords/nexus
-          echo "dev-util/spirv-headers ~amd64" >> /etc/portage/package.accept_keywords/nexus
-          echo "dev-util/vulkan-headers ~amd64" >> /etc/portage/package.accept_keywords/nexus
-          echo "dev-util/glslang ~amd64" >> /etc/portage/package.accept_keywords/nexus
-          echo "dev-util/vulkan-utility-libraries ~amd64" >> /etc/portage/package.accept_keywords/nexus
-          echo "sys-kernel/gentoo-kernel ~amd64" >> /etc/portage/package.accept_keywords/nexus
-          echo "sys-kernel/linux-firmware ~amd64" >> /etc/portage/package.accept_keywords/nexus
-          echo "virtual/dist-kernel ~amd64" >> /etc/portage/package.accept_keywords/nexus
-
-          cat > /etc/portage/package.mask/fixes << 'MASK'
-          sys-apps/systemd
-          sys-apps/gentoo-systemd-integration
-          =games-util/steam-launcher-1.0.0.85-r3::steam-overlay
-          MASK
-
-          cat > /etc/portage/package.use/global << 'EOF'
-          sys-libs/zlib minizip
-          media-video/pipewire extra
-          media-video/ffmpeg -sdl
-          dev-qt/qtbase wayland X -icu -sql -sqlite
-          sys-libs/ncurses -gpm
-          EOF
-
-          mkdir -p /etc/portage/env /etc/portage/package.env
-          cat > /etc/portage/env/gcc-ice-safe << 'EOF'
-          CFLAGS="-O1 -pipe -fno-tree-loop-vectorize -fno-tree-slp-vectorize"
-          CXXFLAGS="-O1 -pipe -fno-tree-loop-vectorize -fno-tree-slp-vectorize"
-          EOF
-          echo "MAKEOPTS=\"-j$(nproc)\"" >> /etc/portage/env/gcc-ice-safe
-          cat > /etc/portage/package.env/gcc-ice-packages << 'EOF'
-          dev-util/spirv-tools gcc-ice-safe
-          media-libs/mesa gcc-ice-safe
-          EOF
-
-          # FULL 32-bit STEAM SUPPORT ACROSS ALL NODES TO ENSURE MATCHING SIGS
-          cat > /etc/portage/package.use/steam << 'USE'
-          media-libs/mesa abi_x86_32
-          media-libs/vulkan-loader abi_x86_32 layers
-          dev-util/spirv-tools abi_x86_32
-          x11-drivers/nvidia-drivers abi_x86_32
-          app-accessibility/at-spi2-core abi_x86_32
-          app-arch/bzip2 abi_x86_32
-          app-arch/lz4 abi_x86_32
-          app-arch/xz-utils abi_x86_32
-          app-arch/zstd abi_x86_32
-          app-crypt/p11-kit abi_x86_32
-          dev-db/sqlite abi_x86_32
-          dev-libs/dbus-glib abi_x86_32
-          dev-libs/elfutils abi_x86_32
-          dev-libs/expat abi_x86_32
-          dev-libs/fribidi abi_x86_32
-          dev-libs/glib abi_x86_32
-          dev-libs/gmp abi_x86_32
-          dev-libs/icu abi_x86_32
-          dev-libs/json-glib abi_x86_32
-          dev-libs/libevdev abi_x86_32
-          dev-libs/libffi abi_x86_32
-          dev-libs/libgcrypt abi_x86_32
-          dev-libs/libgpg-error abi_x86_32
-          dev-libs/libgudev abi_x86_32
-          dev-libs/libgusb abi_x86_32
-          dev-libs/libpcre2 abi_x86_32
-          dev-libs/libtasn1 abi_x86_32
-          dev-libs/libunistring abi_x86_32
-          dev-libs/libusb abi_x86_32
-          dev-libs/libxml2 abi_x86_32
-          dev-libs/lzo abi_x86_32
-          dev-libs/nettle abi_x86_32
-          dev-libs/nspr abi_x86_32
-          dev-libs/nss abi_x86_32
-          dev-libs/openssl abi_x86_32
-          dev-libs/wayland abi_x86_32
-          dev-util/glslang abi_x86_32
-          dev-util/sysprof-capture abi_x86_32
-          dev-util/vulkan-utility-libraries abi_x86_32
-          gnome-base/librsvg abi_x86_32
-          gui-libs/libdecor abi_x86_32
-          llvm-core/clang abi_x86_32
-          llvm-core/llvm abi_x86_32
-          media-gfx/graphite2 abi_x86_32
-          media-libs/alsa-lib abi_x86_32
-          media-libs/flac abi_x86_32
-          media-libs/fontconfig abi_x86_32
-          media-libs/freetype abi_x86_32
-          media-libs/glu abi_x86_32
-          media-libs/harfbuzz abi_x86_32
-          media-libs/lcms abi_x86_32
-          media-libs/libdisplay-info abi_x86_32
-          media-libs/libepoxy abi_x86_32
-          media-libs/libglvnd abi_x86_32
-          media-libs/libjpeg-turbo abi_x86_32
-          media-libs/libogg abi_x86_32
-          media-libs/libpng abi_x86_32
-          media-libs/libpulse abi_x86_32
-          media-libs/libsdl2 abi_x86_32
-          media-libs/libsndfile abi_x86_32
-          media-libs/libva abi_x86_32
-          media-libs/libvorbis abi_x86_32
-          media-libs/libwebp abi_x86_32
-          media-libs/openal abi_x86_32
-          media-libs/opus abi_x86_32
-          media-libs/tiff abi_x86_32
-          media-libs/vulkan-layers abi_x86_32
-          media-sound/lame abi_x86_32
-          media-sound/mpg123-base abi_x86_32
-          media-video/pipewire abi_x86_32
-          net-dns/c-ares abi_x86_32
-          net-dns/libidn2 abi_x86_32
-          net-libs/gnutls abi_x86_32
-          net-libs/libasyncns abi_x86_32
-          net-libs/libndp abi_x86_32
-          net-libs/libpsl abi_x86_32
-          net-libs/nghttp2 abi_x86_32
-          net-libs/nghttp3 abi_x86_32
-          net-misc/curl abi_x86_32
-          net-misc/networkmanager abi_x86_32
-          net-print/cups abi_x86_32
-          sys-apps/dbus abi_x86_32
-          sys-apps/lm-sensors abi_x86_32
-          sys-apps/systemd abi_x86_32
-          sys-apps/systemd-utils abi_x86_32
-          sys-apps/util-linux abi_x86_32
-          sys-libs/gdbm abi_x86_32
-          sys-libs/gpm abi_x86_32
-          sys-libs/libcap abi_x86_32
-          sys-libs/libudev-compat abi_x86_32
-          sys-libs/ncurses abi_x86_32
-          sys-libs/pam abi_x86_32
-          sys-libs/readline abi_x86_32
-          sys-libs/zlib abi_x86_32
-          virtual/glu abi_x86_32
-          virtual/libelf abi_x86_32
-          virtual/libiconv abi_x86_32
-          virtual/libintl abi_x86_32
-          virtual/libudev abi_x86_32
-          virtual/libusb abi_x86_32
-          virtual/opengl abi_x86_32
-          virtual/zlib abi_x86_32
-          x11-libs/cairo abi_x86_32
-          x11-libs/extest abi_x86_32
-          x11-libs/gdk-pixbuf abi_x86_32
-          x11-libs/gtk+ abi_x86_32
-          x11-libs/libdrm abi_x86_32
-          x11-libs/libICE abi_x86_32
-          x11-libs/libpciaccess abi_x86_32
-          x11-libs/libSM abi_x86_32
-          x11-libs/libvdpau abi_x86_32
-          x11-libs/libX11 abi_x86_32
-          x11-libs/libXau abi_x86_32
-          x11-libs/libxcb abi_x86_32
-          x11-libs/libXcomposite abi_x86_32
-          x11-libs/libXcursor abi_x86_32
-          x11-libs/libXdamage abi_x86_32
-          x11-libs/libXdmcp abi_x86_32
-          x11-libs/libXext abi_x86_32
-          x11-libs/libXfixes abi_x86_32
-          x11-libs/libXft abi_x86_32
-          x11-libs/libXi abi_x86_32
-          x11-libs/libXinerama abi_x86_32
-          x11-libs/libxkbcommon abi_x86_32
-          x11-libs/libXrandr abi_x86_32
-          x11-libs/libXrender abi_x86_32
-          x11-libs/libXScrnSaver abi_x86_32
-          x11-libs/libxshmfence abi_x86_32
-          x11-libs/libXtst abi_x86_32
-          x11-libs/libXxf86vm abi_x86_32
-          x11-libs/pango abi_x86_32
-          x11-libs/pixman abi_x86_32
-          x11-libs/xcb-util-keysyms abi_x86_32
-          x11-misc/colord abi_x86_32
-          USE
-
-          STEAM_LIST=(media-libs/mesa media-libs/vulkan-loader games-util/steam-launcher)
+          STEAM_LIST=(games-util/steam-launcher)
           for i in 1 2; do emerge --deep --newuse "${STEAM_LIST[@]}" 2>&1 && break || etc-update --automode -5; done
           emerge --deep --newuse "${STEAM_LIST[@]}"
           BUILDEOF
@@ -1798,7 +738,6 @@ jobs:
           path: job_out/
           retention-days: 1
 
-
   # =====================================================================
   # PHASE 4: SNIPER MODE
   # =====================================================================
@@ -1807,7 +746,7 @@ jobs:
     needs: overlay-scan
     if: github.event.inputs.atom != ''
     runs-on: ubuntu-latest
-    timeout-minutes: 240
+    timeout-minutes: 360
     steps:
       - uses: actions/download-artifact@v4
         with:
@@ -1823,291 +762,32 @@ jobs:
           if [ -z "$EBUILD_FILE" ]; then echo "skip=false" >> "$GITHUB_OUTPUT"; exit 0; fi
           PN=$(basename "${PKG}"); VER=$(basename "${EBUILD_FILE}" | sed -E "s/^${PN}-//; s/\.ebuild$//")
           HTTP_STATUS=$(curl -sL -o gh_packages.txt -w "%{http_code}" --connect-timeout 15 --retry 3 "$BINHOST" || echo "000")
-          if [ "$HTTP_STATUS" -eq 200 ] && grep -q "^CPV: ${PKG}-${VER}$" gh_packages.txt; then echo "skip=true" >> "$GITHUB_OUTPUT"; else echo "skip=false" >> "$GITHUB_OUTPUT"; fi
+          if [ "$HTTP_STATUS" -eq 200 ] && grep -qF "CPV: ${PKG}-${VER}" gh_packages.txt; then echo "skip=true" >> "$GITHUB_OUTPUT"; else echo "skip=false" >> "$GITHUB_OUTPUT"; fi
       - name: Execute Sniper Build
         if: steps.check_bin.outputs.skip == 'false'
+        env:
+          TARGET_ATOM: ${{ github.event.inputs.atom }}
         run: |
-          mkdir -p job_out /tmp/distfiles /tmp/ccache
-          chmod 777 /tmp/distfiles /tmp/ccache
+          echo "$TARGET_ATOM" > /tmp/sniper_target.txt
+          cp /tmp/sniper_target.txt sniper_target.txt
+
           cat > build_script.sh << 'BUILDEOF'
           #!/bin/bash
           set -euo pipefail
-          mkdir -p /var/db/repos/{gentoo,guru,steam-overlay} /etc/portage/{repos.conf,binrepos.conf,env,package.{accept_keywords,license,use,mask,env}} /overlay/{distfiles,job_out}
+          source /overlay/portage_dna.sh
           
-          cat > /etc/portage/binrepos.conf/gentoo.conf << 'EOF'
-          [gentoo]
-          priority = 10000
-          sync-uri = https://distfiles.gentoo.org/releases/amd64/binpackages/23.0/x86-64/
-          verify-signature = false
-          EOF
-
-          cat > /etc/portage/binrepos.conf/nexus.conf << 'EOF'
-          [gentoo-nexus-gh]
-          priority = 9999
-          sync-uri = https://${{ github.repository_owner }}.github.io/${{ github.event.repository.name }}/
-          verify-signature = false
-          EOF
-
-          cat >> /etc/portage/make.conf << 'MAKECONF'
-          COMMON_FLAGS="-O2 -march=x86-64 -pipe"
-          CFLAGS="${COMMON_FLAGS}"
-          CXXFLAGS="${COMMON_FLAGS}"
-          RUSTFLAGS="-C target-cpu=x86-64 -C opt-level=2"
-          USE="wayland X vulkan pipewire dbus udev opengl dri gbm vaapi vdpau ffmpeg minizip -daemon -systemd -aqua -cups"
-          VIDEO_CARDS="amdgpu radeon radeonsi intel iris nouveau virgl"
-          FEATURES="-sandbox -usersandbox -ipc-sandbox -network-sandbox -pid-sandbox buildpkg parallel-install getbinpkg -binpkg-request-signature ccache"
-          CCACHE_DIR="/var/cache/ccache"
-          CCACHE_UMASK="002"
-          EMERGE_DEFAULT_OPTS="--getbinpkg --usepkg --binpkg-respect-use=y --binpkg-changed-deps=y --autounmask=y --autounmask-write --keep-going --quiet"
-          DISTDIR="/var/cache/distfiles"
-          PKGDIR="/overlay/job_out"
-          ACCEPT_LICENSE="*"
-          EVCS_OFFLINE=1
-          MAKECONF
-          echo "MAKEOPTS=\"-j$(nproc)\"" >> /etc/portage/make.conf
-
-          emerge-webrsync -q || true
-          getuto || true
-          eselect profile set default/linux/amd64/23.0/desktop
+          TARGET_PKG=$(cat /overlay/sniper_target.txt 2>/dev/null || echo "")
+          if [ -z "$TARGET_PKG" ]; then exit 1; fi
           
-          echo ">>> Bootstrapping Tools..."
-          emerge --noreplace --quiet dev-vcs/git dev-util/ccache
-          
-          chown -R portage:portage /var/cache/ccache
-          chmod -R 2777 /var/cache/ccache
-          
-          echo ">>> Cloning Overlays..."
-          git clone --depth 1 https://github.com/gentoo-mirror/guru.git /var/db/repos/guru || true
-          git clone --depth 1 https://github.com/anyc/steam-overlay.git /var/db/repos/steam-overlay || true
-          
-          echo ">>> Fixing upstream Steam Overlay corruptions..."
-          if [ -d /var/db/repos/steam-overlay/games-util/steam-launcher ]; then
-            cd /var/db/repos/steam-overlay/games-util/steam-launcher
-            ebuild $(ls *.ebuild | tail -n1) manifest || true
-            cd /
-          fi
-          
-          mkdir -p /var/db/repos/guru/metadata /var/db/repos/steam-overlay/metadata
-          echo "masters = gentoo" > /var/db/repos/guru/metadata/layout.conf
-          echo "masters = gentoo" > /var/db/repos/steam-overlay/metadata/layout.conf
-
-          cat > /etc/portage/repos.conf/guru.conf << 'EOF'
-          [guru]
-          location = /var/db/repos/guru
-          priority = 50
-          masters = gentoo
-          EOF
-          
-          cat > /etc/portage/repos.conf/steam-overlay.conf << 'EOF'
-          [steam-overlay]
-          location = /var/db/repos/steam-overlay
-          priority = 50
-          masters = gentoo
-          EOF
-
-          cat > /etc/portage/repos.conf/gentoo-nexus.conf << 'EOF'
-          [gentoo-nexus]
-          location = /overlay
-          masters = gentoo guru
-          priority = 9999
-          EOF
-
-          cat > /etc/portage/package.mask/no-live-core << 'MASK'
-          =media-libs/mesa-9999*
-          =dev-util/mesa_clc-9999*
-          =dev-util/spirv-tools-9999*
-          =media-libs/vulkan-loader-9999*
-          MASK
-
-          # UNIFIED DNA - ALL NODES
-          echo "*/*::guru **" >> /etc/portage/package.accept_keywords/guru
-          echo "*/*::steam-overlay **" >> /etc/portage/package.accept_keywords/steam
-          echo "*/*::gentoo-nexus **" >> /etc/portage/package.accept_keywords/nexus
-          echo "media-libs/mesa ~amd64" >> /etc/portage/package.accept_keywords/nexus
-          echo "media-libs/vulkan-loader ~amd64" >> /etc/portage/package.accept_keywords/nexus
-          echo "dev-util/mesa_clc ~amd64" >> /etc/portage/package.accept_keywords/nexus
-          echo "dev-util/spirv-tools ~amd64" >> /etc/portage/package.accept_keywords/nexus
-          echo "dev-util/spirv-headers ~amd64" >> /etc/portage/package.accept_keywords/nexus
-          echo "dev-util/vulkan-headers ~amd64" >> /etc/portage/package.accept_keywords/nexus
-          echo "dev-util/glslang ~amd64" >> /etc/portage/package.accept_keywords/nexus
-          echo "dev-util/vulkan-utility-libraries ~amd64" >> /etc/portage/package.accept_keywords/nexus
-          echo "sys-kernel/gentoo-kernel ~amd64" >> /etc/portage/package.accept_keywords/nexus
-          echo "sys-kernel/linux-firmware ~amd64" >> /etc/portage/package.accept_keywords/nexus
-          echo "virtual/dist-kernel ~amd64" >> /etc/portage/package.accept_keywords/nexus
-
-          cat > /etc/portage/package.mask/fixes << 'MASK'
-          sys-apps/systemd
-          sys-apps/gentoo-systemd-integration
-          =games-util/steam-launcher-1.0.0.85-r3::steam-overlay
-          MASK
-
-          cat > /etc/portage/package.use/global << 'EOF'
-          sys-libs/zlib minizip
-          media-video/pipewire extra
-          media-video/ffmpeg -sdl
-          dev-qt/qtbase wayland X -icu -sql -sqlite
-          sys-libs/ncurses -gpm
-          EOF
-
-          mkdir -p /etc/portage/env /etc/portage/package.env
-          cat > /etc/portage/env/gcc-ice-safe << 'EOF'
-          CFLAGS="-O1 -pipe -fno-tree-loop-vectorize -fno-tree-slp-vectorize"
-          CXXFLAGS="-O1 -pipe -fno-tree-loop-vectorize -fno-tree-slp-vectorize"
-          EOF
-          echo "MAKEOPTS=\"-j$(nproc)\"" >> /etc/portage/env/gcc-ice-safe
-          cat > /etc/portage/package.env/gcc-ice-packages << 'EOF'
-          dev-util/spirv-tools gcc-ice-safe
-          media-libs/mesa gcc-ice-safe
-          EOF
-
-          # FULL 32-bit STEAM SUPPORT ACROSS ALL NODES TO ENSURE MATCHING SIGS
-          cat > /etc/portage/package.use/steam << 'USE'
-          media-libs/mesa abi_x86_32
-          media-libs/vulkan-loader abi_x86_32 layers
-          dev-util/spirv-tools abi_x86_32
-          x11-drivers/nvidia-drivers abi_x86_32
-          app-accessibility/at-spi2-core abi_x86_32
-          app-arch/bzip2 abi_x86_32
-          app-arch/lz4 abi_x86_32
-          app-arch/xz-utils abi_x86_32
-          app-arch/zstd abi_x86_32
-          app-crypt/p11-kit abi_x86_32
-          dev-db/sqlite abi_x86_32
-          dev-libs/dbus-glib abi_x86_32
-          dev-libs/elfutils abi_x86_32
-          dev-libs/expat abi_x86_32
-          dev-libs/fribidi abi_x86_32
-          dev-libs/glib abi_x86_32
-          dev-libs/gmp abi_x86_32
-          dev-libs/icu abi_x86_32
-          dev-libs/json-glib abi_x86_32
-          dev-libs/libevdev abi_x86_32
-          dev-libs/libffi abi_x86_32
-          dev-libs/libgcrypt abi_x86_32
-          dev-libs/libgpg-error abi_x86_32
-          dev-libs/libgudev abi_x86_32
-          dev-libs/libgusb abi_x86_32
-          dev-libs/libpcre2 abi_x86_32
-          dev-libs/libtasn1 abi_x86_32
-          dev-libs/libunistring abi_x86_32
-          dev-libs/libusb abi_x86_32
-          dev-libs/libxml2 abi_x86_32
-          dev-libs/lzo abi_x86_32
-          dev-libs/nettle abi_x86_32
-          dev-libs/nspr abi_x86_32
-          dev-libs/nss abi_x86_32
-          dev-libs/openssl abi_x86_32
-          dev-libs/wayland abi_x86_32
-          dev-util/glslang abi_x86_32
-          dev-util/sysprof-capture abi_x86_32
-          dev-util/vulkan-utility-libraries abi_x86_32
-          gnome-base/librsvg abi_x86_32
-          gui-libs/libdecor abi_x86_32
-          llvm-core/clang abi_x86_32
-          llvm-core/llvm abi_x86_32
-          media-gfx/graphite2 abi_x86_32
-          media-libs/alsa-lib abi_x86_32
-          media-libs/flac abi_x86_32
-          media-libs/fontconfig abi_x86_32
-          media-libs/freetype abi_x86_32
-          media-libs/glu abi_x86_32
-          media-libs/harfbuzz abi_x86_32
-          media-libs/lcms abi_x86_32
-          media-libs/libdisplay-info abi_x86_32
-          media-libs/libepoxy abi_x86_32
-          media-libs/libglvnd abi_x86_32
-          media-libs/libjpeg-turbo abi_x86_32
-          media-libs/libogg abi_x86_32
-          media-libs/libpng abi_x86_32
-          media-libs/libpulse abi_x86_32
-          media-libs/libsdl2 abi_x86_32
-          media-libs/libsndfile abi_x86_32
-          media-libs/libva abi_x86_32
-          media-libs/libvorbis abi_x86_32
-          media-libs/libwebp abi_x86_32
-          media-libs/openal abi_x86_32
-          media-libs/opus abi_x86_32
-          media-libs/tiff abi_x86_32
-          media-libs/vulkan-layers abi_x86_32
-          media-sound/lame abi_x86_32
-          media-sound/mpg123-base abi_x86_32
-          media-video/pipewire abi_x86_32
-          net-dns/c-ares abi_x86_32
-          net-dns/libidn2 abi_x86_32
-          net-libs/gnutls abi_x86_32
-          net-libs/libasyncns abi_x86_32
-          net-libs/libndp abi_x86_32
-          net-libs/libpsl abi_x86_32
-          net-libs/nghttp2 abi_x86_32
-          net-libs/nghttp3 abi_x86_32
-          net-misc/curl abi_x86_32
-          net-misc/networkmanager abi_x86_32
-          net-print/cups abi_x86_32
-          sys-apps/dbus abi_x86_32
-          sys-apps/lm-sensors abi_x86_32
-          sys-apps/systemd abi_x86_32
-          sys-apps/systemd-utils abi_x86_32
-          sys-apps/util-linux abi_x86_32
-          sys-libs/gdbm abi_x86_32
-          sys-libs/gpm abi_x86_32
-          sys-libs/libcap abi_x86_32
-          sys-libs/libudev-compat abi_x86_32
-          sys-libs/ncurses abi_x86_32
-          sys-libs/pam abi_x86_32
-          sys-libs/readline abi_x86_32
-          sys-libs/zlib abi_x86_32
-          virtual/glu abi_x86_32
-          virtual/libelf abi_x86_32
-          virtual/libiconv abi_x86_32
-          virtual/libintl abi_x86_32
-          virtual/libudev abi_x86_32
-          virtual/libusb abi_x86_32
-          virtual/opengl abi_x86_32
-          virtual/zlib abi_x86_32
-          x11-libs/cairo abi_x86_32
-          x11-libs/extest abi_x86_32
-          x11-libs/gdk-pixbuf abi_x86_32
-          x11-libs/gtk+ abi_x86_32
-          x11-libs/libdrm abi_x86_32
-          x11-libs/libICE abi_x86_32
-          x11-libs/libpciaccess abi_x86_32
-          x11-libs/libSM abi_x86_32
-          x11-libs/libvdpau abi_x86_32
-          x11-libs/libX11 abi_x86_32
-          x11-libs/libXau abi_x86_32
-          x11-libs/libxcb abi_x86_32
-          x11-libs/libXcomposite abi_x86_32
-          x11-libs/libXcursor abi_x86_32
-          x11-libs/libXdamage abi_x86_32
-          x11-libs/libXdmcp abi_x86_32
-          x11-libs/libXext abi_x86_32
-          x11-libs/libXfixes abi_x86_32
-          x11-libs/libXft abi_x86_32
-          x11-libs/libXi abi_x86_32
-          x11-libs/libXinerama abi_x86_32
-          x11-libs/libxkbcommon abi_x86_32
-          x11-libs/libXrandr abi_x86_32
-          x11-libs/libXrender abi_x86_32
-          x11-libs/libXScrnSaver abi_x86_32
-          x11-libs/libxshmfence abi_x86_32
-          x11-libs/libXtst abi_x86_32
-          x11-libs/libXxf86vm abi_x86_32
-          x11-libs/pango abi_x86_32
-          x11-libs/pixman abi_x86_32
-          x11-libs/xcb-util-keysyms abi_x86_32
-          x11-misc/colord abi_x86_32
-          USE
-
-          cat > /etc/portage/package.use/kernel << 'USE'
+          if [[ "$TARGET_PKG" == *"sys-kernel"* ]]; then
+            mkdir -p /etc/portage/savedconfig/sys-kernel/
+            cp /overlay/kernel-config/nexus-config-master /etc/portage/savedconfig/sys-kernel/gentoo-kernel || true
+            cat > /etc/portage/package.use/kernel << 'EOF'
           sys-kernel/gentoo-kernel savedconfig initramfs
           sys-kernel/installkernel dracut grub
-          USE
+          EOF
+          fi
           
-          echo ">>> Injecting Nexus Master Config for Sniper Mode..."
-          mkdir -p /etc/portage/savedconfig/sys-kernel/
-          cp /overlay/kernel-config/nexus-config-master /etc/portage/savedconfig/sys-kernel/gentoo-kernel || true
-          
-          TARGET_PKG="${{ github.event.inputs.atom }}"
           for i in 1 2; do emerge --deep --newuse $TARGET_PKG 2>&1 && break || etc-update --automode -5; done
           emerge --deep --newuse $TARGET_PKG
           BUILDEOF
@@ -2176,16 +856,18 @@ jobs:
           def get_blocks(path):
               blocks = {}
               if not os.path.exists(path): return blocks
-              with open(path, 'r') as f:
+              with open(path, 'r', encoding='utf-8') as f:
                   cpv, cur = None, []
                   for line in f:
-                      if line.startswith('PACKAGES:') or line.startswith('PKGDIR:'): continue
+                      if line.startswith(('PACKAGES:', 'PKGDIR:')): continue
                       if line.strip() == '':
                           if cpv: blocks[cpv] = cur
                           cpv, cur = None, []
                       else:
-                          if line.startswith('CPV:'): cpv = line.split(':', 1).strip()
-                          cur.append(line.strip())
+                          if line.startswith('CPV:'):
+                              # ARCHITECT FIX: Grab the index 1 of the split array
+                              cpv = line.split(':', 1).strip()
+                          cur.append(line.rstrip())
                   if cpv: blocks[cpv] = cur
               return blocks
 
@@ -2193,12 +875,18 @@ jobs:
           old_b = get_blocks('pages_repo/Packages')
 
           for cpv, lines in new_b.items():
-              rel_path = next((l.split(':',1).strip() for l in lines if l.startswith('URI:')), cpv+".gpkg.tar")
+              rel_path = next((l.split(':', 1).strip() for l in lines if l.startswith('PATH:')), None)
+              if rel_path:
+                  fname = os.path.basename(rel_path)
+              else:
+                  pkg_name = cpv.split('/')[-1] if '/' in cpv else cpv
+                  fname = f"{pkg_name}.gpkg.tar"
+                  
               lines = [l for l in lines if not l.startswith('URI:')]
-              lines.append(f"URI: {base_url}{os.path.basename(rel_path)}")
+              lines.append(f"URI: {base_url}{fname}")
               old_b[cpv] = lines
 
-          with open('pages_repo/Packages', 'w') as f:
+          with open('pages_repo/Packages', 'w', encoding='utf-8') as f:
               f.write("PKGDIR: .\nPACKAGES:\n\n")
               for cpv in sorted(old_b.keys()):
                   f.write("\n".join(old_b[cpv]) + "\n\n")
