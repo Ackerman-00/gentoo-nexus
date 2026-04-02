@@ -354,7 +354,9 @@ jobs:
           sys-apps/gentoo-systemd-integration
           MASK
 
+          # ARCHITECT FIX: Force Pinentry to bypass Qt/GTK dependencies on Headless servers
           echo "sys-libs/zlib minizip" >> /etc/portage/package.use/global
+          echo "app-crypt/pinentry -qt5 -qt6 -gtk -gnome ncurses" >> /etc/portage/package.use/global
 
           cat > /etc/portage/package.use/kernel << 'USE'
           sys-kernel/gentoo-kernel savedconfig initramfs
@@ -649,7 +651,6 @@ jobs:
 
           echo "sys-libs/zlib minizip" >> /etc/portage/package.use/global
 
-          # ARCHITECT FIX: Add 'extra' USE flag to Pipewire to satisfy FFmpeg dependencies
           cat > /etc/portage/package.use/graphics << 'USE'
           media-libs/vulkan-loader -abi_x86_32
           media-video/pipewire extra
@@ -787,9 +788,9 @@ jobs:
           sys-apps/gentoo-systemd-integration
           MASK
 
-          # ARCHITECT FIX: Force Qt6 to enable Wayland, X, and EGLFS to fix Pinentry dependency
           echo "sys-libs/zlib minizip" >> /etc/portage/package.use/global
           echo "dev-qt/qtbase wayland X eglfs" >> /etc/portage/package.use/global
+          echo "media-video/pipewire extra" >> /etc/portage/package.use/global
 
           BASE_LIST=(sys-boot/grub sys-boot/efibootmgr sys-auth/elogind sys-auth/seatd net-misc/networkmanager)
 
@@ -892,11 +893,6 @@ jobs:
           git clone --depth 1 https://github.com/gentoo-mirror/guru.git /var/db/repos/guru || true
           git clone --depth 1 https://github.com/anyc/steam-overlay.git /var/db/repos/steam-overlay || true
           
-          # ARCHITECT FIX: Force rebuild the Manifest for steam-launcher to fix the upstream corruption
-          cd /var/db/repos/steam-overlay/games-util/steam-launcher
-          ebuild $(ls *.ebuild | tail -n1) manifest
-          cd /
-          
           mkdir -p /var/db/repos/guru/metadata /var/db/repos/steam-overlay/metadata
           echo "masters = gentoo" > /var/db/repos/guru/metadata/layout.conf
           echo "masters = gentoo" > /var/db/repos/steam-overlay/metadata/layout.conf
@@ -937,6 +933,8 @@ jobs:
           cat > /etc/portage/package.mask/fixes << 'MASK'
           sys-apps/systemd
           sys-apps/gentoo-systemd-integration
+          # ARCHITECT FIX: Hard-mask the corrupted upstream Steam ebuild to force fallback
+          =games-util/steam-launcher-1.0.0.85-r3::steam-overlay
           MASK
 
           echo "sys-libs/zlib minizip" >> /etc/portage/package.use/global
@@ -1040,9 +1038,12 @@ jobs:
           if [[ "$TARGET_PKG" == *"sys-kernel"* ]]; then
             echo 'USE="-wayland -X -vulkan -pipewire -opengl -dri -gbm -vaapi -vdpau -ffmpeg dbus udev minizip -daemon -systemd -aqua -cups"' >> /etc/portage/make.conf
             echo 'VIDEO_CARDS=""' >> /etc/portage/make.conf
+            echo "app-crypt/pinentry -qt5 -qt6 -gtk -gnome ncurses" >> /etc/portage/package.use/global
           else
             echo 'USE="wayland X vulkan pipewire dbus udev opengl dri gbm vaapi vdpau ffmpeg minizip -daemon -systemd -aqua -cups"' >> /etc/portage/make.conf
             echo 'VIDEO_CARDS="amdgpu radeon radeonsi intel iris nouveau virgl"' >> /etc/portage/make.conf
+            echo "dev-qt/qtbase wayland X eglfs" >> /etc/portage/package.use/global
+            echo "media-video/pipewire extra" >> /etc/portage/package.use/global
           fi
           echo "MAKEOPTS=\"-j$(nproc)\"" >> /etc/portage/make.conf
 
@@ -1059,11 +1060,6 @@ jobs:
           echo ">>> Cloning Overlays..."
           git clone --depth 1 https://github.com/gentoo-mirror/guru.git /var/db/repos/guru || true
           git clone --depth 1 https://github.com/anyc/steam-overlay.git /var/db/repos/steam-overlay || true
-          
-          # ARCHITECT FIX: Force rebuild the Manifest for steam-launcher to fix the upstream corruption
-          cd /var/db/repos/steam-overlay/games-util/steam-launcher
-          ebuild $(ls *.ebuild | tail -n1) manifest || true
-          cd /
           
           mkdir -p /var/db/repos/guru/metadata /var/db/repos/steam-overlay/metadata
           echo "masters = gentoo" > /var/db/repos/guru/metadata/layout.conf
@@ -1110,11 +1106,10 @@ jobs:
           cat > /etc/portage/package.mask/fixes << 'MASK'
           sys-apps/systemd
           sys-apps/gentoo-systemd-integration
+          =games-util/steam-launcher-1.0.0.85-r3::steam-overlay
           MASK
 
           echo "sys-libs/zlib minizip" >> /etc/portage/package.use/global
-          echo "dev-qt/qtbase wayland X eglfs" >> /etc/portage/package.use/global
-          echo "media-video/pipewire extra" >> /etc/portage/package.use/global
 
           mkdir -p /etc/portage/env /etc/portage/package.env
           cat > /etc/portage/env/gcc-ice-safe << 'EOF'
