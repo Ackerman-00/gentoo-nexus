@@ -350,11 +350,23 @@ jobs:
           priority = 9999
           EOF
 
+          cat > /etc/portage/package.mask/no-live-core << 'MASK'
+          =media-libs/mesa-9999*
+          =dev-util/mesa_clc-9999*
+          =dev-util/spirv-tools-9999*
+          =media-libs/vulkan-loader-9999*
+          MASK
+
           echo "*/*::guru **" >> /etc/portage/package.accept_keywords/guru
           echo "*/*::steam-overlay **" >> /etc/portage/package.accept_keywords/steam
           echo "*/*::gentoo-nexus **" >> /etc/portage/package.accept_keywords/nexus
+          echo "media-libs/mesa ~amd64" >> /etc/portage/package.accept_keywords/nexus
+          echo "media-libs/vulkan-loader ~amd64" >> /etc/portage/package.accept_keywords/nexus
+          echo "dev-util/mesa_clc ~amd64" >> /etc/portage/package.accept_keywords/nexus
+          echo "dev-util/spirv-tools ~amd64" >> /etc/portage/package.accept_keywords/nexus
           echo "sys-kernel/gentoo-kernel ~amd64" >> /etc/portage/package.accept_keywords/nexus
           echo "sys-kernel/linux-firmware ~amd64" >> /etc/portage/package.accept_keywords/nexus
+          echo "virtual/dist-kernel ~amd64" >> /etc/portage/package.accept_keywords/nexus
 
           cat > /etc/portage/package.mask/fixes << 'MASK'
           sys-apps/systemd
@@ -365,7 +377,156 @@ jobs:
           sys-libs/zlib minizip
           media-video/pipewire extra
           media-video/ffmpeg -sdl
+          dev-qt/qtbase wayland X eglfs
           EOF
+
+          mkdir -p /etc/portage/env /etc/portage/package.env
+          cat > /etc/portage/env/gcc-ice-safe << 'EOF'
+          CFLAGS="-O1 -pipe -fno-tree-loop-vectorize -fno-tree-slp-vectorize"
+          CXXFLAGS="-O1 -pipe -fno-tree-loop-vectorize -fno-tree-slp-vectorize"
+          EOF
+          echo "MAKEOPTS=\"-j$(nproc)\"" >> /etc/portage/env/gcc-ice-safe
+          cat > /etc/portage/package.env/gcc-ice-packages << 'EOF'
+          dev-util/spirv-tools gcc-ice-safe
+          media-libs/mesa gcc-ice-safe
+          EOF
+
+          cat > /etc/portage/package.use/steam << 'USE'
+          media-libs/mesa abi_x86_32
+          media-libs/vulkan-loader abi_x86_32 layers
+          dev-util/spirv-tools abi_x86_32
+          x11-drivers/nvidia-drivers abi_x86_32
+          app-accessibility/at-spi2-core abi_x86_32
+          app-arch/bzip2 abi_x86_32
+          app-arch/lz4 abi_x86_32
+          app-arch/xz-utils abi_x86_32
+          app-arch/zstd abi_x86_32
+          app-crypt/p11-kit abi_x86_32
+          dev-db/sqlite abi_x86_32
+          dev-libs/dbus-glib abi_x86_32
+          dev-libs/elfutils abi_x86_32
+          dev-libs/expat abi_x86_32
+          dev-libs/fribidi abi_x86_32
+          dev-libs/glib abi_x86_32
+          dev-libs/gmp abi_x86_32
+          dev-libs/icu abi_x86_32
+          dev-libs/json-glib abi_x86_32
+          dev-libs/libevdev abi_x86_32
+          dev-libs/libffi abi_x86_32
+          dev-libs/libgcrypt abi_x86_32
+          dev-libs/libgpg-error abi_x86_32
+          dev-libs/libgudev abi_x86_32
+          dev-libs/libgusb abi_x86_32
+          dev-libs/libpcre2 abi_x86_32
+          dev-libs/libtasn1 abi_x86_32
+          dev-libs/libunistring abi_x86_32
+          dev-libs/libusb abi_x86_32
+          dev-libs/libxml2 abi_x86_32
+          dev-libs/lzo abi_x86_32
+          dev-libs/nettle abi_x86_32
+          dev-libs/nspr abi_x86_32
+          dev-libs/nss abi_x86_32
+          dev-libs/openssl abi_x86_32
+          dev-libs/wayland abi_x86_32
+          dev-util/glslang abi_x86_32
+          dev-util/sysprof-capture abi_x86_32
+          dev-util/vulkan-utility-libraries abi_x86_32
+          gnome-base/librsvg abi_x86_32
+          gui-libs/libdecor abi_x86_32
+          llvm-core/clang abi_x86_32
+          llvm-core/llvm abi_x86_32
+          media-gfx/graphite2 abi_x86_32
+          media-libs/alsa-lib abi_x86_32
+          media-libs/flac abi_x86_32
+          media-libs/fontconfig abi_x86_32
+          media-libs/freetype abi_x86_32
+          media-libs/glu abi_x86_32
+          media-libs/harfbuzz abi_x86_32
+          media-libs/lcms abi_x86_32
+          media-libs/libdisplay-info abi_x86_32
+          media-libs/libepoxy abi_x86_32
+          media-libs/libglvnd abi_x86_32
+          media-libs/libjpeg-turbo abi_x86_32
+          media-libs/libogg abi_x86_32
+          media-libs/libpng abi_x86_32
+          media-libs/libpulse abi_x86_32
+          media-libs/libsdl2 abi_x86_32
+          media-libs/libsndfile abi_x86_32
+          media-libs/libva abi_x86_32
+          media-libs/libvorbis abi_x86_32
+          media-libs/libwebp abi_x86_32
+          media-libs/openal abi_x86_32
+          media-libs/opus abi_x86_32
+          media-libs/tiff abi_x86_32
+          media-libs/vulkan-layers abi_x86_32
+          media-sound/lame abi_x86_32
+          media-sound/mpg123-base abi_x86_32
+          media-video/pipewire abi_x86_32
+          net-dns/c-ares abi_x86_32
+          net-dns/libidn2 abi_x86_32
+          net-libs/gnutls abi_x86_32
+          net-libs/libasyncns abi_x86_32
+          net-libs/libndp abi_x86_32
+          net-libs/libpsl abi_x86_32
+          net-libs/nghttp2 abi_x86_32
+          net-libs/nghttp3 abi_x86_32
+          net-misc/curl abi_x86_32
+          net-misc/networkmanager abi_x86_32
+          net-print/cups abi_x86_32
+          sys-apps/dbus abi_x86_32
+          sys-apps/lm-sensors abi_x86_32
+          sys-apps/systemd abi_x86_32
+          sys-apps/systemd-utils abi_x86_32
+          sys-apps/util-linux abi_x86_32
+          sys-libs/gdbm abi_x86_32
+          sys-libs/gpm abi_x86_32
+          sys-libs/libcap abi_x86_32
+          sys-libs/libudev-compat abi_x86_32
+          sys-libs/ncurses abi_x86_32
+          sys-libs/pam abi_x86_32
+          sys-libs/readline abi_x86_32
+          sys-libs/zlib abi_x86_32
+          virtual/glu abi_x86_32
+          virtual/libelf abi_x86_32
+          virtual/libiconv abi_x86_32
+          virtual/libintl abi_x86_32
+          virtual/libudev abi_x86_32
+          virtual/libusb abi_x86_32
+          virtual/opengl abi_x86_32
+          virtual/zlib abi_x86_32
+          x11-libs/cairo abi_x86_32
+          x11-libs/extest abi_x86_32
+          x11-libs/gdk-pixbuf abi_x86_32
+          x11-libs/gtk+ abi_x86_32
+          x11-libs/libdrm abi_x86_32
+          x11-libs/libICE abi_x86_32
+          x11-libs/libpciaccess abi_x86_32
+          x11-libs/libSM abi_x86_32
+          x11-libs/libvdpau abi_x86_32
+          x11-libs/libX11 abi_x86_32
+          x11-libs/libXau abi_x86_32
+          x11-libs/libxcb abi_x86_32
+          x11-libs/libXcomposite abi_x86_32
+          x11-libs/libXcursor abi_x86_32
+          x11-libs/libXdamage abi_x86_32
+          x11-libs/libXdmcp abi_x86_32
+          x11-libs/libXext abi_x86_32
+          x11-libs/libXfixes abi_x86_32
+          x11-libs/libXft abi_x86_32
+          x11-libs/libXi abi_x86_32
+          x11-libs/libXinerama abi_x86_32
+          x11-libs/libxkbcommon abi_x86_32
+          x11-libs/libXrandr abi_x86_32
+          x11-libs/libXrender abi_x86_32
+          x11-libs/libXScrnSaver abi_x86_32
+          x11-libs/libxshmfence abi_x86_32
+          x11-libs/libXtst abi_x86_32
+          x11-libs/libXxf86vm abi_x86_32
+          x11-libs/pango abi_x86_32
+          x11-libs/pixman abi_x86_32
+          x11-libs/xcb-util-keysyms abi_x86_32
+          x11-misc/colord abi_x86_32
+          USE
 
           cat > /etc/portage/package.use/kernel << 'USE'
           sys-kernel/gentoo-kernel savedconfig initramfs
@@ -458,7 +619,7 @@ jobs:
           echo ">>> Cloning Overlays..."
           git clone --depth 1 https://github.com/gentoo-mirror/guru.git /var/db/repos/guru || true
           git clone --depth 1 https://github.com/anyc/steam-overlay.git /var/db/repos/steam-overlay || true
-
+          
           echo ">>> Fixing upstream Steam Overlay corruptions..."
           if [ -d /var/db/repos/steam-overlay/games-util/steam-launcher ]; then
             cd /var/db/repos/steam-overlay/games-util/steam-launcher
@@ -502,8 +663,12 @@ jobs:
           echo "*/*::steam-overlay **" >> /etc/portage/package.accept_keywords/steam
           echo "*/*::gentoo-nexus **" >> /etc/portage/package.accept_keywords/nexus
           echo "media-libs/mesa ~amd64" >> /etc/portage/package.accept_keywords/nexus
+          echo "media-libs/vulkan-loader ~amd64" >> /etc/portage/package.accept_keywords/nexus
           echo "dev-util/mesa_clc ~amd64" >> /etc/portage/package.accept_keywords/nexus
           echo "dev-util/spirv-tools ~amd64" >> /etc/portage/package.accept_keywords/nexus
+          echo "sys-kernel/gentoo-kernel ~amd64" >> /etc/portage/package.accept_keywords/nexus
+          echo "sys-kernel/linux-firmware ~amd64" >> /etc/portage/package.accept_keywords/nexus
+          echo "virtual/dist-kernel ~amd64" >> /etc/portage/package.accept_keywords/nexus
 
           cat > /etc/portage/package.mask/fixes << 'MASK'
           sys-apps/systemd
@@ -514,6 +679,7 @@ jobs:
           sys-libs/zlib minizip
           media-video/pipewire extra
           media-video/ffmpeg -sdl
+          dev-qt/qtbase wayland X eglfs
           EOF
 
           mkdir -p /etc/portage/env /etc/portage/package.env
@@ -527,8 +693,142 @@ jobs:
           media-libs/mesa gcc-ice-safe
           EOF
 
-          cat > /etc/portage/package.use/graphics << 'USE'
-          media-libs/mesa -abi_x86_32
+          # FULL 32-bit STEAM SUPPORT ACROSS ALL NODES TO ENSURE MATCHING SIGS
+          cat > /etc/portage/package.use/steam << 'USE'
+          media-libs/mesa abi_x86_32
+          media-libs/vulkan-loader abi_x86_32 layers
+          dev-util/spirv-tools abi_x86_32
+          x11-drivers/nvidia-drivers abi_x86_32
+          app-accessibility/at-spi2-core abi_x86_32
+          app-arch/bzip2 abi_x86_32
+          app-arch/lz4 abi_x86_32
+          app-arch/xz-utils abi_x86_32
+          app-arch/zstd abi_x86_32
+          app-crypt/p11-kit abi_x86_32
+          dev-db/sqlite abi_x86_32
+          dev-libs/dbus-glib abi_x86_32
+          dev-libs/elfutils abi_x86_32
+          dev-libs/expat abi_x86_32
+          dev-libs/fribidi abi_x86_32
+          dev-libs/glib abi_x86_32
+          dev-libs/gmp abi_x86_32
+          dev-libs/icu abi_x86_32
+          dev-libs/json-glib abi_x86_32
+          dev-libs/libevdev abi_x86_32
+          dev-libs/libffi abi_x86_32
+          dev-libs/libgcrypt abi_x86_32
+          dev-libs/libgpg-error abi_x86_32
+          dev-libs/libgudev abi_x86_32
+          dev-libs/libgusb abi_x86_32
+          dev-libs/libpcre2 abi_x86_32
+          dev-libs/libtasn1 abi_x86_32
+          dev-libs/libunistring abi_x86_32
+          dev-libs/libusb abi_x86_32
+          dev-libs/libxml2 abi_x86_32
+          dev-libs/lzo abi_x86_32
+          dev-libs/nettle abi_x86_32
+          dev-libs/nspr abi_x86_32
+          dev-libs/nss abi_x86_32
+          dev-libs/openssl abi_x86_32
+          dev-libs/wayland abi_x86_32
+          dev-util/glslang abi_x86_32
+          dev-util/sysprof-capture abi_x86_32
+          dev-util/vulkan-utility-libraries abi_x86_32
+          gnome-base/librsvg abi_x86_32
+          gui-libs/libdecor abi_x86_32
+          llvm-core/clang abi_x86_32
+          llvm-core/llvm abi_x86_32
+          media-gfx/graphite2 abi_x86_32
+          media-libs/alsa-lib abi_x86_32
+          media-libs/flac abi_x86_32
+          media-libs/fontconfig abi_x86_32
+          media-libs/freetype abi_x86_32
+          media-libs/glu abi_x86_32
+          media-libs/harfbuzz abi_x86_32
+          media-libs/lcms abi_x86_32
+          media-libs/libdisplay-info abi_x86_32
+          media-libs/libepoxy abi_x86_32
+          media-libs/libglvnd abi_x86_32
+          media-libs/libjpeg-turbo abi_x86_32
+          media-libs/libogg abi_x86_32
+          media-libs/libpng abi_x86_32
+          media-libs/libpulse abi_x86_32
+          media-libs/libsdl2 abi_x86_32
+          media-libs/libsndfile abi_x86_32
+          media-libs/libva abi_x86_32
+          media-libs/libvorbis abi_x86_32
+          media-libs/libwebp abi_x86_32
+          media-libs/openal abi_x86_32
+          media-libs/opus abi_x86_32
+          media-libs/tiff abi_x86_32
+          media-libs/vulkan-layers abi_x86_32
+          media-sound/lame abi_x86_32
+          media-sound/mpg123-base abi_x86_32
+          media-video/pipewire abi_x86_32
+          net-dns/c-ares abi_x86_32
+          net-dns/libidn2 abi_x86_32
+          net-libs/gnutls abi_x86_32
+          net-libs/libasyncns abi_x86_32
+          net-libs/libndp abi_x86_32
+          net-libs/libpsl abi_x86_32
+          net-libs/nghttp2 abi_x86_32
+          net-libs/nghttp3 abi_x86_32
+          net-misc/curl abi_x86_32
+          net-misc/networkmanager abi_x86_32
+          net-print/cups abi_x86_32
+          sys-apps/dbus abi_x86_32
+          sys-apps/lm-sensors abi_x86_32
+          sys-apps/systemd abi_x86_32
+          sys-apps/systemd-utils abi_x86_32
+          sys-apps/util-linux abi_x86_32
+          sys-libs/gdbm abi_x86_32
+          sys-libs/gpm abi_x86_32
+          sys-libs/libcap abi_x86_32
+          sys-libs/libudev-compat abi_x86_32
+          sys-libs/ncurses abi_x86_32
+          sys-libs/pam abi_x86_32
+          sys-libs/readline abi_x86_32
+          sys-libs/zlib abi_x86_32
+          virtual/glu abi_x86_32
+          virtual/libelf abi_x86_32
+          virtual/libiconv abi_x86_32
+          virtual/libintl abi_x86_32
+          virtual/libudev abi_x86_32
+          virtual/libusb abi_x86_32
+          virtual/opengl abi_x86_32
+          virtual/zlib abi_x86_32
+          x11-libs/cairo abi_x86_32
+          x11-libs/extest abi_x86_32
+          x11-libs/gdk-pixbuf abi_x86_32
+          x11-libs/gtk+ abi_x86_32
+          x11-libs/libdrm abi_x86_32
+          x11-libs/libICE abi_x86_32
+          x11-libs/libpciaccess abi_x86_32
+          x11-libs/libSM abi_x86_32
+          x11-libs/libvdpau abi_x86_32
+          x11-libs/libX11 abi_x86_32
+          x11-libs/libXau abi_x86_32
+          x11-libs/libxcb abi_x86_32
+          x11-libs/libXcomposite abi_x86_32
+          x11-libs/libXcursor abi_x86_32
+          x11-libs/libXdamage abi_x86_32
+          x11-libs/libXdmcp abi_x86_32
+          x11-libs/libXext abi_x86_32
+          x11-libs/libXfixes abi_x86_32
+          x11-libs/libXft abi_x86_32
+          x11-libs/libXi abi_x86_32
+          x11-libs/libXinerama abi_x86_32
+          x11-libs/libxkbcommon abi_x86_32
+          x11-libs/libXrandr abi_x86_32
+          x11-libs/libXrender abi_x86_32
+          x11-libs/libXScrnSaver abi_x86_32
+          x11-libs/libxshmfence abi_x86_32
+          x11-libs/libXtst abi_x86_32
+          x11-libs/libXxf86vm abi_x86_32
+          x11-libs/pango abi_x86_32
+          x11-libs/pixman abi_x86_32
+          x11-libs/xcb-util-keysyms abi_x86_32
+          x11-misc/colord abi_x86_32
           USE
 
           MESA_LIST=(dev-util/spirv-tools dev-util/mesa_clc media-libs/mesa)
@@ -669,7 +969,13 @@ jobs:
           echo "*/*::guru **" >> /etc/portage/package.accept_keywords/guru
           echo "*/*::steam-overlay **" >> /etc/portage/package.accept_keywords/steam
           echo "*/*::gentoo-nexus **" >> /etc/portage/package.accept_keywords/nexus
+          echo "media-libs/mesa ~amd64" >> /etc/portage/package.accept_keywords/nexus
           echo "media-libs/vulkan-loader ~amd64" >> /etc/portage/package.accept_keywords/nexus
+          echo "dev-util/mesa_clc ~amd64" >> /etc/portage/package.accept_keywords/nexus
+          echo "dev-util/spirv-tools ~amd64" >> /etc/portage/package.accept_keywords/nexus
+          echo "sys-kernel/gentoo-kernel ~amd64" >> /etc/portage/package.accept_keywords/nexus
+          echo "sys-kernel/linux-firmware ~amd64" >> /etc/portage/package.accept_keywords/nexus
+          echo "virtual/dist-kernel ~amd64" >> /etc/portage/package.accept_keywords/nexus
 
           cat > /etc/portage/package.mask/fixes << 'MASK'
           sys-apps/systemd
@@ -680,10 +986,156 @@ jobs:
           sys-libs/zlib minizip
           media-video/pipewire extra
           media-video/ffmpeg -sdl
+          dev-qt/qtbase wayland X eglfs
           EOF
 
-          cat > /etc/portage/package.use/graphics << 'USE'
-          media-libs/vulkan-loader -abi_x86_32
+          mkdir -p /etc/portage/env /etc/portage/package.env
+          cat > /etc/portage/env/gcc-ice-safe << 'EOF'
+          CFLAGS="-O1 -pipe -fno-tree-loop-vectorize -fno-tree-slp-vectorize"
+          CXXFLAGS="-O1 -pipe -fno-tree-loop-vectorize -fno-tree-slp-vectorize"
+          EOF
+          echo "MAKEOPTS=\"-j$(nproc)\"" >> /etc/portage/env/gcc-ice-safe
+          cat > /etc/portage/package.env/gcc-ice-packages << 'EOF'
+          dev-util/spirv-tools gcc-ice-safe
+          media-libs/mesa gcc-ice-safe
+          EOF
+
+          # FULL 32-bit STEAM SUPPORT ACROSS ALL NODES TO ENSURE MATCHING SIGS
+          cat > /etc/portage/package.use/steam << 'USE'
+          media-libs/mesa abi_x86_32
+          media-libs/vulkan-loader abi_x86_32 layers
+          dev-util/spirv-tools abi_x86_32
+          x11-drivers/nvidia-drivers abi_x86_32
+          app-accessibility/at-spi2-core abi_x86_32
+          app-arch/bzip2 abi_x86_32
+          app-arch/lz4 abi_x86_32
+          app-arch/xz-utils abi_x86_32
+          app-arch/zstd abi_x86_32
+          app-crypt/p11-kit abi_x86_32
+          dev-db/sqlite abi_x86_32
+          dev-libs/dbus-glib abi_x86_32
+          dev-libs/elfutils abi_x86_32
+          dev-libs/expat abi_x86_32
+          dev-libs/fribidi abi_x86_32
+          dev-libs/glib abi_x86_32
+          dev-libs/gmp abi_x86_32
+          dev-libs/icu abi_x86_32
+          dev-libs/json-glib abi_x86_32
+          dev-libs/libevdev abi_x86_32
+          dev-libs/libffi abi_x86_32
+          dev-libs/libgcrypt abi_x86_32
+          dev-libs/libgpg-error abi_x86_32
+          dev-libs/libgudev abi_x86_32
+          dev-libs/libgusb abi_x86_32
+          dev-libs/libpcre2 abi_x86_32
+          dev-libs/libtasn1 abi_x86_32
+          dev-libs/libunistring abi_x86_32
+          dev-libs/libusb abi_x86_32
+          dev-libs/libxml2 abi_x86_32
+          dev-libs/lzo abi_x86_32
+          dev-libs/nettle abi_x86_32
+          dev-libs/nspr abi_x86_32
+          dev-libs/nss abi_x86_32
+          dev-libs/openssl abi_x86_32
+          dev-libs/wayland abi_x86_32
+          dev-util/glslang abi_x86_32
+          dev-util/sysprof-capture abi_x86_32
+          dev-util/vulkan-utility-libraries abi_x86_32
+          gnome-base/librsvg abi_x86_32
+          gui-libs/libdecor abi_x86_32
+          llvm-core/clang abi_x86_32
+          llvm-core/llvm abi_x86_32
+          media-gfx/graphite2 abi_x86_32
+          media-libs/alsa-lib abi_x86_32
+          media-libs/flac abi_x86_32
+          media-libs/fontconfig abi_x86_32
+          media-libs/freetype abi_x86_32
+          media-libs/glu abi_x86_32
+          media-libs/harfbuzz abi_x86_32
+          media-libs/lcms abi_x86_32
+          media-libs/libdisplay-info abi_x86_32
+          media-libs/libepoxy abi_x86_32
+          media-libs/libglvnd abi_x86_32
+          media-libs/libjpeg-turbo abi_x86_32
+          media-libs/libogg abi_x86_32
+          media-libs/libpng abi_x86_32
+          media-libs/libpulse abi_x86_32
+          media-libs/libsdl2 abi_x86_32
+          media-libs/libsndfile abi_x86_32
+          media-libs/libva abi_x86_32
+          media-libs/libvorbis abi_x86_32
+          media-libs/libwebp abi_x86_32
+          media-libs/openal abi_x86_32
+          media-libs/opus abi_x86_32
+          media-libs/tiff abi_x86_32
+          media-libs/vulkan-layers abi_x86_32
+          media-sound/lame abi_x86_32
+          media-sound/mpg123-base abi_x86_32
+          media-video/pipewire abi_x86_32
+          net-dns/c-ares abi_x86_32
+          net-dns/libidn2 abi_x86_32
+          net-libs/gnutls abi_x86_32
+          net-libs/libasyncns abi_x86_32
+          net-libs/libndp abi_x86_32
+          net-libs/libpsl abi_x86_32
+          net-libs/nghttp2 abi_x86_32
+          net-libs/nghttp3 abi_x86_32
+          net-misc/curl abi_x86_32
+          net-misc/networkmanager abi_x86_32
+          net-print/cups abi_x86_32
+          sys-apps/dbus abi_x86_32
+          sys-apps/lm-sensors abi_x86_32
+          sys-apps/systemd abi_x86_32
+          sys-apps/systemd-utils abi_x86_32
+          sys-apps/util-linux abi_x86_32
+          sys-libs/gdbm abi_x86_32
+          sys-libs/gpm abi_x86_32
+          sys-libs/libcap abi_x86_32
+          sys-libs/libudev-compat abi_x86_32
+          sys-libs/ncurses abi_x86_32
+          sys-libs/pam abi_x86_32
+          sys-libs/readline abi_x86_32
+          sys-libs/zlib abi_x86_32
+          virtual/glu abi_x86_32
+          virtual/libelf abi_x86_32
+          virtual/libiconv abi_x86_32
+          virtual/libintl abi_x86_32
+          virtual/libudev abi_x86_32
+          virtual/libusb abi_x86_32
+          virtual/opengl abi_x86_32
+          virtual/zlib abi_x86_32
+          x11-libs/cairo abi_x86_32
+          x11-libs/extest abi_x86_32
+          x11-libs/gdk-pixbuf abi_x86_32
+          x11-libs/gtk+ abi_x86_32
+          x11-libs/libdrm abi_x86_32
+          x11-libs/libICE abi_x86_32
+          x11-libs/libpciaccess abi_x86_32
+          x11-libs/libSM abi_x86_32
+          x11-libs/libvdpau abi_x86_32
+          x11-libs/libX11 abi_x86_32
+          x11-libs/libXau abi_x86_32
+          x11-libs/libxcb abi_x86_32
+          x11-libs/libXcomposite abi_x86_32
+          x11-libs/libXcursor abi_x86_32
+          x11-libs/libXdamage abi_x86_32
+          x11-libs/libXdmcp abi_x86_32
+          x11-libs/libXext abi_x86_32
+          x11-libs/libXfixes abi_x86_32
+          x11-libs/libXft abi_x86_32
+          x11-libs/libXi abi_x86_32
+          x11-libs/libXinerama abi_x86_32
+          x11-libs/libxkbcommon abi_x86_32
+          x11-libs/libXrandr abi_x86_32
+          x11-libs/libXrender abi_x86_32
+          x11-libs/libXScrnSaver abi_x86_32
+          x11-libs/libxshmfence abi_x86_32
+          x11-libs/libXtst abi_x86_32
+          x11-libs/libXxf86vm abi_x86_32
+          x11-libs/pango abi_x86_32
+          x11-libs/pixman abi_x86_32
+          x11-libs/xcb-util-keysyms abi_x86_32
+          x11-misc/colord abi_x86_32
           USE
 
           CORE_LIST=(media-libs/vulkan-loader media-video/pipewire media-video/wireplumber media-video/ffmpeg)
@@ -819,7 +1271,13 @@ jobs:
           echo "*/*::steam-overlay **" >> /etc/portage/package.accept_keywords/steam
           echo "*/*::gentoo-nexus **" >> /etc/portage/package.accept_keywords/nexus
           echo "media-libs/mesa ~amd64" >> /etc/portage/package.accept_keywords/nexus
-          
+          echo "media-libs/vulkan-loader ~amd64" >> /etc/portage/package.accept_keywords/nexus
+          echo "dev-util/mesa_clc ~amd64" >> /etc/portage/package.accept_keywords/nexus
+          echo "dev-util/spirv-tools ~amd64" >> /etc/portage/package.accept_keywords/nexus
+          echo "sys-kernel/gentoo-kernel ~amd64" >> /etc/portage/package.accept_keywords/nexus
+          echo "sys-kernel/linux-firmware ~amd64" >> /etc/portage/package.accept_keywords/nexus
+          echo "virtual/dist-kernel ~amd64" >> /etc/portage/package.accept_keywords/nexus
+
           cat > /etc/portage/package.mask/fixes << 'MASK'
           sys-apps/systemd
           sys-apps/gentoo-systemd-integration
@@ -829,13 +1287,164 @@ jobs:
           sys-libs/zlib minizip
           media-video/pipewire extra
           media-video/ffmpeg -sdl
+          dev-qt/qtbase wayland X eglfs
           EOF
+
+          mkdir -p /etc/portage/env /etc/portage/package.env
+          cat > /etc/portage/env/gcc-ice-safe << 'EOF'
+          CFLAGS="-O1 -pipe -fno-tree-loop-vectorize -fno-tree-slp-vectorize"
+          CXXFLAGS="-O1 -pipe -fno-tree-loop-vectorize -fno-tree-slp-vectorize"
+          EOF
+          echo "MAKEOPTS=\"-j$(nproc)\"" >> /etc/portage/env/gcc-ice-safe
+          cat > /etc/portage/package.env/gcc-ice-packages << 'EOF'
+          dev-util/spirv-tools gcc-ice-safe
+          media-libs/mesa gcc-ice-safe
+          EOF
+
+          # FULL 32-bit STEAM SUPPORT ACROSS ALL NODES TO ENSURE MATCHING SIGS
+          cat > /etc/portage/package.use/steam << 'USE'
+          media-libs/mesa abi_x86_32
+          media-libs/vulkan-loader abi_x86_32 layers
+          dev-util/spirv-tools abi_x86_32
+          x11-drivers/nvidia-drivers abi_x86_32
+          app-accessibility/at-spi2-core abi_x86_32
+          app-arch/bzip2 abi_x86_32
+          app-arch/lz4 abi_x86_32
+          app-arch/xz-utils abi_x86_32
+          app-arch/zstd abi_x86_32
+          app-crypt/p11-kit abi_x86_32
+          dev-db/sqlite abi_x86_32
+          dev-libs/dbus-glib abi_x86_32
+          dev-libs/elfutils abi_x86_32
+          dev-libs/expat abi_x86_32
+          dev-libs/fribidi abi_x86_32
+          dev-libs/glib abi_x86_32
+          dev-libs/gmp abi_x86_32
+          dev-libs/icu abi_x86_32
+          dev-libs/json-glib abi_x86_32
+          dev-libs/libevdev abi_x86_32
+          dev-libs/libffi abi_x86_32
+          dev-libs/libgcrypt abi_x86_32
+          dev-libs/libgpg-error abi_x86_32
+          dev-libs/libgudev abi_x86_32
+          dev-libs/libgusb abi_x86_32
+          dev-libs/libpcre2 abi_x86_32
+          dev-libs/libtasn1 abi_x86_32
+          dev-libs/libunistring abi_x86_32
+          dev-libs/libusb abi_x86_32
+          dev-libs/libxml2 abi_x86_32
+          dev-libs/lzo abi_x86_32
+          dev-libs/nettle abi_x86_32
+          dev-libs/nspr abi_x86_32
+          dev-libs/nss abi_x86_32
+          dev-libs/openssl abi_x86_32
+          dev-libs/wayland abi_x86_32
+          dev-util/glslang abi_x86_32
+          dev-util/sysprof-capture abi_x86_32
+          dev-util/vulkan-utility-libraries abi_x86_32
+          gnome-base/librsvg abi_x86_32
+          gui-libs/libdecor abi_x86_32
+          llvm-core/clang abi_x86_32
+          llvm-core/llvm abi_x86_32
+          media-gfx/graphite2 abi_x86_32
+          media-libs/alsa-lib abi_x86_32
+          media-libs/flac abi_x86_32
+          media-libs/fontconfig abi_x86_32
+          media-libs/freetype abi_x86_32
+          media-libs/glu abi_x86_32
+          media-libs/harfbuzz abi_x86_32
+          media-libs/lcms abi_x86_32
+          media-libs/libdisplay-info abi_x86_32
+          media-libs/libepoxy abi_x86_32
+          media-libs/libglvnd abi_x86_32
+          media-libs/libjpeg-turbo abi_x86_32
+          media-libs/libogg abi_x86_32
+          media-libs/libpng abi_x86_32
+          media-libs/libpulse abi_x86_32
+          media-libs/libsdl2 abi_x86_32
+          media-libs/libsndfile abi_x86_32
+          media-libs/libva abi_x86_32
+          media-libs/libvorbis abi_x86_32
+          media-libs/libwebp abi_x86_32
+          media-libs/openal abi_x86_32
+          media-libs/opus abi_x86_32
+          media-libs/tiff abi_x86_32
+          media-libs/vulkan-layers abi_x86_32
+          media-sound/lame abi_x86_32
+          media-sound/mpg123-base abi_x86_32
+          media-video/pipewire abi_x86_32
+          net-dns/c-ares abi_x86_32
+          net-dns/libidn2 abi_x86_32
+          net-libs/gnutls abi_x86_32
+          net-libs/libasyncns abi_x86_32
+          net-libs/libndp abi_x86_32
+          net-libs/libpsl abi_x86_32
+          net-libs/nghttp2 abi_x86_32
+          net-libs/nghttp3 abi_x86_32
+          net-misc/curl abi_x86_32
+          net-misc/networkmanager abi_x86_32
+          net-print/cups abi_x86_32
+          sys-apps/dbus abi_x86_32
+          sys-apps/lm-sensors abi_x86_32
+          sys-apps/systemd abi_x86_32
+          sys-apps/systemd-utils abi_x86_32
+          sys-apps/util-linux abi_x86_32
+          sys-libs/gdbm abi_x86_32
+          sys-libs/gpm abi_x86_32
+          sys-libs/libcap abi_x86_32
+          sys-libs/libudev-compat abi_x86_32
+          sys-libs/ncurses abi_x86_32
+          sys-libs/pam abi_x86_32
+          sys-libs/readline abi_x86_32
+          sys-libs/zlib abi_x86_32
+          virtual/glu abi_x86_32
+          virtual/libelf abi_x86_32
+          virtual/libiconv abi_x86_32
+          virtual/libintl abi_x86_32
+          virtual/libudev abi_x86_32
+          virtual/libusb abi_x86_32
+          virtual/opengl abi_x86_32
+          virtual/zlib abi_x86_32
+          x11-libs/cairo abi_x86_32
+          x11-libs/extest abi_x86_32
+          x11-libs/gdk-pixbuf abi_x86_32
+          x11-libs/gtk+ abi_x86_32
+          x11-libs/libdrm abi_x86_32
+          x11-libs/libICE abi_x86_32
+          x11-libs/libpciaccess abi_x86_32
+          x11-libs/libSM abi_x86_32
+          x11-libs/libvdpau abi_x86_32
+          x11-libs/libX11 abi_x86_32
+          x11-libs/libXau abi_x86_32
+          x11-libs/libxcb abi_x86_32
+          x11-libs/libXcomposite abi_x86_32
+          x11-libs/libXcursor abi_x86_32
+          x11-libs/libXdamage abi_x86_32
+          x11-libs/libXdmcp abi_x86_32
+          x11-libs/libXext abi_x86_32
+          x11-libs/libXfixes abi_x86_32
+          x11-libs/libXft abi_x86_32
+          x11-libs/libXi abi_x86_32
+          x11-libs/libXinerama abi_x86_32
+          x11-libs/libxkbcommon abi_x86_32
+          x11-libs/libXrandr abi_x86_32
+          x11-libs/libXrender abi_x86_32
+          x11-libs/libXScrnSaver abi_x86_32
+          x11-libs/libxshmfence abi_x86_32
+          x11-libs/libXtst abi_x86_32
+          x11-libs/libXxf86vm abi_x86_32
+          x11-libs/pango abi_x86_32
+          x11-libs/pixman abi_x86_32
+          x11-libs/xcb-util-keysyms abi_x86_32
+          x11-misc/colord abi_x86_32
+          USE
 
           BASE_LIST=(sys-boot/grub sys-boot/efibootmgr sys-auth/elogind sys-auth/seatd net-misc/networkmanager)
 
           if [ -s /overlay/changed_packages.txt ]; then
               echo ">>> Filtering conflicting packages..."
               sed -i '/gui-apps\/quickshell/d' /overlay/changed_packages.txt || true
+              sed -i '/gui-wm\/dank-material-shell/d' /overlay/changed_packages.txt || true
               echo ">>> Adding custom overlay packages to Base build target..."
               while IFS= read -r pkg_dir; do
                   [ -z "$pkg_dir" ] && continue
@@ -905,7 +1514,7 @@ jobs:
           CFLAGS="${COMMON_FLAGS}"
           CXXFLAGS="${COMMON_FLAGS}"
           RUSTFLAGS="-C target-cpu=x86-64 -C opt-level=2"
-          USE="wayland X vulkan opengl dri gbm minizip -daemon -systemd"
+          USE="wayland X vulkan pipewire dbus udev opengl dri gbm vaapi vdpau ffmpeg minizip -daemon -systemd -aqua -cups"
           VIDEO_CARDS="amdgpu radeon radeonsi intel iris nouveau virgl"
           FEATURES="-sandbox -usersandbox -ipc-sandbox -network-sandbox -pid-sandbox buildpkg parallel-install getbinpkg -binpkg-request-signature ccache"
           CCACHE_DIR="/var/cache/ccache"
@@ -975,6 +1584,12 @@ jobs:
           echo "*/*::steam-overlay **" >> /etc/portage/package.accept_keywords/steam
           echo "*/*::gentoo-nexus **" >> /etc/portage/package.accept_keywords/nexus
           echo "media-libs/mesa ~amd64" >> /etc/portage/package.accept_keywords/nexus
+          echo "media-libs/vulkan-loader ~amd64" >> /etc/portage/package.accept_keywords/nexus
+          echo "dev-util/mesa_clc ~amd64" >> /etc/portage/package.accept_keywords/nexus
+          echo "dev-util/spirv-tools ~amd64" >> /etc/portage/package.accept_keywords/nexus
+          echo "sys-kernel/gentoo-kernel ~amd64" >> /etc/portage/package.accept_keywords/nexus
+          echo "sys-kernel/linux-firmware ~amd64" >> /etc/portage/package.accept_keywords/nexus
+          echo "virtual/dist-kernel ~amd64" >> /etc/portage/package.accept_keywords/nexus
 
           cat > /etc/portage/package.mask/fixes << 'MASK'
           sys-apps/systemd
@@ -985,6 +1600,7 @@ jobs:
           sys-libs/zlib minizip
           media-video/pipewire extra
           media-video/ffmpeg -sdl
+          dev-qt/qtbase wayland X eglfs
           EOF
 
           mkdir -p /etc/portage/env /etc/portage/package.env
@@ -998,11 +1614,142 @@ jobs:
           media-libs/mesa gcc-ice-safe
           EOF
 
+          # FULL 32-bit STEAM SUPPORT ACROSS ALL NODES TO ENSURE MATCHING SIGS
           cat > /etc/portage/package.use/steam << 'USE'
           media-libs/mesa abi_x86_32
           media-libs/vulkan-loader abi_x86_32 layers
           dev-util/spirv-tools abi_x86_32
           x11-drivers/nvidia-drivers abi_x86_32
+          app-accessibility/at-spi2-core abi_x86_32
+          app-arch/bzip2 abi_x86_32
+          app-arch/lz4 abi_x86_32
+          app-arch/xz-utils abi_x86_32
+          app-arch/zstd abi_x86_32
+          app-crypt/p11-kit abi_x86_32
+          dev-db/sqlite abi_x86_32
+          dev-libs/dbus-glib abi_x86_32
+          dev-libs/elfutils abi_x86_32
+          dev-libs/expat abi_x86_32
+          dev-libs/fribidi abi_x86_32
+          dev-libs/glib abi_x86_32
+          dev-libs/gmp abi_x86_32
+          dev-libs/icu abi_x86_32
+          dev-libs/json-glib abi_x86_32
+          dev-libs/libevdev abi_x86_32
+          dev-libs/libffi abi_x86_32
+          dev-libs/libgcrypt abi_x86_32
+          dev-libs/libgpg-error abi_x86_32
+          dev-libs/libgudev abi_x86_32
+          dev-libs/libgusb abi_x86_32
+          dev-libs/libpcre2 abi_x86_32
+          dev-libs/libtasn1 abi_x86_32
+          dev-libs/libunistring abi_x86_32
+          dev-libs/libusb abi_x86_32
+          dev-libs/libxml2 abi_x86_32
+          dev-libs/lzo abi_x86_32
+          dev-libs/nettle abi_x86_32
+          dev-libs/nspr abi_x86_32
+          dev-libs/nss abi_x86_32
+          dev-libs/openssl abi_x86_32
+          dev-libs/wayland abi_x86_32
+          dev-util/glslang abi_x86_32
+          dev-util/sysprof-capture abi_x86_32
+          dev-util/vulkan-utility-libraries abi_x86_32
+          gnome-base/librsvg abi_x86_32
+          gui-libs/libdecor abi_x86_32
+          llvm-core/clang abi_x86_32
+          llvm-core/llvm abi_x86_32
+          media-gfx/graphite2 abi_x86_32
+          media-libs/alsa-lib abi_x86_32
+          media-libs/flac abi_x86_32
+          media-libs/fontconfig abi_x86_32
+          media-libs/freetype abi_x86_32
+          media-libs/glu abi_x86_32
+          media-libs/harfbuzz abi_x86_32
+          media-libs/lcms abi_x86_32
+          media-libs/libdisplay-info abi_x86_32
+          media-libs/libepoxy abi_x86_32
+          media-libs/libglvnd abi_x86_32
+          media-libs/libjpeg-turbo abi_x86_32
+          media-libs/libogg abi_x86_32
+          media-libs/libpng abi_x86_32
+          media-libs/libpulse abi_x86_32
+          media-libs/libsdl2 abi_x86_32
+          media-libs/libsndfile abi_x86_32
+          media-libs/libva abi_x86_32
+          media-libs/libvorbis abi_x86_32
+          media-libs/libwebp abi_x86_32
+          media-libs/openal abi_x86_32
+          media-libs/opus abi_x86_32
+          media-libs/tiff abi_x86_32
+          media-libs/vulkan-layers abi_x86_32
+          media-sound/lame abi_x86_32
+          media-sound/mpg123-base abi_x86_32
+          media-video/pipewire abi_x86_32
+          net-dns/c-ares abi_x86_32
+          net-dns/libidn2 abi_x86_32
+          net-libs/gnutls abi_x86_32
+          net-libs/libasyncns abi_x86_32
+          net-libs/libndp abi_x86_32
+          net-libs/libpsl abi_x86_32
+          net-libs/nghttp2 abi_x86_32
+          net-libs/nghttp3 abi_x86_32
+          net-misc/curl abi_x86_32
+          net-misc/networkmanager abi_x86_32
+          net-print/cups abi_x86_32
+          sys-apps/dbus abi_x86_32
+          sys-apps/lm-sensors abi_x86_32
+          sys-apps/systemd abi_x86_32
+          sys-apps/systemd-utils abi_x86_32
+          sys-apps/util-linux abi_x86_32
+          sys-libs/gdbm abi_x86_32
+          sys-libs/gpm abi_x86_32
+          sys-libs/libcap abi_x86_32
+          sys-libs/libudev-compat abi_x86_32
+          sys-libs/ncurses abi_x86_32
+          sys-libs/pam abi_x86_32
+          sys-libs/readline abi_x86_32
+          sys-libs/zlib abi_x86_32
+          virtual/glu abi_x86_32
+          virtual/libelf abi_x86_32
+          virtual/libiconv abi_x86_32
+          virtual/libintl abi_x86_32
+          virtual/libudev abi_x86_32
+          virtual/libusb abi_x86_32
+          virtual/opengl abi_x86_32
+          virtual/zlib abi_x86_32
+          x11-libs/cairo abi_x86_32
+          x11-libs/extest abi_x86_32
+          x11-libs/gdk-pixbuf abi_x86_32
+          x11-libs/gtk+ abi_x86_32
+          x11-libs/libdrm abi_x86_32
+          x11-libs/libICE abi_x86_32
+          x11-libs/libpciaccess abi_x86_32
+          x11-libs/libSM abi_x86_32
+          x11-libs/libvdpau abi_x86_32
+          x11-libs/libX11 abi_x86_32
+          x11-libs/libXau abi_x86_32
+          x11-libs/libxcb abi_x86_32
+          x11-libs/libXcomposite abi_x86_32
+          x11-libs/libXcursor abi_x86_32
+          x11-libs/libXdamage abi_x86_32
+          x11-libs/libXdmcp abi_x86_32
+          x11-libs/libXext abi_x86_32
+          x11-libs/libXfixes abi_x86_32
+          x11-libs/libXft abi_x86_32
+          x11-libs/libXi abi_x86_32
+          x11-libs/libXinerama abi_x86_32
+          x11-libs/libxkbcommon abi_x86_32
+          x11-libs/libXrandr abi_x86_32
+          x11-libs/libXrender abi_x86_32
+          x11-libs/libXScrnSaver abi_x86_32
+          x11-libs/libxshmfence abi_x86_32
+          x11-libs/libXtst abi_x86_32
+          x11-libs/libXxf86vm abi_x86_32
+          x11-libs/pango abi_x86_32
+          x11-libs/pixman abi_x86_32
+          x11-libs/xcb-util-keysyms abi_x86_32
+          x11-misc/colord abi_x86_32
           USE
 
           STEAM_LIST=(media-libs/mesa media-libs/vulkan-loader games-util/steam-launcher)
@@ -1147,7 +1894,8 @@ jobs:
           echo "dev-util/spirv-tools ~amd64" >> /etc/portage/package.accept_keywords/nexus
           echo "sys-kernel/gentoo-kernel ~amd64" >> /etc/portage/package.accept_keywords/nexus
           echo "sys-kernel/linux-firmware ~amd64" >> /etc/portage/package.accept_keywords/nexus
-          
+          echo "virtual/dist-kernel ~amd64" >> /etc/portage/package.accept_keywords/nexus
+
           cat > /etc/portage/package.mask/fixes << 'MASK'
           sys-apps/systemd
           sys-apps/gentoo-systemd-integration
@@ -1157,6 +1905,7 @@ jobs:
           sys-libs/zlib minizip
           media-video/pipewire extra
           media-video/ffmpeg -sdl
+          dev-qt/qtbase wayland X eglfs
           EOF
 
           mkdir -p /etc/portage/env /etc/portage/package.env
@@ -1169,6 +1918,144 @@ jobs:
           dev-util/spirv-tools gcc-ice-safe
           media-libs/mesa gcc-ice-safe
           EOF
+
+          # FULL 32-bit STEAM SUPPORT ACROSS ALL NODES TO ENSURE MATCHING SIGS
+          cat > /etc/portage/package.use/steam << 'USE'
+          media-libs/mesa abi_x86_32
+          media-libs/vulkan-loader abi_x86_32 layers
+          dev-util/spirv-tools abi_x86_32
+          x11-drivers/nvidia-drivers abi_x86_32
+          app-accessibility/at-spi2-core abi_x86_32
+          app-arch/bzip2 abi_x86_32
+          app-arch/lz4 abi_x86_32
+          app-arch/xz-utils abi_x86_32
+          app-arch/zstd abi_x86_32
+          app-crypt/p11-kit abi_x86_32
+          dev-db/sqlite abi_x86_32
+          dev-libs/dbus-glib abi_x86_32
+          dev-libs/elfutils abi_x86_32
+          dev-libs/expat abi_x86_32
+          dev-libs/fribidi abi_x86_32
+          dev-libs/glib abi_x86_32
+          dev-libs/gmp abi_x86_32
+          dev-libs/icu abi_x86_32
+          dev-libs/json-glib abi_x86_32
+          dev-libs/libevdev abi_x86_32
+          dev-libs/libffi abi_x86_32
+          dev-libs/libgcrypt abi_x86_32
+          dev-libs/libgpg-error abi_x86_32
+          dev-libs/libgudev abi_x86_32
+          dev-libs/libgusb abi_x86_32
+          dev-libs/libpcre2 abi_x86_32
+          dev-libs/libtasn1 abi_x86_32
+          dev-libs/libunistring abi_x86_32
+          dev-libs/libusb abi_x86_32
+          dev-libs/libxml2 abi_x86_32
+          dev-libs/lzo abi_x86_32
+          dev-libs/nettle abi_x86_32
+          dev-libs/nspr abi_x86_32
+          dev-libs/nss abi_x86_32
+          dev-libs/openssl abi_x86_32
+          dev-libs/wayland abi_x86_32
+          dev-util/glslang abi_x86_32
+          dev-util/sysprof-capture abi_x86_32
+          dev-util/vulkan-utility-libraries abi_x86_32
+          gnome-base/librsvg abi_x86_32
+          gui-libs/libdecor abi_x86_32
+          llvm-core/clang abi_x86_32
+          llvm-core/llvm abi_x86_32
+          media-gfx/graphite2 abi_x86_32
+          media-libs/alsa-lib abi_x86_32
+          media-libs/flac abi_x86_32
+          media-libs/fontconfig abi_x86_32
+          media-libs/freetype abi_x86_32
+          media-libs/glu abi_x86_32
+          media-libs/harfbuzz abi_x86_32
+          media-libs/lcms abi_x86_32
+          media-libs/libdisplay-info abi_x86_32
+          media-libs/libepoxy abi_x86_32
+          media-libs/libglvnd abi_x86_32
+          media-libs/libjpeg-turbo abi_x86_32
+          media-libs/libogg abi_x86_32
+          media-libs/libpng abi_x86_32
+          media-libs/libpulse abi_x86_32
+          media-libs/libsdl2 abi_x86_32
+          media-libs/libsndfile abi_x86_32
+          media-libs/libva abi_x86_32
+          media-libs/libvorbis abi_x86_32
+          media-libs/libwebp abi_x86_32
+          media-libs/openal abi_x86_32
+          media-libs/opus abi_x86_32
+          media-libs/tiff abi_x86_32
+          media-libs/vulkan-layers abi_x86_32
+          media-sound/lame abi_x86_32
+          media-sound/mpg123-base abi_x86_32
+          media-video/pipewire abi_x86_32
+          net-dns/c-ares abi_x86_32
+          net-dns/libidn2 abi_x86_32
+          net-libs/gnutls abi_x86_32
+          net-libs/libasyncns abi_x86_32
+          net-libs/libndp abi_x86_32
+          net-libs/libpsl abi_x86_32
+          net-libs/nghttp2 abi_x86_32
+          net-libs/nghttp3 abi_x86_32
+          net-misc/curl abi_x86_32
+          net-misc/networkmanager abi_x86_32
+          net-print/cups abi_x86_32
+          sys-apps/dbus abi_x86_32
+          sys-apps/lm-sensors abi_x86_32
+          sys-apps/systemd abi_x86_32
+          sys-apps/systemd-utils abi_x86_32
+          sys-apps/util-linux abi_x86_32
+          sys-libs/gdbm abi_x86_32
+          sys-libs/gpm abi_x86_32
+          sys-libs/libcap abi_x86_32
+          sys-libs/libudev-compat abi_x86_32
+          sys-libs/ncurses abi_x86_32
+          sys-libs/pam abi_x86_32
+          sys-libs/readline abi_x86_32
+          sys-libs/zlib abi_x86_32
+          virtual/glu abi_x86_32
+          virtual/libelf abi_x86_32
+          virtual/libiconv abi_x86_32
+          virtual/libintl abi_x86_32
+          virtual/libudev abi_x86_32
+          virtual/libusb abi_x86_32
+          virtual/opengl abi_x86_32
+          virtual/zlib abi_x86_32
+          x11-libs/cairo abi_x86_32
+          x11-libs/extest abi_x86_32
+          x11-libs/gdk-pixbuf abi_x86_32
+          x11-libs/gtk+ abi_x86_32
+          x11-libs/libdrm abi_x86_32
+          x11-libs/libICE abi_x86_32
+          x11-libs/libpciaccess abi_x86_32
+          x11-libs/libSM abi_x86_32
+          x11-libs/libvdpau abi_x86_32
+          x11-libs/libX11 abi_x86_32
+          x11-libs/libXau abi_x86_32
+          x11-libs/libxcb abi_x86_32
+          x11-libs/libXcomposite abi_x86_32
+          x11-libs/libXcursor abi_x86_32
+          x11-libs/libXdamage abi_x86_32
+          x11-libs/libXdmcp abi_x86_32
+          x11-libs/libXext abi_x86_32
+          x11-libs/libXfixes abi_x86_32
+          x11-libs/libXft abi_x86_32
+          x11-libs/libXi abi_x86_32
+          x11-libs/libXinerama abi_x86_32
+          x11-libs/libxkbcommon abi_x86_32
+          x11-libs/libXrandr abi_x86_32
+          x11-libs/libXrender abi_x86_32
+          x11-libs/libXScrnSaver abi_x86_32
+          x11-libs/libxshmfence abi_x86_32
+          x11-libs/libXtst abi_x86_32
+          x11-libs/libXxf86vm abi_x86_32
+          x11-libs/pango abi_x86_32
+          x11-libs/pixman abi_x86_32
+          x11-libs/xcb-util-keysyms abi_x86_32
+          x11-misc/colord abi_x86_32
+          USE
 
           cat > /etc/portage/package.use/kernel << 'USE'
           sys-kernel/gentoo-kernel savedconfig initramfs
