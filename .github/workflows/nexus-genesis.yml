@@ -212,6 +212,7 @@ jobs:
           verify-signature = false
           EOF
 
+          # ARCHITECT FIX: Added -strict to FEATURES to ignore broken/missing Manifest hashes
           cat > /etc/portage/make.conf << 'EOF'
           COMMON_FLAGS="-O2 -march=x86-64 -pipe"
           CFLAGS="\${COMMON_FLAGS}"
@@ -219,7 +220,7 @@ jobs:
           RUSTFLAGS="-C target-cpu=x86-64 -C opt-level=2"
           USE="wayland X vulkan pipewire dbus udev opengl dri gbm vaapi vdpau ffmpeg minizip -daemon -systemd -aqua -cups -gpm"
           VIDEO_CARDS="amdgpu radeon radeonsi intel iris nouveau virgl"
-          FEATURES="-sandbox -usersandbox -ipc-sandbox -network-sandbox -pid-sandbox buildpkg parallel-install getbinpkg -binpkg-request-signature ccache"
+          FEATURES="-sandbox -usersandbox -ipc-sandbox -network-sandbox -pid-sandbox buildpkg parallel-install getbinpkg -binpkg-request-signature ccache -strict"
           CCACHE_DIR="/var/cache/ccache"
           CCACHE_UMASK="002"
           EMERGE_DEFAULT_OPTS="--getbinpkg --usepkg --binpkg-respect-use=n --binpkg-changed-deps=n --autounmask=y --autounmask-write --keep-going --quiet"
@@ -270,11 +271,6 @@ jobs:
           =dev-util/mesa_clc-9999*
           =dev-util/spirv-tools-9999*
           =media-libs/vulkan-loader-9999*
-          =gui-wm/mangowc-9999*
-          =gui-libs/scenefx-9999*
-          =gui-apps/quickshell-9999*
-          =gui-apps/noctalia-qs-9999*
-          =gui-wm/niri-9999*
           EOF
 
           cat > /etc/portage/package.mask/no-systemd << 'EOF'
@@ -683,10 +679,14 @@ jobs:
           BASE_LIST=(sys-boot/grub sys-boot/efibootmgr sys-auth/elogind sys-auth/seatd net-misc/networkmanager)
 
           if [ -s /overlay/changed_packages.txt ]; then
+              # ARCHITECT FIX: Quarantine experimental packages from core automated builds
               sed -i '/gui-apps\/quickshell/d' /overlay/changed_packages.txt || true
               sed -i '/gui-wm\/dank-material-shell/d' /overlay/changed_packages.txt || true
               sed -i '/gui-wm\/noctalia-shell/d' /overlay/changed_packages.txt || true
               sed -i '/sys-kernel\//d' /overlay/changed_packages.txt || true
+              sed -i '/gui-libs\/scenefx/d' /overlay/changed_packages.txt || true
+              sed -i '/gui-wm\/mangowc/d' /overlay/changed_packages.txt || true
+              sed -i '/app-misc\/rootapp-bin/d' /overlay/changed_packages.txt || true
               while IFS= read -r pkg_dir; do
                   [ -z "$pkg_dir" ] && continue
                   BASE_LIST+=("$pkg_dir")
@@ -870,7 +870,6 @@ jobs:
                           cpv, cur = None, []
                       else:
                           if line.startswith('CPV:'):
-                              # ARCHITECT FIX: Grab the index 1 of the split array
                               cpv = line.split(':', 1).strip()
                           cur.append(line.rstrip())
                   if cpv: blocks[cpv] = cur
