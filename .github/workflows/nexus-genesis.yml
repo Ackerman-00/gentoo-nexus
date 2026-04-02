@@ -185,8 +185,11 @@ jobs:
           EOF
 
       - name: Generate Portage DNA Script
+        env:
+          GITHUB_REPOSITORY_OWNER: ${{ github.repository_owner }}
+          GITHUB_REPOSITORY: ${{ github.repository }}
         run: |
-          cat > portage_dna.sh << 'DNA_EOF'
+          cat > portage_dna.sh << DNA_EOF
           #!/bin/bash
           set -euo pipefail
           
@@ -209,11 +212,10 @@ jobs:
           verify-signature = false
           EOF
 
-          # ARCHITECT FIX: Unlocked EVCS offline and enabled binpkg-respect-use=n
           cat > /etc/portage/make.conf << 'EOF'
           COMMON_FLAGS="-O2 -march=x86-64 -pipe"
-          CFLAGS="${COMMON_FLAGS}"
-          CXXFLAGS="${COMMON_FLAGS}"
+          CFLAGS="\${COMMON_FLAGS}"
+          CXXFLAGS="\${COMMON_FLAGS}"
           RUSTFLAGS="-C target-cpu=x86-64 -C opt-level=2"
           USE="wayland X vulkan pipewire dbus udev opengl dri gbm vaapi vdpau ffmpeg minizip -daemon -systemd -aqua -cups -gpm"
           VIDEO_CARDS="amdgpu radeon radeonsi intel iris nouveau virgl"
@@ -225,7 +227,7 @@ jobs:
           PKGDIR="/overlay/job_out"
           ACCEPT_LICENSE="*"
           EOF
-          echo "MAKEOPTS=\"-j$(nproc)\"" >> /etc/portage/make.conf
+          echo "MAKEOPTS=\"-j\$(nproc)\"" >> /etc/portage/make.conf
 
           emerge-webrsync -q || true
           getuto || true
@@ -304,7 +306,7 @@ jobs:
           CFLAGS="-O1 -pipe -fno-lto -fno-tree-loop-vectorize -fno-tree-slp-vectorize"
           CXXFLAGS="-O1 -pipe -fno-lto -fno-tree-loop-vectorize -fno-tree-slp-vectorize"
           EOF
-          echo "MAKEOPTS=\"-j$(nproc)\"" >> /etc/portage/env/no-lto
+          echo "MAKEOPTS=\"-j\$(nproc)\"" >> /etc/portage/env/no-lto
 
           cat > /etc/portage/package.env/no-lto-packages << 'EOF'
           dev-util/spirv-tools no-lto
@@ -314,7 +316,6 @@ jobs:
           dev-qt/qtwayland no-lto
           EOF
 
-          # ARCHITECT FIX: 100% compliant Steam Wiki 32-bit package list
           cat > /etc/portage/package.use/steam-32bit << 'EOF'
           app-accessibility/at-spi2-core abi_x86_32
           app-arch/bzip2 abi_x86_32
@@ -552,7 +553,6 @@ jobs:
           sys-kernel/installkernel dracut grub
           EOF
 
-          # Pull binaries instantly if DNA matches
           emerge --oneshot --quiet sys-kernel/gentoo-kernel sys-kernel/linux-firmware sys-kernel/dracut || true
           
           for i in 1 2; do emerge --deep --newuse sys-kernel/gentoo-kernel sys-kernel/linux-firmware sys-kernel/dracut 2>&1 && break || etc-update --automode -5; done
