@@ -693,13 +693,14 @@ jobs:
           set -euo pipefail
           source /overlay/portage_dna.sh
           
-          # ARCHITECT FIX: Un-quarantined the custom stack so it builds automatically!
+          # ARCHITECT FIX: Dynamic array assembly inspired by Void-Nexus XBPS workflow
           BASE_LIST=(
             sys-boot/grub sys-boot/efibootmgr sys-auth/elogind sys-auth/seatd net-misc/networkmanager
             gui-libs/scenefx gui-wm/mangowc gui-apps/quickshell
             gui-wm/noctalia-shell gui-wm/dank-material-shell app-misc/rootapp-bin
           )
 
+          # Dynamically append any newly changed packages exactly like Void-Nexus
           if [ -s /overlay/changed_packages.txt ]; then
               sed -i '/sys-kernel\//d' /overlay/changed_packages.txt || true
               while IFS= read -r pkg_dir; do
