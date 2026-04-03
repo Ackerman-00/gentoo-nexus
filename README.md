@@ -6,8 +6,6 @@
 [![Forge](https://img.shields.io/github/actions/workflow/status/Ackerman-00/gentoo-nexus/build.yml?style=for-the-badge&label=FORGE&logo=githubactions&logoColor=white)](https://github.com/Ackerman-00/gentoo-nexus/actions)
 &nbsp;
 [![Binhost](https://img.shields.io/badge/BINHOST-LIVE-059669?style=for-the-badge&logo=linux&logoColor=white)](https://Ackerman-00.github.io/gentoo-nexus/)
-&nbsp;
-[![Packages](https://img.shields.io/badge/BROWSE_PACKAGES-→-7c3aed?style=for-the-badge)](https://Ackerman-00.github.io/gentoo-nexus/)
 
 <p><sup>Packages built nightly · Pre-compiled binaries · Drop-in Portage overlay</sup></p>
 </div>
@@ -63,16 +61,6 @@ EMERGE_DEFAULT_OPTS="--getbinpkg --binpkg-respect-use=n --binpkg-changed-deps=n"
 ---
 
 ## 📦 Packages
-
-<div align="center">
-<a href="https://Ackerman-00.github.io/gentoo-nexus/">
-  <img src="https://img.shields.io/badge/🌐_Browse_All_Packages-Ackerman--00.github.io%2Fgentoo--nexus-7c3aed?style=for-the-badge&logoColor=white" alt="Browse Packages" />
-</a>
-<br />
-<sub>Full package list with versions, descriptions, and build status.</sub>
-</div>
-
-<br />
 
 | Package | Description | Type |
 |---------|-------------|:----:|
