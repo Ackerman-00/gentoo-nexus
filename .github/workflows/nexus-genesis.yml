@@ -188,14 +188,29 @@ jobs:
         run: |
           if [ -s changed_packages.txt ]; then
             echo ">>> Recalculating cryptographic Manifest hashes for auto-updated ebuilds..."
-            docker run --rm -v "${{ github.workspace }}:/overlay" gentoo/stage3:amd64-desktop-openrc bash -c "
-              for pkg_dir in \$(cat /overlay/changed_packages.txt); do
-                if [ -d \"/overlay/\$pkg_dir\" ]; then
-                  cd \"/overlay/\$pkg_dir\"
-                  ebuild \$(ls -1v *.ebuild | tail -n 1) manifest || true
-                fi
-              done
-            "
+            cat > manifest_script.sh << 'EOF'
+            #!/bin/bash
+            set -euo pipefail
+            mkdir -p /etc/portage/repos.conf /overlay/distfiles
+            cat >> /etc/portage/make.conf << 'MAKECONF'
+            FEATURES="-userfetch -userpriv -usersandbox -ipc-sandbox -network-sandbox -pid-sandbox"
+            DISTDIR="/overlay/distfiles"
+            MAKECONF
+            emerge-webrsync -q
+            cat > /etc/portage/repos.conf/gentoo-nexus.conf << 'REPOCONF'
+            [gentoo-nexus]
+            location = /overlay
+            masters = gentoo
+            REPOCONF
+            for pkg_dir in $(cat /overlay/changed_packages.txt); do
+              if [ -d "/overlay/$pkg_dir" ]; then
+                cd "/overlay/$pkg_dir"
+                ebuild $(ls -1v *.ebuild | tail -n 1) manifest || true
+              fi
+            done
+            EOF
+            chmod +x manifest_script.sh
+            docker run --rm -v "${{ github.workspace }}:/overlay" gentoo/stage3:amd64-desktop-openrc bash /overlay/manifest_script.sh
           fi
 
       - name: Generate Portage DNA Script
@@ -907,7 +922,7 @@ jobs:
           for cpv, lines in new_b.items():
               old_b[cpv] = lines
 
-          # ARCHITECT FIX: Fully cleanse and rewrite all URIs in the entire index
+          # Fully cleanse and rewrite all URIs in the entire index
           for cpv, lines in old_b.items():
               rel_path = next((l.split(':', 1).strip() for l in lines if l.startswith('PATH:')), None)
               if rel_path:
