@@ -184,20 +184,6 @@ jobs:
               Path('changed_packages.txt').write_text('\n'.join(sorted(updated_atoms)) + '\n', encoding="utf-8")
           EOF
 
-      - name: Regenerate Modified Manifests
-        run: |
-          if [ -s changed_packages.txt ]; then
-            echo ">>> Recalculating cryptographic Manifest hashes for auto-updated ebuilds..."
-            docker run --rm -v "${{ github.workspace }}:/overlay" gentoo/stage3:amd64-desktop-openrc bash -c "
-              for pkg_dir in \$(cat /overlay/changed_packages.txt); do
-                if [ -d \"/overlay/\$pkg_dir\" ]; then
-                  cd \"/overlay/\$pkg_dir\"
-                  ebuild \$(ls -1v *.ebuild | tail -n 1) manifest || true
-                fi
-              done
-            "
-          fi
-
       - name: Generate Portage DNA Script
         env:
           GITHUB_REPOSITORY_OWNER: ${{ github.repository_owner }}
@@ -236,9 +222,9 @@ jobs:
           FEATURES="-sandbox -usersandbox -ipc-sandbox -network-sandbox -pid-sandbox buildpkg parallel-install getbinpkg -binpkg-request-signature ccache -strict"
           CCACHE_DIR="/var/cache/ccache"
           CCACHE_UMASK="002"
-          # ARCHITECT FIX: Added PORTAGE_BINHOST to force resolution, removed --quiet to expose fetch logs
           PORTAGE_BINHOST="https://${GITHUB_REPOSITORY_OWNER}.github.io/${GITHUB_REPOSITORY#*/}/"
-          EMERGE_DEFAULT_OPTS="--getbinpkg --usepkg --binpkg-respect-use=n --binpkg-changed-deps=n --autounmask=y --autounmask-write --keep-going"
+          # ARCHITECT FIX: Added --quiet-build=y. This prevents 100k lines of C++ compile logs from crashing GitHub UI!
+          EMERGE_DEFAULT_OPTS="--getbinpkg --usepkg --binpkg-respect-use=n --binpkg-changed-deps=n --autounmask=y --autounmask-write --keep-going --quiet-build=y"
           DISTDIR="/var/cache/distfiles"
           PKGDIR="/overlay/job_out"
           ACCEPT_LICENSE="*"
@@ -907,7 +893,6 @@ jobs:
           EOF
 
           cd pages_repo
-          # ARCHITECT FIX: Add .nojekyll so GitHub Pages stops blocking the Packages file!
           touch .nojekyll
           git add Packages .nojekyll
           git commit -m "Update Binhost via Parallel Sync Pipeline" || true
