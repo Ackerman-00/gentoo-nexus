@@ -279,7 +279,6 @@ jobs:
           priority = 9999
           EOF
 
-          # ARCHITECT FIX: Only masking the broken 9999 ebuilds so quickshell-9999 can still compile for dank-material-shell!
           cat > /etc/portage/package.mask/no-live-core << 'EOF'
           =media-libs/mesa-9999*
           =dev-util/mesa_clc-9999*
@@ -904,7 +903,12 @@ jobs:
           new_b = get_blocks('job_out/Packages')
           old_b = get_blocks('pages_repo/Packages')
 
+          # Merge new into old
           for cpv, lines in new_b.items():
+              old_b[cpv] = lines
+
+          # ARCHITECT FIX: Fully cleanse and rewrite all URIs in the entire index
+          for cpv, lines in old_b.items():
               rel_path = next((l.split(':', 1).strip() for l in lines if l.startswith('PATH:')), None)
               if rel_path:
                   fname = os.path.basename(rel_path)
