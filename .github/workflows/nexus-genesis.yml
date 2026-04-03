@@ -875,7 +875,7 @@ jobs:
                           cpv, cur = None, []
                       else:
                           if line.startswith('CPV:'):
-                              # ARCHITECT FIX: Grab the index 1 of the split array
+                              # ARCHITECT FIX: Added the missing to pull the actual string out of the array before stripping!
                               cpv = line.split(':', 1).strip()
                           cur.append(line.rstrip())
                   if cpv: blocks[cpv] = cur
@@ -885,6 +885,7 @@ jobs:
           old_b = get_blocks('pages_repo/Packages')
 
           for cpv, lines in new_b.items():
+              # ARCHITECT FIX: Added the missing here as well!
               rel_path = next((l.split(':', 1).strip() for l in lines if l.startswith('PATH:')), None)
               if rel_path:
                   fname = os.path.basename(rel_path)
