@@ -184,6 +184,20 @@ jobs:
               Path('changed_packages.txt').write_text('\n'.join(sorted(updated_atoms)) + '\n', encoding="utf-8")
           EOF
 
+      - name: Regenerate Modified Manifests
+        run: |
+          if [ -s changed_packages.txt ]; then
+            echo ">>> Recalculating cryptographic Manifest hashes for auto-updated ebuilds..."
+            docker run --rm -v "${{ github.workspace }}:/overlay" gentoo/stage3:amd64-desktop-openrc bash -c "
+              for pkg_dir in \$(cat /overlay/changed_packages.txt); do
+                if [ -d \"/overlay/\$pkg_dir\" ]; then
+                  cd \"/overlay/\$pkg_dir\"
+                  ebuild \$(ls -1v *.ebuild | tail -n 1) manifest || true
+                fi
+              done
+            "
+          fi
+
       - name: Generate Portage DNA Script
         env:
           GITHUB_REPOSITORY_OWNER: ${{ github.repository_owner }}
@@ -198,8 +212,6 @@ jobs:
           mkdir -p /etc/portage/{repos.conf,binrepos.conf,env,package.{accept_keywords,license,use,mask,env}}
           mkdir -p /overlay/job_out
 
-          # ARCHITECT FIX: Priority Inversion fixed. 
-          # Official Gentoo is now Priority 1. Nexus is Priority 99999.
           cat > /etc/portage/binrepos.conf/gentoo.conf << 'EOF'
           [gentoo]
           priority = 1
@@ -214,17 +226,19 @@ jobs:
           verify-signature = false
           EOF
 
-          cat > /etc/portage/make.conf << 'EOF'
+          cat > /etc/portage/make.conf << EOF
           COMMON_FLAGS="-O2 -march=x86-64 -pipe"
-          CFLAGS="\${COMMON_FLAGS}"
-          CXXFLAGS="\${COMMON_FLAGS}"
+          CFLAGS="\\\${COMMON_FLAGS}"
+          CXXFLAGS="\\\${COMMON_FLAGS}"
           RUSTFLAGS="-C target-cpu=x86-64 -C opt-level=2"
           USE="wayland X vulkan pipewire dbus udev opengl dri gbm vaapi vdpau ffmpeg minizip -daemon -systemd -aqua -cups -gpm"
           VIDEO_CARDS="amdgpu radeon radeonsi intel iris nouveau virgl"
           FEATURES="-sandbox -usersandbox -ipc-sandbox -network-sandbox -pid-sandbox buildpkg parallel-install getbinpkg -binpkg-request-signature ccache -strict"
           CCACHE_DIR="/var/cache/ccache"
           CCACHE_UMASK="002"
-          EMERGE_DEFAULT_OPTS="--getbinpkg --usepkg --binpkg-respect-use=n --binpkg-changed-deps=n --autounmask=y --autounmask-write --keep-going --quiet"
+          # ARCHITECT FIX: Added PORTAGE_BINHOST to force resolution, removed --quiet to expose fetch logs
+          PORTAGE_BINHOST="https://${GITHUB_REPOSITORY_OWNER}.github.io/${GITHUB_REPOSITORY#*/}/"
+          EMERGE_DEFAULT_OPTS="--getbinpkg --usepkg --binpkg-respect-use=n --binpkg-changed-deps=n --autounmask=y --autounmask-write --keep-going"
           DISTDIR="/var/cache/distfiles"
           PKGDIR="/overlay/job_out"
           ACCEPT_LICENSE="*"
@@ -241,6 +255,9 @@ jobs:
 
           git clone --depth 1 https://github.com/gentoo-mirror/guru.git /var/db/repos/guru 2>/dev/null || true
           git clone --depth 1 https://github.com/anyc/steam-overlay.git /var/db/repos/steam-overlay 2>/dev/null || true
+
+          # ARCHITECT FIX: Annihilate live 9999 ebuilds from GURU so they cannot hijack stable versions
+          find /var/db/repos/guru -name "*-9999.ebuild" -type f -delete
 
           mkdir -p /var/db/repos/guru/metadata /var/db/repos/steam-overlay/metadata
           echo -e "[repo]\nrepo-name = guru\nmasters = gentoo" > /var/db/repos/guru/metadata/layout.conf
@@ -265,18 +282,6 @@ jobs:
           location = /overlay
           masters = gentoo guru
           priority = 9999
-          EOF
-
-          cat > /etc/portage/package.mask/no-live-core << 'EOF'
-          =media-libs/mesa-9999*
-          =dev-util/mesa_clc-9999*
-          =dev-util/spirv-tools-9999*
-          =media-libs/vulkan-loader-9999*
-          =gui-wm/mangowc-9999*
-          =gui-libs/scenefx-9999*
-          =gui-apps/quickshell-9999*
-          =gui-apps/noctalia-qs-9999*
-          =gui-wm/niri-9999*
           EOF
 
           cat > /etc/portage/package.mask/no-systemd << 'EOF'
@@ -560,7 +565,7 @@ jobs:
           sys-kernel/installkernel dracut grub
           EOF
 
-          emerge --oneshot --quiet sys-kernel/gentoo-kernel sys-kernel/linux-firmware sys-kernel/dracut || true
+          emerge --oneshot sys-kernel/gentoo-kernel sys-kernel/linux-firmware sys-kernel/dracut || true
           
           for i in 1 2; do emerge --deep --newuse sys-kernel/gentoo-kernel sys-kernel/linux-firmware sys-kernel/dracut 2>&1 && break || etc-update --automode -5; done
           emerge --deep --newuse sys-kernel/gentoo-kernel sys-kernel/linux-firmware sys-kernel/dracut
@@ -875,7 +880,6 @@ jobs:
                           cpv, cur = None, []
                       else:
                           if line.startswith('CPV:'):
-                              # ARCHITECT FIX: Added the missing to pull the actual string out of the array before stripping!
                               cpv = line.split(':', 1).strip()
                           cur.append(line.rstrip())
                   if cpv: blocks[cpv] = cur
@@ -885,7 +889,6 @@ jobs:
           old_b = get_blocks('pages_repo/Packages')
 
           for cpv, lines in new_b.items():
-              # ARCHITECT FIX: Added the missing here as well!
               rel_path = next((l.split(':', 1).strip() for l in lines if l.startswith('PATH:')), None)
               if rel_path:
                   fname = os.path.basename(rel_path)
@@ -904,6 +907,8 @@ jobs:
           EOF
 
           cd pages_repo
-          git add Packages
+          # ARCHITECT FIX: Add .nojekyll so GitHub Pages stops blocking the Packages file!
+          touch .nojekyll
+          git add Packages .nojekyll
           git commit -m "Update Binhost via Parallel Sync Pipeline" || true
           git push https://x-access-token:${GITHUB_TOKEN}@github.com/${{ github.repository }}.git gh-pages
