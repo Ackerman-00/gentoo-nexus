@@ -236,7 +236,6 @@ jobs:
           FEATURES="-sandbox -usersandbox -ipc-sandbox -network-sandbox -pid-sandbox buildpkg parallel-install getbinpkg -binpkg-request-signature ccache -strict"
           CCACHE_DIR="/var/cache/ccache"
           CCACHE_UMASK="002"
-          PORTAGE_BINHOST="https://${GITHUB_REPOSITORY_OWNER}.github.io/${GITHUB_REPOSITORY#*/}/"
           EMERGE_DEFAULT_OPTS="--getbinpkg --usepkg --binpkg-respect-use=n --binpkg-changed-deps=n --autounmask=y --autounmask-write --keep-going --quiet-build=y"
           DISTDIR="/var/cache/distfiles"
           PKGDIR="/overlay/job_out"
@@ -693,14 +692,12 @@ jobs:
           set -euo pipefail
           source /overlay/portage_dna.sh
           
-          # ARCHITECT FIX: Dynamic array assembly inspired by Void-Nexus XBPS workflow
           BASE_LIST=(
             sys-boot/grub sys-boot/efibootmgr sys-auth/elogind sys-auth/seatd net-misc/networkmanager
             gui-libs/scenefx gui-wm/mangowc gui-apps/quickshell
             gui-wm/noctalia-shell gui-wm/dank-material-shell app-misc/rootapp-bin
           )
 
-          # Dynamically append any newly changed packages exactly like Void-Nexus
           if [ -s /overlay/changed_packages.txt ]; then
               sed -i '/sys-kernel\//d' /overlay/changed_packages.txt || true
               while IFS= read -r pkg_dir; do
@@ -874,7 +871,6 @@ jobs:
           import os
           base_url = f"https://github.com/{os.environ.get('GITHUB_REPOSITORY')}/releases/download/rolling/"
           
-          # ARCHITECT FIX: Reads the VERSION: 2 header exactly as Portage generated it
           headers = []
           if os.path.exists('job_out/Packages'):
               with open('job_out/Packages', 'r', encoding='utf-8') as f:
