@@ -2,9 +2,10 @@
 # Distributed under the terms of the GNU General Public License v2
 
 EAPI=8
-inherit desktop xdg
 
-DESCRIPTION="A complete desktop shell for niri and other Wayland compositors."
+inherit desktop go-module xdg
+
+DESCRIPTION="A complete desktop shell for niri and other Wayland compositors"
 HOMEPAGE="https://github.com/AvengeMedia/DankMaterialShell"
 SRC_URI="https://github.com/AvengeMedia/DankMaterialShell/archive/v${PV}.tar.gz -> ${P}.tar.gz"
 
@@ -14,36 +15,38 @@ KEYWORDS="~amd64"
 RESTRICT="network-sandbox"
 
 DEPEND="
-    gui-apps/quickshell
-    media-sound/cava
     app-misc/cliphist
-    gui-apps/wl-clipboard
-    x11-misc/matugen
-    gui-wm/niri
-    dev-qt/qtmultimedia:6
     app-misc/dgop
+    gui-apps/quickshell
+    gui-apps/wl-clipboard
+    media-sound/cava
     sys-apps/danksearch
-    x11-base/xwayland-satellite
+    x11-misc/matugen
+    dev-qt/qtmultimedia:6
 "
 RDEPEND="${DEPEND}"
 BDEPEND=">=dev-lang/go-1.21"
 
 S="${WORKDIR}/DankMaterialShell-${PV}/core"
 
+src_unpack() {
+    default
+    go-module_src_unpack
+}
+
 src_compile() {
     export GOMODCACHE="${WORKDIR}/go-mod"
     export GOPROXY="https://proxy.golang.org,direct"
     export GOFLAGS="-buildvcs=false"
-    go build -p 2 -ldflags="-s -w" -o ./dms ./cmd/dms || die "go build failed"
+    ego build -p 2 -ldflags="-s -w" -o ./dms ./cmd/dms || die "go build failed"
 
-    mkdir -pv completions || die
-
+    mkdir -p completions || die
     chmod 755 ./dms
     chmod o+rx "${WORKDIR}" "${S}" completions
-
-    su portage -s /bin/sh -c "HOME=/tmp ${S}/dms completion bash" > completions/dms     || die "bash completion failed"
-    su portage -s /bin/sh -c "HOME=/tmp ${S}/dms completion fish" > completions/dms.fish || die "fish completion failed"
-    su portage -s /bin/sh -c "HOME=/tmp ${S}/dms completion zsh"  > completions/_dms    || die "zsh completion failed"
+    # Generate completions
+    ./dms completion bash > completions/dms 2>/dev/null || die "bash completion failed"
+    ./dms completion fish > completions/dms.fish 2>/dev/null || die "fish completion failed"
+    ./dms completion zsh  > completions/_dms 2>/dev/null || die "zsh completion failed"
 }
 
 src_install() {
@@ -56,4 +59,10 @@ src_install() {
     domenu ../assets/dms-open.desktop
     insinto /usr/share/quickshell/dms
     doins -r ../quickshell/*
+}
+
+pkg_postinst() {
+    xdg_pkg_postinst
+    elog "DankMaterialShell requires a running Wayland compositor."
+    elog "For Niri, add 'dms' to your autostart."
 }

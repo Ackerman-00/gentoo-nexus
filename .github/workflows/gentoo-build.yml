@@ -1,0 +1,285 @@
+name: Gentoo Build Relay
+
+on:
+  workflow_dispatch:
+    inputs:
+      package_list:
+        description: 'Space-separated list of package atoms to build (e.g., "gui-wm/niri media-libs/mesa")'
+        required: true
+
+concurrency:
+  group: gentoo-build-${{ github.run_id }}
+  cancel-in-progress: false
+
+permissions:
+  contents: write
+  actions: write
+
+jobs:
+  build:
+    name: Build and Deploy
+    runs-on: ubuntu-latest
+    timeout-minutes: 360
+    steps:
+      - name: Checkout Repository
+        uses: actions/checkout@v4
+        with:
+          token: ${{ secrets.GITHUB_TOKEN }}
+          fetch-depth: 0
+
+      - name: Set up Binhost Cache
+        uses: actions/cache@v4
+        with:
+          path: /tmp/binpkgs
+          key: gentoo-binpkgs-${{ hashFiles('**/*.ebuild') }}
+          restore-keys: gentoo-binpkgs-
+
+      - name: Prepare Portage DNA Script
+        env:
+          GITHUB_REPOSITORY_OWNER: ${{ github.repository_owner }}
+          GITHUB_REPOSITORY: ${{ github.repository }}
+        run: |
+          cat > portage_dna.sh << 'DNA_EOF'
+          #!/bin/bash
+          set -euo pipefail
+          
+          echo ">>> Injecting Nexus Portage DNA..."
+          mkdir -p /var/db/repos/{gentoo,steam-overlay}
+          mkdir -p /etc/portage/{repos.conf,binrepos.conf,env,package.{accept_keywords,license,use,env}}
+          mkdir -p /overlay/job_out
+
+          # Add official Gentoo binhost for faster builds
+          cat > /etc/portage/binrepos.conf/gentoo.conf << 'EOF'
+          [gentoo]
+          priority = 1
+          sync-uri = https://distfiles.gentoo.org/releases/amd64/binpackages/23.0/x86-64/
+          verify-signature = false
+          EOF
+
+          # Add custom binhost (highest priority)
+          cat > /etc/portage/binrepos.conf/nexus.conf << EOF
+          [gentoo-nexus]
+          priority = 99999
+          sync-uri = https://${GITHUB_REPOSITORY_OWNER}.github.io/${GITHUB_REPOSITORY#*/}/
+          verify-signature = false
+          EOF
+
+
+          #  Init-agnostic build configuration
+
+          cat > /etc/portage/make.conf << EOF
+          COMMON_FLAGS="-O2 -march=x86-64-v3 -pipe"
+          CFLAGS="\\\${COMMON_FLAGS}"
+          CXXFLAGS="\\\${COMMON_FLAGS}"
+          RUSTFLAGS="-C target-cpu=x86-64-v3 -C opt-level=2"
+          USE="wayland X vulkan pipewire dbus udev opengl dri gbm vaapi vdpau ffmpeg minizip -daemon -aqua -cups -gpm"
+          VIDEO_CARDS="amdgpu radeon radeonsi intel iris nouveau virgl"
+          FEATURES="-sandbox -usersandbox -ipc-sandbox -network-sandbox -pid-sandbox buildpkg parallel-install getbinpkg -binpkg-request-signature ccache -strict"
+          CCACHE_DIR="/var/cache/ccache"
+          CCACHE_UMASK="002"
+          EMERGE_DEFAULT_OPTS="--getbinpkg --usepkg --binpkg-respect-use=n --binpkg-changed-deps=n --autounmask=y --autounmask-write --keep-going --quiet-build=y --jobs=\$(nproc) --load-average=\$(nproc)"
+          DISTDIR="/var/cache/distfiles"
+          PKGDIR="/overlay/job_out"
+          ACCEPT_LICENSE="*"
+          ACCEPT_KEYWORDS="~amd64"
+          EOF
+          echo "MAKEOPTS=\"-j\$(nproc)\"" >> /etc/portage/make.conf
+
+          emerge-webrsync -q || true
+          getuto || true
+          eselect profile set default/linux/amd64/23.0/desktop
+          
+          emerge --noreplace --quiet dev-vcs/git dev-util/ccache
+          chown -R portage:portage /var/cache/ccache
+          chmod -R 2777 /var/cache/ccache
+
+          # Clone Steam overlay as a master repo for dependencies
+          git clone --depth 1 https://github.com/anyc/steam-overlay.git /var/db/repos/steam-overlay 2>/dev/null || true
+          mkdir -p /var/db/repos/steam-overlay/metadata
+          echo -e "[repo]\nrepo-name = steam-overlay\nmasters = gentoo" > /var/db/repos/steam-overlay/metadata/layout.conf
+
+          cat > /etc/portage/repos.conf/steam-overlay.conf << 'EOF'
+          [steam-overlay]
+          location = /var/db/repos/steam-overlay
+          masters = gentoo
+          priority = 50
+          EOF
+
+          cat > /etc/portage/repos.conf/gentoo-nexus.conf << 'EOF'
+          [gentoo-nexus]
+          location = /overlay
+          masters = gentoo
+          priority = 9999
+          EOF
+
+          echo "*/*::steam-overlay **" >> /etc/portage/package.accept_keywords/steam
+          echo "*/*::gentoo-nexus **" >> /etc/portage/package.accept_keywords/nexus
+          cat >> /etc/portage/package.accept_keywords/nexus << 'EOF'
+          media-libs/mesa ~amd64
+          media-libs/vulkan-loader ~amd64
+          dev-util/mesa_clc ~amd64
+          dev-util/spirv-tools ~amd64
+          dev-util/spirv-headers ~amd64
+          dev-util/vulkan-headers ~amd64
+          dev-util/glslang ~amd64
+          dev-util/vulkan-utility-libraries ~amd64
+          sys-kernel/gentoo-kernel ~amd64
+          sys-kernel/linux-firmware ~amd64
+          virtual/dist-kernel ~amd64
+          EOF
+
+          cat > /etc/portage/package.use/global << 'EOF'
+          sys-libs/zlib minizip
+          media-video/pipewire extra
+          media-video/ffmpeg -sdl
+          sys-libs/ncurses -gpm
+          # Steam-related use flags
+          dev-libs/openssl -bindist
+          games-util/steam-launcher steamruntime
+          EOF
+
+          cat > /etc/portage/env/no-lto << 'EOF'
+          CFLAGS="-O1 -pipe -fno-lto -fno-tree-loop-vectorize -fno-tree-slp-vectorize"
+          CXXFLAGS="-O1 -pipe -fno-lto -fno-tree-loop-vectorize -fno-tree-slp-vectorize"
+          EOF
+          echo "MAKEOPTS=\"-j\$(nproc)\"" >> /etc/portage/env/no-lto
+
+          cat > /etc/portage/package.env/no-lto-packages << 'EOF'
+          dev-util/spirv-tools no-lto
+          media-libs/mesa no-lto
+          gui-libs/gtk no-lto
+          dev-qt/qtbase no-lto
+          dev-qt/qtwayland no-lto
+          EOF
+
+          emaint binhost --fix 2>/dev/null || true
+          DNA_EOF
+          chmod +x portage_dna.sh
+
+      - name: Restore Binhost Cache
+        run: |
+          mkdir -p /tmp/binpkgs
+          if ls /tmp/binpkgs/*.gpkg.tar 1>/dev/null 2>&1; then
+            echo "Existing binpkgs found in cache."
+          fi
+
+      - name: Build Package (Relay Race)
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+          TARGET_PKG: ${{ github.event.inputs.package_list }}
+        run: |
+          read -r -a PKGS <<< "$TARGET_PKG"
+          for pkg in "${PKGS[@]}"; do
+            echo ">>> Building: $pkg"
+            cat > build_script.sh << BUILDEOF
+          #!/bin/bash
+          set -euo pipefail
+          source /overlay/portage_dna.sh
+          mkdir -p /var/cache/binpkgs
+          cp /tmp/binpkgs/*.gpkg.tar /var/cache/binpkgs/ 2>/dev/null || true
+          emerge --getbinpkg --usepkg --buildpkg $pkg
+          cp /var/cache/binpkgs/*.gpkg.tar /tmp/binpkgs/ 2>/dev/null || true
+          BUILDEOF
+            chmod +x build_script.sh
+            docker run --rm --privileged \
+              -v "${{ github.workspace }}:/overlay" \
+              -v "/tmp/binpkgs:/tmp/binpkgs" \
+              -v "/tmp/distfiles:/var/cache/distfiles" \
+              -v "/tmp/ccache:/var/cache/ccache" \
+              gentoo/stage3:amd64-desktop-openrc bash /overlay/build_script.sh
+          done
+
+      - name: Upload Binaries to Job Out
+        run: |
+          mkdir -p job_out
+          cp /tmp/binpkgs/*.gpkg.tar job_out/ 2>/dev/null || true
+
+      - name: Generate Unified Portage Index
+        run: |
+          if [ -z "$(ls -A job_out 2>/dev/null)" ]; then
+            echo "No binaries generated. Exiting."
+            exit 0
+          fi
+          docker run --rm -v "${{ github.workspace }}/job_out:/pkgdir" gentoo/stage3:amd64-desktop-openrc bash -c "\
+          emerge-webrsync -q && FEATURES='binpkg-multi-instance' PKGDIR='/pkgdir' emaint binhost --fix"
+
+      - name: Deploy to GitHub Releases & Pages
+        env:
+          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+        run: |
+          if [ -z "$(find job_out -name '*.gpkg.tar' 2>/dev/null)" ]; then exit 0; fi
+
+          echo ">>> Uploading binaries to Releases..."
+          gh release view rolling || gh release create rolling --title "Nexus Rolling Binaries" --notes "Automated Gentoo Binhost"
+          find job_out -name '*.gpkg.tar' -exec gh release upload rolling {} --clobber \;
+
+          echo ">>> Updating Packages index on Pages..."
+          git config --global user.name "github-actions[bot]"
+          git config --global user.email "bot@github.com"
+          
+          git clone --branch gh-pages https://x-access-token:${GITHUB_TOKEN}@github.com/${{ github.repository }}.git pages_repo || \
+          (mkdir pages_repo && cd pages_repo && git init && git checkout -b gh-pages)
+
+          python3 << 'EOF'
+          import os
+          base_url = f"https://github.com/{os.environ.get('GITHUB_REPOSITORY')}/releases/download/rolling/"
+          
+          headers = []
+          if os.path.exists('job_out/Packages'):
+              with open('job_out/Packages', 'r', encoding='utf-8') as f:
+                  for line in f:
+                      if line.strip() == '': break
+                      headers.append(line.rstrip())
+          
+          def get_blocks(path):
+              blocks = {}
+              if not os.path.exists(path): return blocks
+              with open(path, 'r', encoding='utf-8') as f:
+                  lines = f.readlines()
+                  start_idx = 0
+                  for i, line in enumerate(lines):
+                      if line.strip() == '':
+                          start_idx = i + 1
+                          break
+                  
+                  cpv, cur = None, []
+                  for line in lines[start_idx:]:
+                      if line.strip() == '':
+                          if cpv: blocks[cpv] = cur
+                          cpv, cur = None, []
+                      else:
+                          if line.startswith('CPV:'):
+                              cpv = line.split(':', 1)[1].strip()
+                          cur.append(line.rstrip())
+                  if cpv: blocks[cpv] = cur
+              return blocks
+
+          new_b = get_blocks('job_out/Packages')
+          old_b = get_blocks('pages_repo/Packages')
+
+          for cpv, lines in new_b.items():
+              old_b[cpv] = lines
+
+          for cpv, lines in old_b.items():
+              rel_path = next((l.split(':', 1)[1].strip() for l in lines if l.startswith('PATH:')), None)
+              if rel_path:
+                  fname = os.path.basename(rel_path)
+              else:
+                  pkg_name = cpv.split('/')[-1] if '/' in cpv else cpv
+                  fname = f"{pkg_name}.gpkg.tar"
+                  
+              lines = [l for l in lines if not l.startswith('URI:')]
+              lines.append(f"URI: {base_url}{fname}")
+              old_b[cpv] = lines
+
+          with open('pages_repo/Packages', 'w', encoding='utf-8') as f:
+              f.write("\n".join(headers) + "\n\n")
+              for cpv in sorted(old_b.keys()):
+                  f.write("\n".join(old_b[cpv]) + "\n\n")
+          EOF
+
+          cd pages_repo
+          touch .nojekyll
+          git add Packages .nojekyll
+          git commit -m "Update Binhost Index" || true
+          git push https://x-access-token:${GITHUB_TOKEN}@github.com/${{ github.repository }}.git gh-pages

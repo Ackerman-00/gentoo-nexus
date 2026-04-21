@@ -9,6 +9,11 @@ SLOT="0"
 KEYWORDS="~amd64"
 
 QA_PREBUILT="usr/bin/matugen"
+QA_PRESTRIPPED="usr/bin/matugen"
+
+RDEPEND="
+    dev-libs/openssl:=
+"
 
 S="${WORKDIR}"
 

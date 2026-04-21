@@ -2,13 +2,13 @@ EAPI=8
 
 inherit meson
 
-DESCRIPTION="Wayland compositor based on wlroots and scenefx"
+DESCRIPTION="Lightweight, high-performance Wayland compositor built on dwl"
 HOMEPAGE="https://github.com/mangowm/mango"
 SRC_URI="https://github.com/mangowm/mango/archive/refs/tags/${PV}.tar.gz -> ${P}.tar.gz"
 
 LICENSE="CC0-1.0 GPL-3+ MIT"
 SLOT="0"
-KEYWORDS="amd64"
+KEYWORDS="~amd64"
 IUSE="X"
 
 DEPEND="
@@ -40,4 +40,9 @@ src_configure() {
         $(meson_feature X xwayland)
     )
     meson_src_configure
+}
+
+pkg_postinst() {
+    elog "MangoWC is a dynamic tiling Wayland compositor."
+    elog "Configuration is done by editing config.h and recompiling."
 }

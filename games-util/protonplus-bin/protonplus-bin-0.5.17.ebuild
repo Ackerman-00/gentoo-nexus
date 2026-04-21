@@ -8,7 +8,7 @@ SRC_URI="https://github.com/Vysp3r/ProtonPlus/archive/refs/tags/v${PV}.tar.gz ->
 
 LICENSE="GPL-3.0-or-later"
 SLOT="0"
-KEYWORDS="~amd64" #
+KEYWORDS="~amd64"
 
 S="${WORKDIR}/ProtonPlus-${PV}"
 
@@ -20,6 +20,7 @@ DEPEND="
     gui-libs/gtk:4
     gui-libs/libadwaita:1
     net-libs/libsoup:3.0
+    net-libs/webkit-gtk:6.0
 "
 RDEPEND="${DEPEND}"
 BDEPEND="
@@ -34,4 +35,9 @@ BDEPEND="
 src_prepare() {
     default
     vala_setup
+}
+
+pkg_postinst() {
+    xdg_pkg_postinst
+    elog "ProtonPlus manages compatibility tools for Steam, Lutris, Heroic, and Bottles."
 }
