@@ -19,7 +19,7 @@ jobs:
     runs-on: ubuntu-latest
     timeout-minutes: 30
     outputs:
-      changed_packages: ${{ steps.scan.outputs.changed_packages }}
+      build_list: ${{ steps.audit.outputs.build_list }}
     steps:
       - name: Checkout Repository
         uses: actions/checkout@v4
