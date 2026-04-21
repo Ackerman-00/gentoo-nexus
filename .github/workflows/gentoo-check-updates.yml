@@ -172,27 +172,7 @@ jobs:
         run: |
           if [ -s changed_packages.txt ]; then
             echo ">>> Regenerating Manifests..."
-            cat > manifest_script.sh << 'EOF'
-          #!/bin/bash
-          set -euo pipefail
-          mkdir -p /etc/portage/repos.conf /overlay/distfiles /var/db/repos/gentoo
-          cat >> /etc/portage/make.conf << 'MAKECONF'
-          FEATURES="-userfetch -userpriv -usersandbox -ipc-sandbox -network-sandbox -pid-sandbox"
-          DISTDIR="/overlay/distfiles"
-          MAKECONF
-          emerge-webrsync -q
-          cat > /etc/portage/repos.conf/gentoo-nexus.conf << 'REPOCONF'
-          [gentoo-nexus]
-          location = /overlay
-          masters = gentoo
-          REPOCONF
-          for pkg_dir in $(cat /overlay/changed_packages.txt); do
-            if [ -d "/overlay/$pkg_dir" ]; then
-              cd "/overlay/$pkg_dir"
-              ebuild $(ls -1v *.ebuild | tail -n 1) manifest || true
-            fi
-          done
-          EOF
+            printf '#!/bin/bash\nset -euo pipefail\nmkdir -p /etc/portage/repos.conf /overlay/distfiles /var/db/repos/gentoo\ncat >> /etc/portage/make.conf << "MAKECONF"\nFEATURES="-userfetch -userpriv -usersandbox -ipc-sandbox -network-sandbox -pid-sandbox"\nDISTDIR="/overlay/distfiles"\nMAKECONF\nemerge-webrsync -q\ncat > /etc/portage/repos.conf/gentoo-nexus.conf << "REPOCONF"\n[gentoo-nexus]\nlocation = /overlay\nmasters = gentoo\nREPOCONF\nfor pkg_dir in $(cat /overlay/changed_packages.txt); do\n  if [ -d "/overlay/$pkg_dir" ]; then\n    cd "/overlay/$pkg_dir"\n    ebuild $(ls -1v *.ebuild | tail -n 1) manifest || true\n  fi\ndone\n' > manifest_script.sh
             chmod +x manifest_script.sh
             docker run --rm -v "${{ github.workspace }}:/overlay" gentoo/stage3:amd64-desktop-openrc bash /overlay/manifest_script.sh
           fi
