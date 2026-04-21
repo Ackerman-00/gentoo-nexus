@@ -75,6 +75,7 @@ BDEPEND="
 
 DOCS=( README.md changelog/ )
 
+EGIT_COMMIT="75d180c28a9a"
 src_configure() {
 	local _hyprland=$(usex hyprland)
 	local _i3=$(usex i3)

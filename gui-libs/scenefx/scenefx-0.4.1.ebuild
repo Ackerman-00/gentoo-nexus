@@ -46,6 +46,7 @@ BDEPEND="
 	dev-util/wayland-scanner
 "
 
+EGIT_COMMIT="ad987a32b9fe"
 src_configure() {
 	local emesonargs=(
 		-Drenderers='gles2'

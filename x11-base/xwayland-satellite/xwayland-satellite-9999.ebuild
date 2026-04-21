@@ -30,6 +30,7 @@ BDEPEND="
 
 QA_FLAGS_IGNORED="usr/bin/xwayland-satellite"
 
+EGIT_COMMIT="a879e5e0896a"
 pkg_setup() {
     llvm-r2_pkg_setup
     rust_pkg_setup
