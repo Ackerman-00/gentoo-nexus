@@ -2,7 +2,7 @@ name: Gentoo Check Updates
 
 on:
   schedule:
-    - cron: '0 */6 * * *'  # Runs every 6 hours
+    - cron: '0 */6 * * *'
   workflow_dispatch:
 
 concurrency:
@@ -172,6 +172,7 @@ jobs:
         run: |
           if [ -s changed_packages.txt ]; then
             echo ">>> Regenerating Manifests..."
+            # Write the script using a quoted heredoc with proper indentation
             cat > manifest_script.sh << 'EOF'
           #!/bin/bash
           set -euo pipefail
@@ -215,16 +216,13 @@ jobs:
         env:
           GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
         run: |
-          # Ensure the release exists. If not, we need to build all packages.
           if ! gh release view rolling &>/dev/null; then
             echo "Release 'rolling' does not exist. All changed packages need to be built."
             cp changed_packages.txt packages_to_build.txt
           else
-            # Get a list of all asset names currently in the rolling release.
             existing_assets=$(gh release view rolling --json assets --jq '.assets[].name')
             > packages_to_build.txt
             while IFS= read -r pkg_cat; do
-              # Determine the package name and version from the ebuild.
               ebuild_path=$(find "$pkg_cat" -name "*.ebuild" | tail -n 1)
               if [ -z "$ebuild_path" ]; then continue; fi
               pkg_name=$(basename "$pkg_cat")
