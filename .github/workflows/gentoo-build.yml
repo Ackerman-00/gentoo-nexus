@@ -35,13 +35,15 @@ jobs:
           restore-keys: gentoo-binpkgs-
 
       - name: Prepare Portage DNA Script
-        env:
-          GITHUB_REPOSITORY_OWNER: ${{ github.repository_owner }}
-          GITHUB_REPOSITORY: ${{ github.repository }}
         run: |
           cat > portage_dna.sh << 'DNA_EOF'
           #!/bin/bash
           set -euo pipefail
+          
+          # Accept variables from environment, with defaults for safety
+          OWNER="${GITHUB_REPOSITORY_OWNER:-}"
+          REPO="${GITHUB_REPOSITORY:-}"
+          REPO_NAME="${REPO#*/}"
           
           echo ">>> Injecting Nexus Portage DNA..."
           mkdir -p /var/db/repos/{gentoo,steam-overlay}
@@ -57,16 +59,16 @@ jobs:
           EOF
 
           # Add custom binhost (highest priority)
-          cat > /etc/portage/binrepos.conf/nexus.conf << EOF
+          if [[ -n "$OWNER" && -n "$REPO_NAME" ]]; then
+            cat > /etc/portage/binrepos.conf/nexus.conf << EOF
           [gentoo-nexus]
           priority = 99999
-          sync-uri = https://${GITHUB_REPOSITORY_OWNER}.github.io/${GITHUB_REPOSITORY#*/}/
+          sync-uri = https://${OWNER}.github.io/${REPO_NAME}/
           verify-signature = false
           EOF
-
+          fi
 
           #  Init-agnostic build configuration
-
           cat > /etc/portage/make.conf << EOF
           COMMON_FLAGS="-O2 -march=x86-64-v3 -pipe"
           CFLAGS="\\\${COMMON_FLAGS}"
@@ -167,11 +169,13 @@ jobs:
         env:
           GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
           TARGET_PKG: ${{ github.event.inputs.package_list }}
+          GITHUB_REPOSITORY_OWNER: ${{ github.repository_owner }}
+          GITHUB_REPOSITORY: ${{ github.repository }}
         run: |
           read -r -a PKGS <<< "$TARGET_PKG"
           for pkg in "${PKGS[@]}"; do
             echo ">>> Building: $pkg"
-            cat > build_script.sh << BUILDEOF
+            cat > build_script.sh << 'BUILDEOF'
           #!/bin/bash
           set -euo pipefail
           source /overlay/portage_dna.sh
@@ -182,6 +186,8 @@ jobs:
           BUILDEOF
             chmod +x build_script.sh
             docker run --rm --privileged \
+              -e GITHUB_REPOSITORY_OWNER \
+              -e GITHUB_REPOSITORY \
               -v "${{ github.workspace }}:/overlay" \
               -v "/tmp/binpkgs:/tmp/binpkgs" \
               -v "/tmp/distfiles:/var/cache/distfiles" \

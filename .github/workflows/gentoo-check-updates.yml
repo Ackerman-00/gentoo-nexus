@@ -175,7 +175,7 @@ jobs:
             cat > manifest_script.sh << 'EOF'
           #!/bin/bash
           set -euo pipefail
-          mkdir -p /etc/portage/repos.conf /overlay/distfiles
+          mkdir -p /etc/portage/repos.conf /overlay/distfiles /var/db/repos/gentoo
           cat >> /etc/portage/make.conf << 'MAKECONF'
           FEATURES="-userfetch -userpriv -usersandbox -ipc-sandbox -network-sandbox -pid-sandbox"
           DISTDIR="/overlay/distfiles"
