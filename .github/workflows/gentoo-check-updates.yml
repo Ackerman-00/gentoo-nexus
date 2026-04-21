@@ -172,7 +172,6 @@ jobs:
         run: |
           if [ -s changed_packages.txt ]; then
             echo ">>> Regenerating Manifests..."
-            # Write the script using a quoted heredoc with proper indentation
             cat > manifest_script.sh << 'EOF'
           #!/bin/bash
           set -euo pipefail
