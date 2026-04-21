@@ -209,12 +209,42 @@ jobs:
             git push origin HEAD:"${GITHUB_REF_NAME}"
           fi
 
-      - name: Trigger Build Workflow (Relay Race)
+      - name: Smart Binhost Audit: Filter Already-Built Packages
         if: steps.scan.outputs.changed_packages == 'true'
+        id: audit
         env:
           GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
         run: |
-          CHANGED=$(cat changed_packages.txt)
+          # Ensure the release exists. If not, we need to build all packages.
+          if ! gh release view rolling &>/dev/null; then
+            echo "Release 'rolling' does not exist. All changed packages need to be built."
+            cp changed_packages.txt packages_to_build.txt
+          else
+            # Get a list of all asset names currently in the rolling release.
+            existing_assets=$(gh release view rolling --json assets --jq '.assets[].name')
+            > packages_to_build.txt
+            while IFS= read -r pkg_cat; do
+              # Determine the package name and version from the ebuild.
+              ebuild_path=$(find "$pkg_cat" -name "*.ebuild" | tail -n 1)
+              if [ -z "$ebuild_path" ]; then continue; fi
+              pkg_name=$(basename "$pkg_cat")
+              pkg_ver=$(basename "$ebuild_path" .ebuild | sed "s/^${pkg_name}-//")
+              expected_asset="${pkg_name}-${pkg_ver}.gpkg.tar"
+              if ! echo "$existing_assets" | grep -qF "$expected_asset"; then
+                echo "$pkg_cat" >> packages_to_build.txt
+              else
+                echo "Skipping $pkg_cat: binary already exists in release."
+              fi
+            done < changed_packages.txt
+          fi
+          echo "build_list=$(cat packages_to_build.txt | tr '\n' ' ')" >> $GITHUB_OUTPUT
+
+      - name: Trigger Build Workflow (Relay Race)
+        if: steps.audit.outputs.build_list != ''
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+        run: |
+          CHANGED="${{ steps.audit.outputs.build_list }}"
           echo "Packages to build: $CHANGED"
           gh workflow run "Gentoo Build Relay" \
             --ref "${GITHUB_REF_NAME}" \

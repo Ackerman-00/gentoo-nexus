@@ -69,23 +69,23 @@ jobs:
           fi
 
           #  Init-agnostic build configuration
-          cat > /etc/portage/make.conf << EOF
+          cat > /etc/portage/make.conf << 'EOF'
           COMMON_FLAGS="-O2 -march=x86-64-v3 -pipe"
-          CFLAGS="\\\${COMMON_FLAGS}"
-          CXXFLAGS="\\\${COMMON_FLAGS}"
+          CFLAGS="${COMMON_FLAGS}"
+          CXXFLAGS="${COMMON_FLAGS}"
           RUSTFLAGS="-C target-cpu=x86-64-v3 -C opt-level=2"
           USE="wayland X vulkan pipewire dbus udev opengl dri gbm vaapi vdpau ffmpeg minizip -daemon -aqua -cups -gpm"
           VIDEO_CARDS="amdgpu radeon radeonsi intel iris nouveau virgl"
           FEATURES="-sandbox -usersandbox -ipc-sandbox -network-sandbox -pid-sandbox buildpkg parallel-install getbinpkg -binpkg-request-signature ccache -strict"
           CCACHE_DIR="/var/cache/ccache"
           CCACHE_UMASK="002"
-          EMERGE_DEFAULT_OPTS="--getbinpkg --usepkg --binpkg-respect-use=n --binpkg-changed-deps=n --autounmask=y --autounmask-write --keep-going --quiet-build=y --jobs=\$(nproc) --load-average=\$(nproc)"
+          EMERGE_DEFAULT_OPTS="--getbinpkg --usepkg --binpkg-respect-use=n --binpkg-changed-deps=n --autounmask=y --autounmask-write --keep-going --quiet-build=y --jobs=$(nproc) --load-average=$(nproc)"
           DISTDIR="/var/cache/distfiles"
           PKGDIR="/overlay/job_out"
           ACCEPT_LICENSE="*"
           ACCEPT_KEYWORDS="~amd64"
           EOF
-          echo "MAKEOPTS=\"-j\$(nproc)\"" >> /etc/portage/make.conf
+          echo "MAKEOPTS=\"-j$(nproc)\"" >> /etc/portage/make.conf
 
           emerge-webrsync -q || true
           getuto || true
@@ -144,7 +144,7 @@ jobs:
           CFLAGS="-O1 -pipe -fno-lto -fno-tree-loop-vectorize -fno-tree-slp-vectorize"
           CXXFLAGS="-O1 -pipe -fno-lto -fno-tree-loop-vectorize -fno-tree-slp-vectorize"
           EOF
-          echo "MAKEOPTS=\"-j\$(nproc)\"" >> /etc/portage/env/no-lto
+          echo "MAKEOPTS=\"-j$(nproc)\"" >> /etc/portage/env/no-lto
 
           cat > /etc/portage/package.env/no-lto-packages << 'EOF'
           dev-util/spirv-tools no-lto
