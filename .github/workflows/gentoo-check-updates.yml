@@ -171,8 +171,6 @@ jobs:
         run: |
           if [ -s changed_packages.txt ]; then
             echo ">>> Regenerating Manifests..."
-
-            # Write the in-container script using a heredoc — no quoting fragility
             cat > manifest_script.sh << 'SCRIPT'
           #!/bin/bash
           set -euo pipefail
@@ -206,7 +204,6 @@ jobs:
             fi
           done < /overlay/changed_packages.txt
           SCRIPT
-
             chmod +x manifest_script.sh
             docker run --rm \
               -v "${{ github.workspace }}:/overlay" \
@@ -226,8 +223,7 @@ jobs:
             git push origin HEAD:"${GITHUB_REF_NAME}"
           fi
 
-      # FIX: quoted name — bare ":" space inside an unquoted YAML string
-      # is a mapping indicator and causes a parse error on this line
+      # === Conditional Audit: Changed Packages (if updates found) ===
       - name: "Smart Binhost Audit: Filter Already-Built Packages"
         if: steps.scan.outputs.changed_packages == 'true'
         id: audit
@@ -263,12 +259,60 @@ jobs:
           build_list=$(cat packages_to_build.txt | tr '\n' ' ' | xargs)
           echo "build_list=${build_list}" >> "$GITHUB_OUTPUT"
 
-      - name: Trigger Build Workflow (Relay Race)
-        if: steps.audit.outputs.build_list != ''
+      # === Fallback Audit: Full Overlay (if no updates found) ===
+      - name: "Full Binhost Audit (Fallback)"
+        if: steps.scan.outputs.changed_packages == 'false'
+        id: full-audit
         env:
           GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
         run: |
-          CHANGED="${{ steps.audit.outputs.build_list }}"
+          echo "No upstream changes detected. Running full overlay binhost audit..."
+
+          # Collect all package categories from the overlay
+          find . -name "*.ebuild" -path "*/cache/*" -prune -o -print 2>/dev/null | \
+            sed -n 's|^\./\([^/]*/[^/]*\)/.*\.ebuild$|\1|p' | sort -u > all_packages.txt
+          
+          echo "Total packages in overlay: $(wc -l < all_packages.txt)"
+          touch packages_to_build.txt
+
+          if ! gh release view rolling &>/dev/null; then
+            echo "Release 'rolling' does not exist. All packages need to be built."
+            cp all_packages.txt packages_to_build.txt
+          else
+            existing_assets=$(gh release view rolling --json assets --jq '.assets[].name')
+            > packages_to_build.txt
+            while IFS= read -r pkg_cat; do
+              [ -z "$pkg_cat" ] && continue
+              ebuild_path=$(find "$pkg_cat" -name "*.ebuild" 2>/dev/null | sort -V | tail -n 1)
+              if [ -z "$ebuild_path" ]; then
+                echo "WARNING: no ebuild found in $pkg_cat, skipping"
+                continue
+              fi
+              pkg_name=$(basename "$pkg_cat")
+              pkg_ver=$(basename "$ebuild_path" .ebuild | sed "s/^${pkg_name}-//")
+              expected_asset="${pkg_name}-${pkg_ver}.gpkg.tar"
+              if ! echo "$existing_assets" | grep -qF "$expected_asset"; then
+                echo "$pkg_cat" >> packages_to_build.txt
+              else
+                echo "OK: $expected_asset already in release."
+              fi
+            done < all_packages.txt
+          fi
+
+          build_list=$(cat packages_to_build.txt | tr '\n' ' ' | xargs)
+          echo "build_list=${build_list}" >> "$GITHUB_OUTPUT"
+
+      # === Trigger Build Workflow (combines outputs from either audit) ===
+      - name: Trigger Build Workflow (Relay Race)
+        if: steps.audit.outputs.build_list != '' || steps.full-audit.outputs.build_list != ''
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+        run: |
+          if [ -n "${{ steps.audit.outputs.build_list }}" ]; then
+            CHANGED="${{ steps.audit.outputs.build_list }}"
+          else
+            CHANGED="${{ steps.full-audit.outputs.build_list }}"
+          fi
           echo "Packages to build: $CHANGED"
           gh workflow run "Gentoo Build Relay" \
             --ref "${GITHUB_REF_NAME}" \
