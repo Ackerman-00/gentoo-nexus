@@ -96,10 +96,8 @@ jobs:
 
           def update_egit_commit(content, short_commit):
               if re.search(r'^EGIT_COMMIT=', content, re.MULTILINE):
-                  # Update existing EGIT_COMMIT
                   return re.sub(r'(EGIT_COMMIT=["\']?)[a-fA-F0-9]{7,40}(["\']?)', r"\g<1>" + short_commit + r"\2", content)
               else:
-                  # Append EGIT_COMMIT before the first function or at the end
                   lines = content.split('\n')
                   func_indices = [i for i, line in enumerate(lines) if re.match(r'^\w+\s*\(\)\s*{', line)]
                   if func_indices:
@@ -175,26 +173,26 @@ jobs:
           if [ -s changed_packages.txt ]; then
             echo ">>> Regenerating Manifests..."
             cat > manifest_script.sh << 'EOF'
-            #!/bin/bash
-            set -euo pipefail
-            mkdir -p /etc/portage/repos.conf /overlay/distfiles
-            cat >> /etc/portage/make.conf << 'MAKECONF'
-            FEATURES="-userfetch -userpriv -usersandbox -ipc-sandbox -network-sandbox -pid-sandbox"
-            DISTDIR="/overlay/distfiles"
-            MAKECONF
-            emerge-webrsync -q
-            cat > /etc/portage/repos.conf/gentoo-nexus.conf << 'REPOCONF'
-            [gentoo-nexus]
-            location = /overlay
-            masters = gentoo
-            REPOCONF
-            for pkg_dir in $(cat /overlay/changed_packages.txt); do
-              if [ -d "/overlay/$pkg_dir" ]; then
-                cd "/overlay/$pkg_dir"
-                ebuild $(ls -1v *.ebuild | tail -n 1) manifest || true
-              fi
-            done
-            EOF
+          #!/bin/bash
+          set -euo pipefail
+          mkdir -p /etc/portage/repos.conf /overlay/distfiles
+          cat >> /etc/portage/make.conf << 'MAKECONF'
+          FEATURES="-userfetch -userpriv -usersandbox -ipc-sandbox -network-sandbox -pid-sandbox"
+          DISTDIR="/overlay/distfiles"
+          MAKECONF
+          emerge-webrsync -q
+          cat > /etc/portage/repos.conf/gentoo-nexus.conf << 'REPOCONF'
+          [gentoo-nexus]
+          location = /overlay
+          masters = gentoo
+          REPOCONF
+          for pkg_dir in $(cat /overlay/changed_packages.txt); do
+            if [ -d "/overlay/$pkg_dir" ]; then
+              cd "/overlay/$pkg_dir"
+              ebuild $(ls -1v *.ebuild | tail -n 1) manifest || true
+            fi
+          done
+          EOF
             chmod +x manifest_script.sh
             docker run --rm -v "${{ github.workspace }}:/overlay" gentoo/stage3:amd64-desktop-openrc bash /overlay/manifest_script.sh
           fi
