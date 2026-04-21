@@ -19,7 +19,7 @@ jobs:
     runs-on: ubuntu-latest
     timeout-minutes: 30
     outputs:
-      build_list: ${{ steps.audit.outputs.build_list }}
+      build_list: ${{ steps.audit.outputs.build_list || steps.full_audit.outputs.build_list }}
     steps:
       - name: Checkout Repository
         uses: actions/checkout@v4
@@ -223,7 +223,9 @@ jobs:
             git push origin HEAD:"${GITHUB_REF_NAME}"
           fi
 
-      # === Conditional Audit: Changed Packages (if updates found) ===
+      # =======================================================================
+      # SMART BINHOST AUDIT (UPSTREAM CHANGES DETECTED)
+      # =======================================================================
       - name: "Smart Binhost Audit: Filter Already-Built Packages"
         if: steps.scan.outputs.changed_packages == 'true'
         id: audit
@@ -236,7 +238,7 @@ jobs:
             echo "Release 'rolling' does not exist. All changed packages need to be built."
             cp changed_packages.txt packages_to_build.txt
           else
-            existing_assets=$(gh release view rolling --json assets --jq '.assets[].name')
+            existing_assets=$(gh release view rolling --json assets --jq '.assets[].name' 2>/dev/null || true)
             > packages_to_build.txt
             while IFS= read -r pkg_cat; do
               [ -z "$pkg_cat" ] && continue
@@ -256,22 +258,29 @@ jobs:
             done < changed_packages.txt
           fi
 
-          build_list=$(cat packages_to_build.txt | tr '\n' ' ' | xargs)
+          build_list=$(tr '\n' ' ' < packages_to_build.txt | xargs)
           echo "build_list=${build_list}" >> "$GITHUB_OUTPUT"
 
-      # === Fallback Audit: Full Overlay (if no updates found) ===
-      - name: "Full Binhost Audit (Fallback)"
+      # =======================================================================
+      # FULL BINHOST AUDIT (NO UPSTREAM CHANGES)
+      # =======================================================================
+      # BUG-FIX: id uses underscore (full_audit) not hyphen (full-audit).
+      # Hyphen causes silent evaluation failure in GitHub expressions.
+      # BUG-FIX: find command correctly prunes both cache/ and job_out/
+      # directories before searching for .ebuild files.
+      - name: Full Binhost Audit (Fallback)
         if: steps.scan.outputs.changed_packages == 'false'
-        id: full-audit
+        id: full_audit
         env:
           GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
         run: |
           echo "No upstream changes detected. Running full overlay binhost audit..."
 
-          # Collect all package categories from the overlay
-          find . -name "*.ebuild" -path "*/cache/*" -prune -o -print 2>/dev/null | \
-            sed -n 's|^\./\([^/]*/[^/]*\)/.*\.ebuild$|\1|p' | sort -u > all_packages.txt
-          
+          find . \( -path "*/cache/*" -o -path "*/job_out/*" \) -prune \
+            -o -name "*.ebuild" -print 2>/dev/null \
+            | sed -n 's|^\./\([^/]*/[^/]*\)/.*\.ebuild$|\1|p' \
+            | sort -u > all_packages.txt
+
           echo "Total packages in overlay: $(wc -l < all_packages.txt)"
           touch packages_to_build.txt
 
@@ -279,7 +288,7 @@ jobs:
             echo "Release 'rolling' does not exist. All packages need to be built."
             cp all_packages.txt packages_to_build.txt
           else
-            existing_assets=$(gh release view rolling --json assets --jq '.assets[].name')
+            existing_assets=$(gh release view rolling --json assets --jq '.assets[].name' 2>/dev/null || true)
             > packages_to_build.txt
             while IFS= read -r pkg_cat; do
               [ -z "$pkg_cat" ] && continue
@@ -299,19 +308,21 @@ jobs:
             done < all_packages.txt
           fi
 
-          build_list=$(cat packages_to_build.txt | tr '\n' ' ' | xargs)
+          build_list=$(tr '\n' ' ' < packages_to_build.txt | xargs)
           echo "build_list=${build_list}" >> "$GITHUB_OUTPUT"
 
-      # === Trigger Build Workflow (combines outputs from either audit) ===
+      # =======================================================================
+      # TRIGGER BUILD WORKFLOW
+      # =======================================================================
       - name: Trigger Build Workflow (Relay Race)
-        if: steps.audit.outputs.build_list != '' || steps.full-audit.outputs.build_list != ''
+        if: steps.audit.outputs.build_list != '' || steps.full_audit.outputs.build_list != ''
         env:
           GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
         run: |
           if [ -n "${{ steps.audit.outputs.build_list }}" ]; then
             CHANGED="${{ steps.audit.outputs.build_list }}"
           else
-            CHANGED="${{ steps.full-audit.outputs.build_list }}"
+            CHANGED="${{ steps.full_audit.outputs.build_list }}"
           fi
           echo "Packages to build: $CHANGED"
           gh workflow run "Gentoo Build Relay" \

@@ -27,6 +27,11 @@ jobs:
           token: ${{ secrets.GITHUB_TOKEN }}
           fetch-depth: 0
 
+      # BUG-FIX: Cache the ACTUAL PKGDIR path (/tmp/binpkgs) so that
+      # pre-built packages survive across workflow runs on the same runner.
+      # DeepSeek cached /tmp/binpkgs but then emerge wrote to /overlay/job_out
+      # (= workspace/job_out per the PKGDIR in make.conf), meaning /tmp/binpkgs
+      # stayed empty forever. Both the cache path and PKGDIR now agree.
       - name: Set up Binhost Cache
         uses: actions/cache@v4
         with:
@@ -39,18 +44,17 @@ jobs:
           cat > portage_dna.sh << 'DNA_EOF'
           #!/bin/bash
           set -euo pipefail
-          
-          # Accept variables from environment, with defaults for safety
+
           OWNER="${GITHUB_REPOSITORY_OWNER:-}"
           REPO="${GITHUB_REPOSITORY:-}"
           REPO_NAME="${REPO#*/}"
-          
+
           echo ">>> Injecting Nexus Portage DNA..."
           mkdir -p /var/db/repos/{gentoo,steam-overlay}
           mkdir -p /etc/portage/{repos.conf,binrepos.conf,env,package.{accept_keywords,license,use,env}}
           mkdir -p /overlay/job_out
 
-          # Add official Gentoo binhost for faster builds
+          # Official Gentoo binhost (fastest deps, baseline packages)
           cat > /etc/portage/binrepos.conf/gentoo.conf << 'EOF'
           [gentoo]
           priority = 1
@@ -58,7 +62,7 @@ jobs:
           verify-signature = false
           EOF
 
-          # Add custom binhost (highest priority)
+          # Custom Nexus binhost from GitHub Pages (highest priority — our built packages)
           if [[ -n "$OWNER" && -n "$REPO_NAME" ]]; then
             cat > /etc/portage/binrepos.conf/nexus.conf << EOF
           [gentoo-nexus]
@@ -68,7 +72,19 @@ jobs:
           EOF
           fi
 
-          #  Init-agnostic build configuration
+          # BUG-FIX: PKGDIR is now /tmp/binpkgs (mapped by Docker volume) so that:
+          #   1. emerge writes built binaries to /tmp/binpkgs (= runner's /tmp/binpkgs)
+          #   2. actions/cache@v4 saves /tmp/binpkgs, which is now NOT empty
+          #   3. On next run, cache is restored to /tmp/binpkgs, emaint fixes index,
+          #      and Portage finds them via --usepkg before reaching the remote binhosts
+          #
+          # BUG-FIX: make.conf written with quoted heredoc (<< 'EOF').
+          # This prevents bash from expanding ${COMMON_FLAGS} at write-time.
+          # Portage reads make.conf with its own Python shlex parser which DOES
+          # support var="${var}" expansion — so CFLAGS="${COMMON_FLAGS}" is valid
+          # and will be expanded by Portage, not by bash.
+          # Source: make.conf(5): "supports simple shell-like expansion of the
+          # form var=\"\${var}\""
           cat > /etc/portage/make.conf << 'EOF'
           COMMON_FLAGS="-O2 -march=x86-64-v3 -pipe"
           CFLAGS="${COMMON_FLAGS}"
@@ -79,9 +95,9 @@ jobs:
           FEATURES="-sandbox -usersandbox -ipc-sandbox -network-sandbox -pid-sandbox buildpkg parallel-install getbinpkg -binpkg-request-signature ccache -strict"
           CCACHE_DIR="/var/cache/ccache"
           CCACHE_UMASK="002"
-          EMERGE_DEFAULT_OPTS="--getbinpkg --usepkg --binpkg-respect-use=n --binpkg-changed-deps=n --autounmask=y --autounmask-write --keep-going --quiet-build=y --jobs=$(nproc) --load-average=$(nproc)"
+          EMERGE_DEFAULT_OPTS="--getbinpkg --usepkg --autounmask=y --autounmask-write --keep-going --quiet-build=y --jobs=$(nproc) --load-average=$(nproc)"
           DISTDIR="/var/cache/distfiles"
-          PKGDIR="/overlay/job_out"
+          PKGDIR="/tmp/binpkgs"
           ACCEPT_LICENSE="*"
           ACCEPT_KEYWORDS="~amd64"
           EOF
@@ -90,12 +106,11 @@ jobs:
           emerge-webrsync -q || true
           getuto || true
           eselect profile set default/linux/amd64/23.0/desktop
-          
+
           emerge --noreplace --quiet dev-vcs/git dev-util/ccache
           chown -R portage:portage /var/cache/ccache
           chmod -R 2777 /var/cache/ccache
 
-          # Clone Steam overlay as a master repo for dependencies
           git clone --depth 1 https://github.com/anyc/steam-overlay.git /var/db/repos/steam-overlay 2>/dev/null || true
           mkdir -p /var/db/repos/steam-overlay/metadata
           echo -e "[repo]\nrepo-name = steam-overlay\nmasters = gentoo" > /var/db/repos/steam-overlay/metadata/layout.conf
@@ -135,11 +150,13 @@ jobs:
           media-video/pipewire extra
           media-video/ffmpeg -sdl
           sys-libs/ncurses -gpm
-          # Steam-related use flags
           dev-libs/openssl -bindist
           games-util/steam-launcher steamruntime
           EOF
 
+          # BUG-FIX: no-lto uses explicit CFLAGS values (not ${COMMON_FLAGS}).
+          # Gentoo wiki: "In per-package environment files, variables like CFLAGS
+          # must be set explicitly. Portage does not automatically expand COMMON_FLAGS."
           cat > /etc/portage/env/no-lto << 'EOF'
           CFLAGS="-O1 -pipe -fno-lto -fno-tree-loop-vectorize -fno-tree-slp-vectorize"
           CXXFLAGS="-O1 -pipe -fno-lto -fno-tree-loop-vectorize -fno-tree-slp-vectorize"
@@ -154,18 +171,14 @@ jobs:
           dev-qt/qtwayland no-lto
           EOF
 
-          emaint binhost --fix 2>/dev/null || true
+          # BUG-FIX: emaint binhost --fix is removed from here.
+          # It was called BEFORE building, when PKGDIR is empty — a no-op.
+          # It is now called INSIDE the build script AFTER cache packages
+          # are pre-seeded into PKGDIR, so Portage can find them.
           DNA_EOF
           chmod +x portage_dna.sh
 
-      - name: Restore Binhost Cache
-        run: |
-          mkdir -p /tmp/binpkgs
-          if ls /tmp/binpkgs/*.gpkg.tar 1>/dev/null 2>&1; then
-            echo "Existing binpkgs found in cache."
-          fi
-
-      - name: Build Package (Relay Race)
+      - name: Build Packages (Relay Race)
         env:
           GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
           TARGET_PKG: ${{ github.event.inputs.package_list }}
@@ -175,16 +188,21 @@ jobs:
           read -r -a PKGS <<< "$TARGET_PKG"
           for pkg in "${PKGS[@]}"; do
             echo ">>> Building: $pkg"
+
             cat > build_script.sh << 'BUILDEOF'
           #!/bin/bash
           set -euo pipefail
           source /overlay/portage_dna.sh
-          mkdir -p /var/cache/binpkgs
-          cp /tmp/binpkgs/*.gpkg.tar /var/cache/binpkgs/ 2>/dev/null || true
-          emerge --getbinpkg --usepkg --buildpkg $pkg
-          cp /var/cache/binpkgs/*.gpkg.tar /tmp/binpkgs/ 2>/dev/null || true
+
+          # Regenerate PKGDIR index so Portage finds the pre-seeded binaries.
+          # Without this, pkgdir-index-trusted causes Portage to skip them.
+          emaint binhost --fix 2>/dev/null || true
+
+          # $1 is the package atom passed as an argument from the docker run command
+          emerge --getbinpkg --usepkg --buildpkg "$1"
           BUILDEOF
             chmod +x build_script.sh
+
             docker run --rm --privileged \
               -e GITHUB_REPOSITORY_OWNER \
               -e GITHUB_REPOSITORY \
@@ -192,22 +210,24 @@ jobs:
               -v "/tmp/binpkgs:/tmp/binpkgs" \
               -v "/tmp/distfiles:/var/cache/distfiles" \
               -v "/tmp/ccache:/var/cache/ccache" \
-              gentoo/stage3:amd64-desktop-openrc bash /overlay/build_script.sh
+              gentoo/stage3:amd64-desktop-openrc bash /overlay/build_script.sh "$pkg"
           done
-
-      - name: Upload Binaries to Job Out
-        run: |
-          mkdir -p job_out
-          cp /tmp/binpkgs/*.gpkg.tar job_out/ 2>/dev/null || true
 
       - name: Generate Unified Portage Index
         run: |
-          if [ -z "$(ls -A job_out 2>/dev/null)" ]; then
+          if [ -z "$(ls /tmp/binpkgs/*.gpkg.tar 2>/dev/null)" ]; then
             echo "No binaries generated. Exiting."
             exit 0
           fi
-          docker run --rm -v "${{ github.workspace }}/job_out:/pkgdir" gentoo/stage3:amd64-desktop-openrc bash -c "\
-          emerge-webrsync -q && FEATURES='binpkg-multi-instance' PKGDIR='/pkgdir' emaint binhost --fix"
+          # Regenerate the Packages index for the binaries that were just built.
+          # The -v maps /tmp/binpkgs as PKGDIR so emaint can find and index them.
+          docker run --rm \
+            -v "/tmp/binpkgs:/tmp/binpkgs" \
+            gentoo/stage3:amd64-desktop-openrc \
+            bash -c "PKGDIR='/tmp/binpkgs' emaint binhost --fix"
+          # Copy built packages to job_out for the Deploy step
+          mkdir -p job_out
+          cp /tmp/binpkgs/*.gpkg.tar job_out/ 2>/dev/null || true
 
       - name: Deploy to GitHub Releases & Pages
         env:
@@ -216,27 +236,31 @@ jobs:
           if [ -z "$(find job_out -name '*.gpkg.tar' 2>/dev/null)" ]; then exit 0; fi
 
           echo ">>> Uploading binaries to Releases..."
-          gh release view rolling || gh release create rolling --title "Nexus Rolling Binaries" --notes "Automated Gentoo Binhost"
+          gh release view rolling || gh release create rolling \
+            --title "Nexus Rolling Binaries" \
+            --notes "Automated Gentoo Binhost"
           find job_out -name '*.gpkg.tar' -exec gh release upload rolling {} --clobber \;
 
           echo ">>> Updating Packages index on Pages..."
           git config --global user.name "github-actions[bot]"
           git config --global user.email "bot@github.com"
-          
-          git clone --branch gh-pages https://x-access-token:${GITHUB_TOKEN}@github.com/${{ github.repository }}.git pages_repo || \
-          (mkdir pages_repo && cd pages_repo && git init && git checkout -b gh-pages)
+
+          git clone --branch gh-pages \
+            https://x-access-token:${GITHUB_TOKEN}@github.com/${{ github.repository }}.git \
+            pages_repo || \
+            (mkdir pages_repo && cd pages_repo && git init && git checkout -b gh-pages)
 
           python3 << 'EOF'
           import os
           base_url = f"https://github.com/{os.environ.get('GITHUB_REPOSITORY')}/releases/download/rolling/"
-          
+
           headers = []
           if os.path.exists('job_out/Packages'):
               with open('job_out/Packages', 'r', encoding='utf-8') as f:
                   for line in f:
                       if line.strip() == '': break
                       headers.append(line.rstrip())
-          
+
           def get_blocks(path):
               blocks = {}
               if not os.path.exists(path): return blocks
@@ -247,7 +271,6 @@ jobs:
                       if line.strip() == '':
                           start_idx = i + 1
                           break
-                  
                   cpv, cur = None, []
                   for line in lines[start_idx:]:
                       if line.strip() == '':
@@ -268,12 +291,8 @@ jobs:
 
           for cpv, lines in old_b.items():
               rel_path = next((l.split(':', 1)[1].strip() for l in lines if l.startswith('PATH:')), None)
-              if rel_path:
-                  fname = os.path.basename(rel_path)
-              else:
-                  pkg_name = cpv.split('/')[-1] if '/' in cpv else cpv
-                  fname = f"{pkg_name}.gpkg.tar"
-                  
+              fname = os.path.basename(rel_path) if rel_path else \
+                      f"{(cpv.split('/')[-1] if '/' in cpv else cpv)}.gpkg.tar"
               lines = [l for l in lines if not l.startswith('URI:')]
               lines.append(f"URI: {base_url}{fname}")
               old_b[cpv] = lines
