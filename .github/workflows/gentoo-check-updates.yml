@@ -112,10 +112,10 @@ jobs:
               pkg_dir = ebuild_path.parent
               *parent_parts, cat_name, pkg_name = pkg_dir.parts
               pkg_cat_name = f"{cat_name}/{pkg_name}"
-              
+
               content = ebuild_path.read_text(encoding="utf-8")
               is_live = ebuild_path.name.endswith('-9999.ebuild') or 'git-r3' in content
-              
+
               if pkg_name == "rootapp-bin":
                   new_ver = get_rootapp_version()
                   if new_ver:
@@ -140,7 +140,6 @@ jobs:
                       new_content = update_egit_commit(new_content, short_commit)
                       if "_commit=" in new_content:
                           new_content = re.sub(r'(_commit=["\']?)[a-fA-F0-9]{7,40}(["\']?)', r"\g<1>" + new_commit + r"\2", new_content)
-
                       if new_content != content:
                           ebuild_path.write_text(new_content, encoding="utf-8")
                           updated_atoms.add(pkg_cat_name)
@@ -148,13 +147,13 @@ jobs:
                   curr_ver_m = re.search(rf'/{pkg_name}-(\d+(?:\.\d+)*(?:_(?:alpha|beta|pre|rc|p)\d*)?(?:-r\d+)?)\.ebuild$', str(ebuild_path))
                   if not curr_ver_m: continue
                   curr_ver = curr_ver_m.group(1)
-                  
+
                   latest_ver = get_latest_github_release(repo)
                   if latest_ver:
                       if pkg_name == "mangowc" and latest_ver.startswith("12."): latest_ver = "0." + latest_ver
                       try: is_newer = parse_version(latest_ver) > parse_version(curr_ver)
                       except: is_newer = (latest_ver != curr_ver)
-                      
+
                       if is_newer:
                           new_path = pkg_dir / f"{pkg_name}-{latest_ver}.ebuild"
                           ebuild_path.rename(new_path)
@@ -172,9 +171,47 @@ jobs:
         run: |
           if [ -s changed_packages.txt ]; then
             echo ">>> Regenerating Manifests..."
-            printf '#!/bin/bash\nset -euo pipefail\nmkdir -p /etc/portage/repos.conf /overlay/distfiles /var/db/repos/gentoo\ncat >> /etc/portage/make.conf << "MAKECONF"\nFEATURES="-userfetch -userpriv -usersandbox -ipc-sandbox -network-sandbox -pid-sandbox"\nDISTDIR="/overlay/distfiles"\nMAKECONF\nemerge-webrsync -q\ncat > /etc/portage/repos.conf/gentoo-nexus.conf << "REPOCONF"\n[gentoo-nexus]\nlocation = /overlay\nmasters = gentoo\nREPOCONF\nfor pkg_dir in $(cat /overlay/changed_packages.txt); do\n  if [ -d "/overlay/$pkg_dir" ]; then\n    cd "/overlay/$pkg_dir"\n    ebuild $(ls -1v *.ebuild | tail -n 1) manifest || true\n  fi\ndone\n' > manifest_script.sh
+
+            # Write the in-container script using a heredoc — no quoting fragility
+            cat > manifest_script.sh << 'SCRIPT'
+          #!/bin/bash
+          set -euo pipefail
+
+          mkdir -p /etc/portage/repos.conf /overlay/distfiles /var/db/repos/gentoo
+
+          cat >> /etc/portage/make.conf << 'MAKECONF'
+          FEATURES="-userfetch -userpriv -usersandbox -ipc-sandbox -network-sandbox -pid-sandbox"
+          DISTDIR="/overlay/distfiles"
+          MAKECONF
+
+          emerge-webrsync -q
+
+          cat > /etc/portage/repos.conf/gentoo-nexus.conf << 'REPOCONF'
+          [gentoo-nexus]
+          location = /overlay
+          masters = gentoo
+          REPOCONF
+
+          while IFS= read -r pkg_dir; do
+            [ -z "$pkg_dir" ] && continue
+            if [ -d "/overlay/$pkg_dir" ]; then
+              cd "/overlay/$pkg_dir"
+              latest_ebuild=$(ls -1v *.ebuild 2>/dev/null | tail -n 1)
+              if [ -n "$latest_ebuild" ]; then
+                echo ">>> Manifesting $pkg_dir/$latest_ebuild"
+                ebuild "$latest_ebuild" manifest || echo "WARNING: manifest failed for $pkg_dir"
+              fi
+            else
+              echo "WARNING: directory /overlay/$pkg_dir not found, skipping"
+            fi
+          done < /overlay/changed_packages.txt
+          SCRIPT
+
             chmod +x manifest_script.sh
-            docker run --rm -v "${{ github.workspace }}:/overlay" gentoo/stage3:amd64-desktop-openrc bash /overlay/manifest_script.sh
+            docker run --rm \
+              -v "${{ github.workspace }}:/overlay" \
+              gentoo/stage3:amd64-desktop-openrc \
+              bash /overlay/manifest_script.sh
           fi
 
       - name: Commit and Push Changes
@@ -189,12 +226,16 @@ jobs:
             git push origin HEAD:"${GITHUB_REF_NAME}"
           fi
 
-      - name: Smart Binhost Audit: Filter Already-Built Packages
+      # FIX: quoted name — bare ":" space inside an unquoted YAML string
+      # is a mapping indicator and causes a parse error on this line
+      - name: "Smart Binhost Audit: Filter Already-Built Packages"
         if: steps.scan.outputs.changed_packages == 'true'
         id: audit
         env:
           GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
         run: |
+          touch packages_to_build.txt
+
           if ! gh release view rolling &>/dev/null; then
             echo "Release 'rolling' does not exist. All changed packages need to be built."
             cp changed_packages.txt packages_to_build.txt
@@ -202,19 +243,25 @@ jobs:
             existing_assets=$(gh release view rolling --json assets --jq '.assets[].name')
             > packages_to_build.txt
             while IFS= read -r pkg_cat; do
-              ebuild_path=$(find "$pkg_cat" -name "*.ebuild" | tail -n 1)
-              if [ -z "$ebuild_path" ]; then continue; fi
+              [ -z "$pkg_cat" ] && continue
+              ebuild_path=$(find "$pkg_cat" -name "*.ebuild" 2>/dev/null | sort -V | tail -n 1)
+              if [ -z "$ebuild_path" ]; then
+                echo "WARNING: no ebuild found in $pkg_cat, skipping"
+                continue
+              fi
               pkg_name=$(basename "$pkg_cat")
               pkg_ver=$(basename "$ebuild_path" .ebuild | sed "s/^${pkg_name}-//")
               expected_asset="${pkg_name}-${pkg_ver}.gpkg.tar"
               if ! echo "$existing_assets" | grep -qF "$expected_asset"; then
                 echo "$pkg_cat" >> packages_to_build.txt
               else
-                echo "Skipping $pkg_cat: binary already exists in release."
+                echo "Skipping $pkg_cat: $expected_asset already in release."
               fi
             done < changed_packages.txt
           fi
-          echo "build_list=$(cat packages_to_build.txt | tr '\n' ' ')" >> $GITHUB_OUTPUT
+
+          build_list=$(cat packages_to_build.txt | tr '\n' ' ' | xargs)
+          echo "build_list=${build_list}" >> "$GITHUB_OUTPUT"
 
       - name: Trigger Build Workflow (Relay Race)
         if: steps.audit.outputs.build_list != ''
