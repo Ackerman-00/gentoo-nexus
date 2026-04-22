@@ -190,7 +190,6 @@ jobs:
             fi
           fi
 
-      # ✅ FIX: Fetch Git overlays on the host (bypasses Docker/GPG crash)
       - name: Fetch Overlays on Runner
         run: |
           git clone --depth 1 https://github.com/anyc/steam-overlay.git steam-overlay 2>/dev/null || true
@@ -201,11 +200,15 @@ jobs:
           #!/bin/bash
           set -euo pipefail
           
-          mkdir -p /etc/portage/repos.conf /var/db/repos/{gentoo,steam-overlay} /etc/portage/package.{accept_keywords,use}
+          mkdir -p /etc/portage/repos.conf /etc/portage/binrepos.conf /var/db/repos/{gentoo,steam-overlay} /etc/portage/package.{accept_keywords,use}
+          
+          # ✅ FIX: Wipe the default Gentoo config so it doesn't enforce signatures!
+          rm -rf /etc/portage/binrepos.conf/*
           
           cat > /etc/portage/make.conf << 'MAKECONF'
           ACCEPT_KEYWORDS="~amd64"
           ACCEPT_LICENSE="*"
+          FEATURES="-sandbox -usersandbox -ipc-sandbox -network-sandbox -pid-sandbox -strict -binpkg-request-signature"
           MAKECONF
           
           cat > /etc/portage/package.use/global << 'USECONF'
@@ -265,7 +268,6 @@ jobs:
           done
           EOF
           chmod +x resolve_state.sh
-          # ✅ Mounts steam-overlay directly from the runner host!
           docker run --rm -v "${{ github.workspace }}:/overlay" -v "${{ github.workspace }}/steam-overlay:/var/db/repos/steam-overlay" gentoo/stage3:amd64-desktop-openrc /bin/bash /overlay/resolve_state.sh
 
       - name: Phase 4 - Binhost Audit

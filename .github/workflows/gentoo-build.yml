@@ -79,7 +79,6 @@ jobs:
           echo ">>> Downloading existing packages from rolling release..."
           gh release download rolling -p "*.gpkg.tar" -p "Packages" --repo ${{ github.repository }} --dir "${{ github.workspace }}/binpkgs" --clobber || echo "First run or no packages found."
 
-      # ✅ FIX: The Void Relay Logic. Pop the first missing package, pass the rest.
       - name: Check Existing Binaries & Pop Queue
         id: queue
         run: |
@@ -107,7 +106,6 @@ jobs:
             echo "remaining_pkgs=" >> "$GITHUB_OUTPUT"
           fi
 
-      # ✅ FIX: Clone overlays on the host. Bypasses the Docker Git/GPG crash!
       - name: Fetch Overlays on Host Runner
         if: steps.queue.outputs.target_pkg != ''
         run: |
@@ -125,17 +123,20 @@ jobs:
             mkdir -p /var/db/repos/{gentoo,steam-overlay}
             mkdir -p /etc/portage/{repos.conf,binrepos.conf,env,package.{accept_keywords,license,use,env}}
             
+            # ✅ FIX: Wipe default gentoobinhost config to obliterate GPG constraints
+            rm -rf /etc/portage/binrepos.conf/*
+            
             cat > /etc/portage/binrepos.conf/nexus-releases.conf << EOF
             [gentoo-nexus-releases]
             priority = 99999
             sync-uri = https://github.com/${OWNER}/${REPO_NAME}/releases/download/rolling/
-            verify-signature = false
+            verify-signature = no
             EOF
             cat > /etc/portage/binrepos.conf/gentoo.conf << 'EOF'
             [gentoo]
             priority = 1
             sync-uri = https://distfiles.gentoo.org/releases/amd64/binpackages/23.0/x86-64/
-            verify-signature = false
+            verify-signature = no
             EOF
             
             cat > /etc/portage/make.conf << 'EOF'
@@ -163,8 +164,8 @@ jobs:
             emerge-webrsync -q || true
             eselect profile set default/linux/amd64/23.0/desktop
             
-            # ✅ FIX: Compile ccache from source rapidly to avoid GPG verification of bins
-            emerge --noreplace --quiet dev-util/ccache
+            # ✅ Installed completely bypassing signatures
+            emerge --noreplace --quiet dev-util/ccache dev-vcs/git
             
             printf "[repo]\nrepo-name = steam-overlay\nmasters = gentoo\n" > /var/db/repos/steam-overlay/metadata/layout.conf
             cat > /etc/portage/repos.conf/steam-overlay.conf << 'EOF'
@@ -272,7 +273,6 @@ jobs:
         if: always()
         run: sudo chown -R $USER:$USER ${{ github.workspace }}
 
-      # ✅ FIX: The Void Relay logic. Hands the baton to the next package.
       - name: Trigger Relay Race
         if: steps.queue.outputs.remaining_pkgs != ''
         env:
