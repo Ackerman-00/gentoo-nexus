@@ -34,13 +34,6 @@ jobs:
           key: gentoo-binpkgs-${{ hashFiles('**/*.ebuild') }}
           restore-keys: gentoo-binpkgs-
 
-      # FIX: Cache the gentoo/stage3 Docker image so we only pull from
-      # Docker Hub once per week instead of every run.
-      # GitHub Actions runners share public IPs — Docker Hub's free tier
-      # allows only 100 unauthenticated pulls per 6 hours per IP, which
-      # shared runners exhaust almost immediately, causing connection resets.
-      # A weekly cache key means the image is refreshed every Monday and
-      # reused for all runs that week without touching Docker Hub.
       - name: Get week stamp for Docker cache key
         id: week
         run: echo "stamp=$(date +%Y-W%V)" >> "$GITHUB_OUTPUT"
@@ -125,12 +118,14 @@ jobs:
           FEATURES="-sandbox -usersandbox -ipc-sandbox -network-sandbox -pid-sandbox buildpkg parallel-install getbinpkg -binpkg-request-signature ccache -strict"
           CCACHE_DIR="/var/cache/ccache"
           CCACHE_UMASK="002"
-          EMERGE_DEFAULT_OPTS="--getbinpkg --usepkg --autounmask=y --autounmask-write --keep-going --quiet-build=y --jobs=$(nproc) --load-average=$(nproc)"
           DISTDIR="/var/cache/distfiles"
           PKGDIR="/tmp/binpkgs"
           ACCEPT_LICENSE="*"
           ACCEPT_KEYWORDS="~amd64"
           EOF
+
+          # CRITICAL FIX: Portage does NOT understand $(nproc). Expand it NOW.
+          echo "EMERGE_DEFAULT_OPTS=\"--getbinpkg --usepkg --autounmask=y --autounmask-write --keep-going --quiet-build=y --jobs=$(nproc) --load-average=$(nproc)\"" >> /etc/portage/make.conf
           echo "MAKEOPTS=\"-j$(nproc)\"" >> /etc/portage/make.conf
 
           emerge-webrsync -q || true
