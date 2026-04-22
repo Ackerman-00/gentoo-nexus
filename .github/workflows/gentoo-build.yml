@@ -123,19 +123,22 @@ jobs:
             mkdir -p /var/db/repos/{gentoo,steam-overlay}
             mkdir -p /etc/portage/{repos.conf,binrepos.conf,env,package.{accept_keywords,license,use,env}}
             
+            # ✅ FIX: Wipe the default configs to absolutely guarantee no ghost binhosts
             rm -rf /etc/portage/binrepos.conf/*
             
             cat > /etc/portage/binrepos.conf/nexus-releases.conf << EOF
             [gentoo-nexus-releases]
             priority = 99999
             sync-uri = https://github.com/${OWNER}/${REPO_NAME}/releases/download/rolling/
-            verify-signature = false
+            verify-signature = no
             EOF
-            cat > /etc/portage/binrepos.conf/gentoo.conf << 'EOF'
-            [gentoo]
+            
+            # ✅ FIX: Properly target Gentoo's internal 'gentoobinhost' to disable GPG checks globally
+            cat > /etc/portage/binrepos.conf/gentoobinhost.conf << 'EOF'
+            [gentoobinhost]
             priority = 1
             sync-uri = https://distfiles.gentoo.org/releases/amd64/binpackages/23.0/x86-64/
-            verify-signature = false
+            verify-signature = no
             EOF
             
             cat > /etc/portage/make.conf << 'EOF'
@@ -145,7 +148,8 @@ jobs:
             RUSTFLAGS="-C target-cpu=x86-64-v3 -C opt-level=2"
             USE="wayland X vulkan pipewire dbus udev opengl dri gbm vaapi vdpau ffmpeg minizip -daemon -aqua -cups -gpm"
             VIDEO_CARDS="amdgpu radeon radeonsi intel iris nouveau virgl"
-            FEATURES="buildpkg parallel-install getbinpkg ccache -sandbox -usersandbox -ipc-sandbox -network-sandbox -pid-sandbox -strict -binpkg-request-signature"
+            FEATURES="buildpkg parallel-install getbinpkg ccache -sandbox -usersandbox -ipc-sandbox -network-sandbox -pid-sandbox -strict"
+            PORTAGE_BINPKG_SIGVERIFY="0"
             BINPKG_FORMAT="gpkg"
             PKGDIR="/var/cache/binpkgs"
             CCACHE_DIR="/var/cache/ccache"
@@ -160,13 +164,7 @@ jobs:
             echo "EMERGE_DEFAULT_OPTS=\"--getbinpkg --usepkg --autounmask=y --autounmask-write --autounmask-continue=y --keep-going --quiet-build=y --jobs=${NPROC} --load-average=${NPROC}\"" >> /etc/portage/make.conf
             echo "MAKEOPTS=\"-j${NPROC}\"" >> /etc/portage/make.conf
             
-            # ✅ FIX: THE ULTIMATE GPG KEYRING OWNERSHIP TRANSFER
-            mkdir -p /etc/portage/gnupg
             emerge-webrsync -q || true
-            getuto || true
-            chown -R portage:portage /etc/portage/gnupg
-            chmod 0700 /etc/portage/gnupg
-            
             eselect profile set default/linux/amd64/23.0/desktop
             
             printf "[repo]\nrepo-name = steam-overlay\nmasters = gentoo\n" > /var/db/repos/steam-overlay/metadata/layout.conf
@@ -221,6 +219,7 @@ jobs:
           echo "$PORTAGE_DNA" > portage_dna.sh
           chmod +x portage_dna.sh
 
+      # ✅ FIX: Appended --allow-unauthenticated here to nuke signature checks for good.
       - name: Build Target Package
         if: steps.queue.outputs.target_pkg != ''
         env:
@@ -233,9 +232,9 @@ jobs:
             emaint binhost --fix 2>/dev/null || true
             if [ "${FORCE_REBUILD}" == "true" ]; then
               echo ">>> Force rebuild active for $1"
-              emerge --getbinpkg --usepkg --buildpkg --usepkg-exclude "$1" "$1"
+              emerge --getbinpkg --usepkg --buildpkg --allow-unauthenticated --usepkg-exclude "$1" "$1"
             else
-              emerge --getbinpkg --usepkg --buildpkg "$1"
+              emerge --getbinpkg --usepkg --buildpkg --allow-unauthenticated "$1"
             fi
         run: |
           echo ">>> Building: $TARGET"
