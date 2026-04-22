@@ -202,13 +202,17 @@ jobs:
           
           mkdir -p /etc/portage/repos.conf /etc/portage/binrepos.conf /var/db/repos/{gentoo,steam-overlay} /etc/portage/package.{accept_keywords,use}
           
-          # ✅ FIX: Wipe the default Gentoo config so it doesn't enforce signatures!
-          rm -rf /etc/portage/binrepos.conf/*
+          cat > /etc/portage/binrepos.conf/gentoo.conf << 'BINREPO'
+          [gentoo]
+          priority = 1
+          sync-uri = https://distfiles.gentoo.org/releases/amd64/binpackages/23.0/x86-64/
+          BINREPO
           
           cat > /etc/portage/make.conf << 'MAKECONF'
           ACCEPT_KEYWORDS="~amd64"
           ACCEPT_LICENSE="*"
-          FEATURES="-sandbox -usersandbox -ipc-sandbox -network-sandbox -pid-sandbox -strict -binpkg-request-signature"
+          # ✅ FIX: Normal privileges restored for proper resolution
+          FEATURES="-sandbox -usersandbox -ipc-sandbox -network-sandbox -pid-sandbox"
           MAKECONF
           
           cat > /etc/portage/package.use/global << 'USECONF'
@@ -222,6 +226,14 @@ jobs:
           
           echo ">>> Syncing base Gentoo tree..."
           emerge-webrsync -q || true
+          
+          # ✅ FIX: Let root get the keys, then hand to portage
+          getuto || true
+          chown -R portage:portage /etc/portage/gnupg
+          chmod 0700 /etc/portage/gnupg
+          
+          echo ">>> Installing Git to fetch overlays..."
+          emerge --oneshot --quiet --getbinpkg --usepkg dev-vcs/git
           
           mkdir -p /overlay/metadata
           echo "masters = gentoo" > /overlay/metadata/layout.conf
