@@ -1,8 +1,6 @@
 # Copyright 2024-2026 Gentoo Authors
 # Distributed under the terms of the GNU General Public License v2
-
 EAPI=8
-
 LLVM_COMPAT=( {18..22} )
 RUST_MIN_VER="1.95.0"
 
@@ -25,6 +23,7 @@ LICENSE+="
 "
 SLOT="0"
 IUSE="+dbus screencast systemd"
+
 REQUIRED_USE="
 	screencast? ( dbus )
 	systemd? ( dbus )
@@ -46,10 +45,12 @@ DEPEND="
 	x11-libs/pixman
 	screencast? ( media-video/pipewire:= )
 "
+
 RDEPEND="
 	${DEPEND}
 	screencast? ( sys-apps/xdg-desktop-portal-gnome )
 "
+
 BDEPEND="
 	screencast? ( $(llvm_gen_dep 'llvm-core/clang:${LLVM_SLOT}') )
 	virtual/pkgconfig
@@ -69,13 +70,6 @@ src_unpack() {
 
 src_prepare() {
 	default
-	# Ensure git dependencies are properly configured for offline build
-	mkdir -p "${CARGO_HOME}" || die
-	cat > "${CARGO_HOME}/config.toml" <<-EOF || die
-	[net]
-	offline = true
-	git-fetch-with-cli = true
-	EOF
 
 	if ! use systemd; then
 		local cmd="niri --session"
@@ -90,7 +84,8 @@ src_configure() {
 		$(usev screencast xdp-gnome-screencast)
 		$(usev systemd)
 	)
-	cargo_src_configure --no-default-features
+
+	cargo_src_configure --no-default-features --frozen
 }
 
 src_compile() {
