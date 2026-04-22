@@ -96,102 +96,102 @@ jobs:
       - name: Prepare Portage DNA Script
         run: |
           cat > portage_dna.sh << 'DNA_EOF'
-          #!/bin/bash
-          set -euo pipefail
-          OWNER="${GITHUB_REPOSITORY_OWNER:-}"
-          REPO="${GITHUB_REPOSITORY:-}"
-          REPO_NAME="${REPO#*/}"
-          echo ">>> Injecting Nexus Portage DNA..."
-          mkdir -p /var/db/repos/{gentoo,steam-overlay}
-          mkdir -p /etc/portage/{repos.conf,binrepos.conf,env,package.{accept_keywords,license,use,env}}
-          cat > /etc/portage/binrepos.conf/nexus-releases.conf << EOF
-          [gentoo-nexus-releases]
-          priority = 99999
-          sync-uri = https://github.com/${OWNER}/${REPO_NAME}/releases/download/rolling/
-          verify-signature = false
-          EOF
-          cat > /etc/portage/binrepos.conf/gentoo.conf << 'EOF'
-          [gentoo]
-          priority = 1
-          sync-uri = https://distfiles.gentoo.org/releases/amd64/binpackages/23.0/x86-64/
-          verify-signature = false
-          EOF
-          cat > /etc/portage/make.conf << 'EOF'
-          COMMON_FLAGS="-O2 -march=x86-64-v3 -pipe"
-          CFLAGS="${COMMON_FLAGS}"
-          CXXFLAGS="${COMMON_FLAGS}"
-          RUSTFLAGS="-C target-cpu=x86-64-v3 -C opt-level=2"
-          USE="wayland X vulkan pipewire dbus udev opengl dri gbm vaapi vdpau ffmpeg minizip -daemon -aqua -cups -gpm"
-          VIDEO_CARDS="amdgpu radeon radeonsi intel iris nouveau virgl"
-          FEATURES="buildpkg parallel-install getbinpkg ccache -sandbox -usersandbox -ipc-sandbox -network-sandbox -pid-sandbox -strict -binpkg-request-signature"
-          BINPKG_FORMAT="gpkg"
-          PKGDIR="/var/cache/binpkgs"
-          CCACHE_DIR="/var/cache/ccache"
-          CCACHE_UMASK="002"
-          DISTDIR="/var/cache/distfiles"
-          ACCEPT_LICENSE="*"
-          ACCEPT_KEYWORDS="~amd64"
-          EOF
-          NPROC=$(nproc)
-          echo "EMERGE_DEFAULT_OPTS=\"--getbinpkg --usepkg --autounmask=y --autounmask-write --keep-going --quiet-build=y --jobs=${NPROC} --load-average=${NPROC}\"" >> /etc/portage/make.conf
-          echo "MAKEOPTS=\"-j${NPROC}\"" >> /etc/portage/make.conf
-          emerge-webrsync -q || true
-          getuto || true
-          eselect profile set default/linux/amd64/23.0/desktop
-          emerge --noreplace --quiet dev-vcs/git dev-util/ccache
-          chown -R portage:portage /var/cache/ccache
-          chmod -R 2777 /var/cache/ccache
-          git clone --depth 1 https://github.com/anyc/steam-overlay.git /var/db/repos/steam-overlay 2>/dev/null || true
-          mkdir -p /var/db/repos/steam-overlay/metadata
-          printf "[repo]\nrepo-name = steam-overlay\nmasters = gentoo\n" > /var/db/repos/steam-overlay/metadata/layout.conf
-          cat > /etc/portage/repos.conf/steam-overlay.conf << 'EOF'
-          [steam-overlay]
-          location = /var/db/repos/steam-overlay
-          masters = gentoo
-          priority = 50
-          EOF
-          cat > /etc/portage/repos.conf/gentoo-nexus.conf << 'EOF'
-          [gentoo-nexus]
-          location = /overlay
-          masters = gentoo
-          priority = 9999
-          EOF
-          echo "*/*::steam-overlay **" > /etc/portage/package.accept_keywords/steam
-          echo "*/*::gentoo-nexus **" > /etc/portage/package.accept_keywords/nexus
-          cat >> /etc/portage/package.accept_keywords/nexus << 'EOF'
-          media-libs/mesa ~amd64
-          media-libs/vulkan-loader ~amd64
-          dev-util/mesa_clc ~amd64
-          dev-util/spirv-tools ~amd64
-          dev-util/spirv-headers ~amd64
-          dev-util/vulkan-headers ~amd64
-          dev-util/glslang ~amd64
-          dev-util/vulkan-utility-libraries ~amd64
-          sys-kernel/gentoo-kernel ~amd64
-          sys-kernel/linux-firmware ~amd64
-          virtual/dist-kernel ~amd64
-          EOF
-          cat > /etc/portage/package.use/global << 'EOF'
-          sys-libs/zlib minizip
-          media-video/pipewire extra
-          media-video/ffmpeg -sdl
-          sys-libs/ncurses -gpm
-          dev-libs/openssl -bindist
-          games-util/steam-launcher steamruntime
-          EOF
-          cat > /etc/portage/env/no-lto << 'EOF'
-          CFLAGS="-O1 -pipe -fno-lto -fno-tree-loop-vectorize -fno-tree-slp-vectorize"
-          CXXFLAGS="-O1 -pipe -fno-lto -fno-tree-loop-vectorize -fno-tree-slp-vectorize"
-          EOF
-          echo "MAKEOPTS=\"-j$(nproc)\"" >> /etc/portage/env/no-lto
-          cat > /etc/portage/package.env/no-lto-packages << 'EOF'
-          dev-util/spirv-tools no-lto
-          media-libs/mesa no-lto
-          gui-libs/gtk no-lto
-          dev-qt/qtbase no-lto
-          dev-qt/qtwayland no-lto
-          EOF
-          DNA_EOF
+#!/bin/bash
+set -euo pipefail
+OWNER="${GITHUB_REPOSITORY_OWNER:-}"
+REPO="${GITHUB_REPOSITORY:-}"
+REPO_NAME="${REPO#*/}"
+echo ">>> Injecting Nexus Portage DNA..."
+mkdir -p /var/db/repos/{gentoo,steam-overlay}
+mkdir -p /etc/portage/{repos.conf,binrepos.conf,env,package.{accept_keywords,license,use,env}}
+cat > /etc/portage/binrepos.conf/nexus-releases.conf << EOF
+[gentoo-nexus-releases]
+priority = 99999
+sync-uri = https://github.com/${OWNER}/${REPO_NAME}/releases/download/rolling/
+verify-signature = false
+EOF
+cat > /etc/portage/binrepos.conf/gentoo.conf << 'EOF'
+[gentoo]
+priority = 1
+sync-uri = https://distfiles.gentoo.org/releases/amd64/binpackages/23.0/x86-64/
+verify-signature = false
+EOF
+cat > /etc/portage/make.conf << 'EOF'
+COMMON_FLAGS="-O2 -march=x86-64-v3 -pipe"
+CFLAGS="${COMMON_FLAGS}"
+CXXFLAGS="${COMMON_FLAGS}"
+RUSTFLAGS="-C target-cpu=x86-64-v3 -C opt-level=2"
+USE="wayland X vulkan pipewire dbus udev opengl dri gbm vaapi vdpau ffmpeg minizip -daemon -aqua -cups -gpm"
+VIDEO_CARDS="amdgpu radeon radeonsi intel iris nouveau virgl"
+FEATURES="buildpkg parallel-install getbinpkg ccache -sandbox -usersandbox -ipc-sandbox -network-sandbox -pid-sandbox -strict -binpkg-request-signature"
+BINPKG_FORMAT="gpkg"
+PKGDIR="/var/cache/binpkgs"
+CCACHE_DIR="/var/cache/ccache"
+CCACHE_UMASK="002"
+DISTDIR="/var/cache/distfiles"
+ACCEPT_LICENSE="*"
+ACCEPT_KEYWORDS="~amd64"
+EOF
+NPROC=$(nproc)
+echo "EMERGE_DEFAULT_OPTS=\"--getbinpkg --usepkg --autounmask=y --autounmask-write --keep-going --quiet-build=y --jobs=${NPROC} --load-average=${NPROC}\"" >> /etc/portage/make.conf
+echo "MAKEOPTS=\"-j${NPROC}\"" >> /etc/portage/make.conf
+emerge-webrsync -q || true
+getuto || true
+eselect profile set default/linux/amd64/23.0/desktop
+emerge --noreplace --quiet dev-vcs/git dev-util/ccache
+chown -R portage:portage /var/cache/ccache
+chmod -R 2777 /var/cache/ccache
+git clone --depth 1 https://github.com/anyc/steam-overlay.git /var/db/repos/steam-overlay 2>/dev/null || true
+mkdir -p /var/db/repos/steam-overlay/metadata
+printf "[repo]\nrepo-name = steam-overlay\nmasters = gentoo\n" > /var/db/repos/steam-overlay/metadata/layout.conf
+cat > /etc/portage/repos.conf/steam-overlay.conf << 'EOF'
+[steam-overlay]
+location = /var/db/repos/steam-overlay
+masters = gentoo
+priority = 50
+EOF
+cat > /etc/portage/repos.conf/gentoo-nexus.conf << 'EOF'
+[gentoo-nexus]
+location = /overlay
+masters = gentoo
+priority = 9999
+EOF
+echo "*/*::steam-overlay **" > /etc/portage/package.accept_keywords/steam
+echo "*/*::gentoo-nexus **" > /etc/portage/package.accept_keywords/nexus
+cat >> /etc/portage/package.accept_keywords/nexus << 'EOF'
+media-libs/mesa ~amd64
+media-libs/vulkan-loader ~amd64
+dev-util/mesa_clc ~amd64
+dev-util/spirv-tools ~amd64
+dev-util/spirv-headers ~amd64
+dev-util/vulkan-headers ~amd64
+dev-util/glslang ~amd64
+dev-util/vulkan-utility-libraries ~amd64
+sys-kernel/gentoo-kernel ~amd64
+sys-kernel/linux-firmware ~amd64
+virtual/dist-kernel ~amd64
+EOF
+cat > /etc/portage/package.use/global << 'EOF'
+sys-libs/zlib minizip
+media-video/pipewire extra
+media-video/ffmpeg -sdl
+sys-libs/ncurses -gpm
+dev-libs/openssl -bindist
+games-util/steam-launcher steamruntime
+EOF
+cat > /etc/portage/env/no-lto << 'EOF'
+CFLAGS="-O1 -pipe -fno-lto -fno-tree-loop-vectorize -fno-tree-slp-vectorize"
+CXXFLAGS="-O1 -pipe -fno-lto -fno-tree-loop-vectorize -fno-tree-slp-vectorize"
+EOF
+echo "MAKEOPTS=\"-j$(nproc)\"" >> /etc/portage/env/no-lto
+cat > /etc/portage/package.env/no-lto-packages << 'EOF'
+dev-util/spirv-tools no-lto
+media-libs/mesa no-lto
+gui-libs/gtk no-lto
+dev-qt/qtbase no-lto
+dev-qt/qtwayland no-lto
+EOF
+DNA_EOF
           sed -i "s/^[[:space:]]*//" portage_dna.sh
           chmod +x portage_dna.sh
 
@@ -221,14 +221,13 @@ jobs:
             read -r -a MISSING <<< "$MISSING_PKGS"
             for pkg in "${MISSING[@]}"; do
               echo ">>> Building: $pkg"
-              cat > build_script.sh << 'BUILDEOF'
-              #!/bin/bash
-              set -euo pipefail
-              source /overlay/portage_dna.sh
-              emaint binhost --fix 2>/dev/null || true
-              emerge --getbinpkg --usepkg --buildpkgonly "$1"
-              BUILDEOF
-              sed -i "s/^[[:space:]]*//" build_script.sh
+              # ✅ FIX: Avoid nested heredoc - use printf to write build_script.sh
+              printf '%s\n' '#!/bin/bash' \
+                'set -euo pipefail' \
+                'source /overlay/portage_dna.sh' \
+                'emaint binhost --fix 2>/dev/null || true' \
+                "emerge --getbinpkg --usepkg --buildpkgonly \"\$1\"" \
+                > build_script.sh
               chmod +x build_script.sh
               docker run --rm --privileged \
                 -e GITHUB_REPOSITORY_OWNER \
