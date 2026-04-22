@@ -198,20 +198,19 @@ jobs:
           
           mkdir -p /etc/portage/repos.conf /etc/portage/binrepos.conf /var/db/repos/{gentoo,steam-overlay} /etc/portage/package.{accept_keywords,use}
           mkdir -p /etc/portage/gnupg
-          chmod 0700 /etc/portage/gnupg
           
-          # ✅ FIX: Disable signature verification for the default Gentoo binhost
+          # ✅ FIX: Hard disable GPG checking in the binhost config
           cat > /etc/portage/binrepos.conf/gentoo.conf << 'BINREPO'
           [gentoo]
           priority = 1
           sync-uri = https://distfiles.gentoo.org/releases/amd64/binpackages/23.0/x86-64/
-          verify-signature = false
+          verify-signature = no
           BINREPO
           
           cat > /etc/portage/make.conf << 'MAKECONF'
           ACCEPT_KEYWORDS="~amd64"
           ACCEPT_LICENSE="*"
-          FEATURES="-sandbox -usersandbox -ipc-sandbox -network-sandbox -pid-sandbox -userfetch -userpriv -strict -binpkg-request-signature"
+          FEATURES="-sandbox -usersandbox -ipc-sandbox -network-sandbox -pid-sandbox -strict"
           PORTAGE_BINPKG_SIGVERIFY="0"
           MAKECONF
           
@@ -227,8 +226,10 @@ jobs:
           echo ">>> Syncing base Gentoo tree..."
           emerge-webrsync -q || true
           
-          # ✅ FIX: Root runs getuto, no chown!
+          # ✅ FIX: Fetch keys, then forcefully hand ownership to portage
           getuto || true
+          chown -R portage:portage /etc/portage/gnupg
+          chmod 0700 /etc/portage/gnupg
           
           echo ">>> Installing Git to fetch overlays..."
           emerge --oneshot --quiet --getbinpkg --usepkg dev-vcs/git
