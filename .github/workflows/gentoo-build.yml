@@ -107,7 +107,6 @@ jobs:
             mkdir -p /var/db/repos/{gentoo,steam-overlay}
             mkdir -p /etc/portage/{repos.conf,binrepos.conf,env,package.{accept_keywords,license,use,env}}
             
-            # Unquoted EOF allows dynamic runtime expansion for github variables
             cat > /etc/portage/binrepos.conf/nexus-releases.conf << EOF
             [gentoo-nexus-releases]
             priority = 99999
@@ -115,7 +114,6 @@ jobs:
             verify-signature = false
             EOF
             
-            # Quoted 'EOF' locks everything else so variables remain literal inside make.conf
             cat > /etc/portage/binrepos.conf/gentoo.conf << 'EOF'
             [gentoo]
             priority = 1
@@ -138,10 +136,12 @@ jobs:
             DISTDIR="/var/cache/distfiles"
             ACCEPT_LICENSE="*"
             ACCEPT_KEYWORDS="~amd64"
+            CONFIG_PROTECT_MASK="/etc/portage"
             EOF
             
+            # ✅ FIX: Added --autounmask-continue=y to automatically resume after config updates
             NPROC=$(nproc)
-            echo "EMERGE_DEFAULT_OPTS=\"--getbinpkg --usepkg --autounmask=y --autounmask-write --keep-going --quiet-build=y --jobs=${NPROC} --load-average=${NPROC}\"" >> /etc/portage/make.conf
+            echo "EMERGE_DEFAULT_OPTS=\"--getbinpkg --usepkg --autounmask=y --autounmask-write --autounmask-continue=y --keep-going --quiet-build=y --jobs=${NPROC} --load-average=${NPROC}\"" >> /etc/portage/make.conf
             echo "MAKEOPTS=\"-j${NPROC}\"" >> /etc/portage/make.conf
             
             emerge-webrsync -q || true
@@ -172,7 +172,7 @@ jobs:
             
             echo "*/*::steam-overlay **" > /etc/portage/package.accept_keywords/steam
             echo "*/*::gentoo-nexus **" > /etc/portage/package.accept_keywords/nexus
-            cat > /etc/portage/package.accept_keywords/nexus << 'EOF'
+            cat >> /etc/portage/package.accept_keywords/nexus << 'EOF'
             media-libs/mesa ~amd64
             media-libs/vulkan-loader ~amd64
             dev-util/mesa_clc ~amd64
@@ -287,12 +287,10 @@ jobs:
           PAGES_PY_SCRIPT: |
             import os, re
             from pathlib import Path
-            
             repo = os.environ.get("GITHUB_REPOSITORY", "")
             base_url = f"https://github.com/{repo}/releases/download/rolling/"
             job_out = Path("job_out")
             pages_repo = Path("pages_repo")
-            
             existing = {}
             packages_file = pages_repo / "Packages"
             if packages_file.exists():
@@ -303,7 +301,6 @@ jobs:
                         cpv_match = re.search(r'^CPV:\s*(.+)$', block, re.MULTILINE)
                         if cpv_match:
                             existing[cpv_match.group(1).strip()] = block
-            
             new_blocks = {}
             for gpkg in job_out.glob("*.gpkg.tar"):
                 fname = gpkg.name
@@ -316,7 +313,6 @@ jobs:
                     block = f"CPV: {cpv}\nPATH: {fname}\nURI: {base_url}{fname}\n"
                     new_blocks[cpv] = block
                     existing[cpv] = block
-            
             with open(pages_repo / "Packages", "w", encoding="utf-8") as f:
                 f.write(f"# Created by emaint binhost\n# Base URI: {base_url}\n\n")
                 for cpv in sorted(existing.keys()):
