@@ -18,8 +18,6 @@ jobs:
     name: Scan & Update Ebuilds
     runs-on: ubuntu-latest
     timeout-minutes: 30
-    outputs:
-      build_list: ${{ steps.audit.outputs.build_list || steps.full_audit.outputs.build_list }}
     steps:
       - name: Checkout Repository
         uses: actions/checkout@v4
@@ -35,7 +33,7 @@ jobs:
       - name: Install Dependencies
         run: pip install requests packaging
 
-      - name: Scan Ebuilds & Update Versions
+      - name: Phase 1 - Scan Local Ebuilds & Bump Versions
         id: scan
         env:
           GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
@@ -67,45 +65,9 @@ jobs:
               try:
                   out = subprocess.check_output(["git", "ls-remote", repo_url, "HEAD"], timeout=30, stderr=subprocess.DEVNULL).decode()
                   m = re.search(r"([a-f0-9]{40})", out)
-                  if m: return m.group(1)
+                  if m: return m.group(1)[:12]
               except Exception: pass
               return None
-
-          def get_rootapp_version():
-              appimage = "/tmp/Root.AppImage"
-              subprocess.run(["wget", "-qO", appimage, "https://installer.rootapp.com/installer/Linux/X64/Root.AppImage"])
-              if not os.path.exists(appimage): return None
-              os.chmod(appimage, stat.S_IRWXU)
-              subprocess.run([appimage, "--appimage-extract"], stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL)
-              ver = None
-              if os.path.exists("squashfs-root"):
-                  for d_file in Path("squashfs-root").glob("*.desktop"):
-                      txt = d_file.read_text(encoding="utf-8")
-                      m = re.search(r'^X-AppImage-Version=(.+)', txt, re.M | re.I)
-                      if m: ver = m.group(1).strip()
-                      break
-                  if ver in (None, "1.0", "1.0.0"):
-                      os.system("xvfb-run -a ./squashfs-root/AppRun > /tmp/startup.log 2>&1 & sleep 5 && pkill -f AppRun || true")
-                      if os.path.exists("/tmp/startup.log"):
-                          log = Path("/tmp/startup.log").read_text(encoding="utf-8")
-                          m = re.search(r'Root Version:\s*([0-9]+\.[0-9]+\.[0-9]+)', log, re.I)
-                          if m: ver = m.group(1)
-                  shutil.rmtree("squashfs-root", ignore_errors=True)
-              os.remove(appimage)
-              return ver
-
-          def update_egit_commit(content, short_commit):
-              if re.search(r'^EGIT_COMMIT=', content, re.MULTILINE):
-                  return re.sub(r'(EGIT_COMMIT=["\']?)[a-fA-F0-9]{7,40}(["\']?)', r"\g<1>" + short_commit + r"\2", content)
-              else:
-                  lines = content.split('\n')
-                  func_indices = [i for i, line in enumerate(lines) if re.match(r'^\w+\s*\(\)\s*{', line)]
-                  if func_indices:
-                      insert_idx = func_indices[0]
-                      lines.insert(insert_idx, f'EGIT_COMMIT="{short_commit}"')
-                  else:
-                      lines.append(f'EGIT_COMMIT="{short_commit}"')
-                  return '\n'.join(lines)
 
           for ebuild_path in Path('.').rglob('*.ebuild'):
               if 'cache' in ebuild_path.parts or 'job_out' in ebuild_path.parts: continue
@@ -116,17 +78,6 @@ jobs:
               content = ebuild_path.read_text(encoding="utf-8")
               is_live = ebuild_path.name.endswith('-9999.ebuild') or 'git-r3' in content
 
-              if pkg_name == "rootapp-bin":
-                  new_ver = get_rootapp_version()
-                  if new_ver:
-                      curr_ver_m = re.search(rf'/{pkg_name}-(\d+(?:\.\d+)*(?:_(?:alpha|beta|pre|rc|p)\d*)?(?:-r\d+)?)\.ebuild$', str(ebuild_path))
-                      curr_ver = curr_ver_m.group(1) if curr_ver_m else None
-                      if curr_ver and new_ver != curr_ver:
-                          new_path = pkg_dir / f"{pkg_name}-{new_ver}.ebuild"
-                          ebuild_path.rename(new_path)
-                          updated_atoms.add(pkg_cat_name)
-                  continue
-
               repo_m = re.search(r'https://github\.com/([A-Za-z0-9_.-]+/[A-Za-z0-9_.-]+?)(?:\.git|/archive|/releases|/tarball|["\s])', content)
               if not repo_m: continue
               repo = repo_m.group(1).rstrip('.')
@@ -136,10 +87,8 @@ jobs:
                   new_commit = get_latest_commit(repo_url)
                   if new_commit:
                       new_content = content
-                      short_commit = new_commit[:12]
-                      new_content = update_egit_commit(new_content, short_commit)
-                      if "_commit=" in new_content:
-                          new_content = re.sub(r'(_commit=["\']?)[a-fA-F0-9]{7,40}(["\']?)', r"\g<1>" + new_commit + r"\2", new_content)
+                      if re.search(r'^EGIT_COMMIT=', new_content, re.MULTILINE):
+                          new_content = re.sub(r'(EGIT_COMMIT=["\']?)[a-fA-F0-9]{7,40}(["\']?)', r"\g<1>" + new_commit + r"\2", new_content)
                       if new_content != content:
                           ebuild_path.write_text(new_content, encoding="utf-8")
                           updated_atoms.add(pkg_cat_name)
@@ -162,169 +111,169 @@ jobs:
           changed_list = sorted(updated_atoms)
           if changed_list:
               Path('changed_packages.txt').write_text('\n'.join(changed_list) + '\n', encoding="utf-8")
-          with open(os.environ['GITHUB_OUTPUT'], 'a') as f:
-              f.write(f"changed_packages={'true' if changed_list else 'false'}\n")
           EOF
 
-      - name: Regenerate Manifests for Updated Ebuilds
-        if: steps.scan.outputs.changed_packages == 'true'
+      - name: Phase 2 - Commit and Push Updates
         run: |
-          if [ -s changed_packages.txt ]; then
-            echo ">>> Regenerating Manifests..."
-            cat > manifest_script.sh << 'SCRIPT'
+          if [ -f changed_packages.txt ]; then
+            git config user.name "github-actions[bot]"
+            git config user.email "github-actions[bot]@users.noreply.github.com"
+            git add -A
+            if ! git diff --cached --quiet; then
+              git commit -m "auto-update: ebuild refresh $(date -u '+%Y-%m-%d')"
+              git pull --rebase origin ${{ github.ref_name }}
+              git push origin HEAD:${{ github.ref_name }}
+            fi
+          fi
+
+      - name: Phase 3 - Resolve Latest State via Portage
+        run: |
+          cat > resolve_state.sh << 'EOF'
           #!/bin/bash
           set -euo pipefail
-
-          mkdir -p /etc/portage/repos.conf /overlay/distfiles /var/db/repos/gentoo
-
-          cat >> /etc/portage/make.conf << 'MAKECONF'
-          FEATURES="-userfetch -userpriv -usersandbox -ipc-sandbox -network-sandbox -pid-sandbox"
-          DISTDIR="/overlay/distfiles"
+          
+          echo ">>> Setting up minimal Portage to query Gentoo Tree..."
+          mkdir -p /etc/portage/repos.conf /var/db/repos/{gentoo,steam-overlay} /etc/portage/package.accept_keywords
+          cat > /etc/portage/make.conf << 'MAKECONF'
+          ACCEPT_KEYWORDS="~amd64"
           MAKECONF
-
+          
           emerge-webrsync -q
-
-          cat > /etc/portage/repos.conf/gentoo-nexus.conf << 'REPOCONF'
+          
+          git clone --depth 1 https://github.com/anyc/steam-overlay.git /var/db/repos/steam-overlay 2>/dev/null
+          cat > /etc/portage/repos.conf/steam-overlay.conf << 'REPOEOF'
+          [steam-overlay]
+          location = /var/db/repos/steam-overlay
+          masters = gentoo
+          priority = 50
+          REPOEOF
+          
+          cat > /etc/portage/repos.conf/gentoo-nexus.conf << 'REPOEOF'
           [gentoo-nexus]
           location = /overlay
           masters = gentoo
-          REPOCONF
+          priority = 9999
+          REPOEOF
+          
+          # Exact keyword masks required to see the latest upstream versions
+          cat > /etc/portage/package.accept_keywords/nexus << 'KEYW'
+          media-libs/mesa ~amd64
+          media-libs/vulkan-loader ~amd64
+          dev-util/mesa_clc ~amd64
+          dev-util/spirv-tools ~amd64
+          dev-util/spirv-headers ~amd64
+          dev-util/vulkan-headers ~amd64
+          dev-util/glslang ~amd64
+          dev-util/vulkan-utility-libraries ~amd64
+          sys-kernel/gentoo-kernel ~amd64
+          sys-kernel/linux-firmware ~amd64
+          virtual/dist-kernel ~amd64
+          KEYW
+          
+          # 1. Gather all local custom packages
+          LOCAL_PKGS=$(find /overlay -mindepth 2 -maxdepth 3 -name "*.ebuild" | awk -F/ '{print $(NF-2)"/"$(NF-1)}' | sed 's/\.ebuild$//' | sed -E 's/-[0-9]+(\.[0-9]+)*(_[a-z0-9]+)?(-r[0-9]+)?$//' | sort -u || true)
+          
+          # 2. Hardcoded Upstream Tracking List
+          UPSTREAM_PKGS="media-libs/mesa media-libs/vulkan-loader dev-util/mesa_clc dev-util/spirv-tools dev-util/spirv-headers dev-util/vulkan-headers dev-util/glslang dev-util/vulkan-utility-libraries sys-kernel/gentoo-kernel sys-kernel/linux-firmware virtual/dist-kernel games-util/steam-launcher"
+          
+          > /overlay/desired_state.txt
+          echo ">>> Querying Portage for exact latest versions..."
+          for pkg in $LOCAL_PKGS $UPSTREAM_PKGS; do
+             # Portage outputs exact CPV (e.g. media-libs/mesa-24.0.5)
+             RES=$(emerge -pqO "$pkg" 2>/dev/null | grep -oP '(?<=\] )[^ ]+' || true)
+             if [ -n "$RES" ]; then
+               echo "$RES" >> /overlay/desired_state.txt
+             fi
+          done
+          EOF
+          chmod +x resolve_state.sh
+          docker run --rm -v "${{ github.workspace }}:/overlay" gentoo/stage3:amd64-desktop-openrc bash /overlay/resolve_state.sh
 
-          while IFS= read -r pkg_dir; do
-            [ -z "$pkg_dir" ] && continue
-            if [ -d "/overlay/$pkg_dir" ]; then
-              cd "/overlay/$pkg_dir"
-              latest_ebuild=$(ls -1v *.ebuild 2>/dev/null | tail -n 1)
-              if [ -n "$latest_ebuild" ]; then
-                echo ">>> Manifesting $pkg_dir/$latest_ebuild"
-                ebuild "$latest_ebuild" manifest || echo "WARNING: manifest failed for $pkg_dir"
-              fi
-            else
-              echo "WARNING: directory /overlay/$pkg_dir not found, skipping"
-            fi
-          done < /overlay/changed_packages.txt
-          SCRIPT
-            chmod +x manifest_script.sh
-            docker run --rm \
-              -v "${{ github.workspace }}:/overlay" \
-              gentoo/stage3:amd64-desktop-openrc \
-              bash /overlay/manifest_script.sh
-          fi
-
-      - name: Commit and Push Changes
-        if: steps.scan.outputs.changed_packages == 'true'
-        run: |
-          git config user.name "github-actions[bot]"
-          git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
-          git add .
-          if ! git diff --cached --quiet; then
-            git commit -m "auto-update: ebuild refresh $(date -u '+%Y-%m-%d')"
-            git pull --rebase origin "${GITHUB_REF_NAME}"
-            git push origin HEAD:"${GITHUB_REF_NAME}"
-          fi
-
-      # =======================================================================
-      # SMART BINHOST AUDIT (UPSTREAM CHANGES DETECTED)
-      # =======================================================================
-      - name: "Smart Binhost Audit: Filter Already-Built Packages"
-        if: steps.scan.outputs.changed_packages == 'true'
+      - name: Phase 4 - Binhost Audit (Zero-Compile Check)
         id: audit
         env:
           GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+          REPO: ${{ github.repository }}
         run: |
-          touch packages_to_build.txt
+          echo ">>> Auditing Desired State against GitHub Releases..."
+          EXISTING_ASSETS=$(gh api "/repos/$REPO/releases/tags/rolling" --jq '.assets[].name' 2>/dev/null || echo "")
+          
+          CHANGED=""
+          [ -f changed_packages.txt ] && CHANGED=$(cat changed_packages.txt)
+          
+          > packages_to_build.txt
+          FORCE_REQUIRED="false"
+          
+          while IFS= read -r CPV; do
+             [ -z "$CPV" ] && continue
+             PN_PV="${CPV#*/}"
+             # Extract raw package name (e.g. gui-wm/niri) from CPV (gui-wm/niri-9999)
+             ATOM=$(echo "$CPV" | sed -E 's/-[0-9]+(\.[0-9]+)*(_[a-z0-9]+)?(-r[0-9]+)?$//')
+             
+             FORCE_THIS=false
+             if echo "$CHANGED" | grep -q "^${ATOM}$"; then
+                FORCE_THIS=true
+                FORCE_REQUIRED="true"
+             fi
+             
+             if [ "$FORCE_THIS" == "true" ]; then
+                echo "⚠️ $ATOM changed in Git. Queuing force build: =$CPV"
+                echo "=$CPV" >> packages_to_build.txt
+             # Check if Release has PN_PV-*.gpkg.tar (e.g. mesa-24.0.5-1.gpkg.tar)
+             elif ! echo "$EXISTING_ASSETS" | grep -q "^${PN_PV}-.*\.gpkg\.tar$"; then
+                echo "✗ Missing binary. Queuing build: =$CPV"
+                echo "=$CPV" >> packages_to_build.txt
+             else
+                echo "✓ Existing binary found for $CPV."
+             fi
+          done < desired_state.txt
+          
+          BUILD_LIST=$(tr '\n' ' ' < packages_to_build.txt | xargs)
+          echo "build_list=$BUILD_LIST" >> "$GITHUB_OUTPUT"
+          echo "force_required=$FORCE_REQUIRED" >> "$GITHUB_OUTPUT"
 
-          if ! gh release view rolling &>/dev/null; then
-            echo "Release 'rolling' does not exist. All changed packages need to be built."
-            cp changed_packages.txt packages_to_build.txt
-          else
-            existing_assets=$(gh release view rolling --json assets --jq '.assets[].name' 2>/dev/null || true)
-            > packages_to_build.txt
-            while IFS= read -r pkg_cat; do
-              [ -z "$pkg_cat" ] && continue
-              ebuild_path=$(find "$pkg_cat" -name "*.ebuild" 2>/dev/null | sort -V | tail -n 1)
-              if [ -z "$ebuild_path" ]; then
-                echo "WARNING: no ebuild found in $pkg_cat, skipping"
-                continue
-              fi
-              pkg_name=$(basename "$pkg_cat")
-              pkg_ver=$(basename "$ebuild_path" .ebuild | sed "s/^${pkg_name}-//")
-              expected_asset="${pkg_name}-${pkg_ver}.gpkg.tar"
-              if ! echo "$existing_assets" | grep -qF "$expected_asset"; then
-                echo "$pkg_cat" >> packages_to_build.txt
-              else
-                echo "Skipping $pkg_cat: $expected_asset already in release."
-              fi
-            done < changed_packages.txt
-          fi
-
-          build_list=$(tr '\n' ' ' < packages_to_build.txt | xargs)
-          echo "build_list=${build_list}" >> "$GITHUB_OUTPUT"
-
-      # =======================================================================
-      # FULL BINHOST AUDIT (NO UPSTREAM CHANGES)
-      # =======================================================================
-      # BUG-FIX: id uses underscore (full_audit) not hyphen (full-audit).
-      # Hyphen causes silent evaluation failure in GitHub expressions.
-      # BUG-FIX: find command correctly prunes both cache/ and job_out/
-      # directories before searching for .ebuild files.
-      - name: Full Binhost Audit (Fallback)
-        if: steps.scan.outputs.changed_packages == 'false'
-        id: full_audit
+      - name: Phase 5 - Trigger Relay Race
+        if: steps.audit.outputs.build_list != ''
         env:
           GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
         run: |
-          echo "No upstream changes detected. Running full overlay binhost audit..."
-
-          find . \( -path "*/cache/*" -o -path "*/job_out/*" \) -prune \
-            -o -name "*.ebuild" -print 2>/dev/null \
-            | sed -n 's|^\./\([^/]*/[^/]*\)/.*\.ebuild$|\1|p' \
-            | sort -u > all_packages.txt
-
-          echo "Total packages in overlay: $(wc -l < all_packages.txt)"
-          touch packages_to_build.txt
-
-          if ! gh release view rolling &>/dev/null; then
-            echo "Release 'rolling' does not exist. All packages need to be built."
-            cp all_packages.txt packages_to_build.txt
-          else
-            existing_assets=$(gh release view rolling --json assets --jq '.assets[].name' 2>/dev/null || true)
-            > packages_to_build.txt
-            while IFS= read -r pkg_cat; do
-              [ -z "$pkg_cat" ] && continue
-              ebuild_path=$(find "$pkg_cat" -name "*.ebuild" 2>/dev/null | sort -V | tail -n 1)
-              if [ -z "$ebuild_path" ]; then
-                echo "WARNING: no ebuild found in $pkg_cat, skipping"
-                continue
+          # Same priority queuing logic from Void
+          PRIORITY_ORDER=(
+            "gui-libs/scenefx"
+            "gui-apps/quickshell"
+            "gui-apps/noctalia-qs"
+            "x11-misc/matugen"
+            "gui-wm/niri"
+            "gui-wm/mangowc"
+            "gui-wm/noctalia-shell"
+            "gui-wm/dank-material-shell"
+            "sys-apps/danksearch"
+            "x11-base/xwayland-satellite"
+          )
+          
+          RAW_LIST="${{ steps.audit.outputs.build_list }}"
+          ORDERED=()
+          
+          for priority_pkg in "${PRIORITY_ORDER[@]}"; do
+            for exact_pkg in $RAW_LIST; do
+              if echo "$exact_pkg" | grep -q "$priority_pkg"; then
+                ORDERED+=("$exact_pkg")
               fi
-              pkg_name=$(basename "$pkg_cat")
-              pkg_ver=$(basename "$ebuild_path" .ebuild | sed "s/^${pkg_name}-//")
-              expected_asset="${pkg_name}-${pkg_ver}.gpkg.tar"
-              if ! echo "$existing_assets" | grep -qF "$expected_asset"; then
-                echo "$pkg_cat" >> packages_to_build.txt
-              else
-                echo "OK: $expected_asset already in release."
-              fi
-            done < all_packages.txt
-          fi
-
-          build_list=$(tr '\n' ' ' < packages_to_build.txt | xargs)
-          echo "build_list=${build_list}" >> "$GITHUB_OUTPUT"
-
-      # =======================================================================
-      # TRIGGER BUILD WORKFLOW
-      # =======================================================================
-      - name: Trigger Build Workflow (Relay Race)
-        if: steps.audit.outputs.build_list != '' || steps.full_audit.outputs.build_list != ''
-        env:
-          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
-        run: |
-          if [ -n "${{ steps.audit.outputs.build_list }}" ]; then
-            CHANGED="${{ steps.audit.outputs.build_list }}"
-          else
-            CHANGED="${{ steps.full_audit.outputs.build_list }}"
-          fi
-          echo "Packages to build: $CHANGED"
+            done
+          done
+          
+          for exact_pkg in $RAW_LIST; do
+            already=false
+            for p in "${ORDERED[@]}"; do
+              if [ "$p" == "$exact_pkg" ]; then already=true; break; fi
+            done
+            if [ "$already" = false ]; then ORDERED+=("$exact_pkg"); fi
+          done
+          
+          FINAL_LIST="${ORDERED[*]}"
+          echo ">>> Starting Relay Race with: $FINAL_LIST"
+          
           gh workflow run "Gentoo Build Relay" \
             --ref "${GITHUB_REF_NAME}" \
-            -f package_list="$CHANGED"
+            -f package_list="$FINAL_LIST" \
+            -f force_rebuild="${{ steps.audit.outputs.force_required }}"
