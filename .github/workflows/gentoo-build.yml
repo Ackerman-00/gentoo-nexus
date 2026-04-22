@@ -117,6 +117,11 @@ jobs:
             REPO_NAME="${REPO#*/}"
             mkdir -p /var/db/repos/{gentoo,steam-overlay}
             mkdir -p /etc/portage/{repos.conf,binrepos.conf,env,package.{accept_keywords,license,use,env}}
+            
+            # ✅ FIX: Initialize GPG Folder BEFORE running getuto
+            mkdir -p /etc/portage/gnupg
+            chmod 0700 /etc/portage/gnupg
+            
             cat > /etc/portage/binrepos.conf/nexus-releases.conf << EOF
             [gentoo-nexus-releases]
             priority = 99999
@@ -149,9 +154,16 @@ jobs:
             NPROC=$(nproc)
             echo "EMERGE_DEFAULT_OPTS=\"--getbinpkg --usepkg --autounmask=y --autounmask-write --autounmask-continue=y --keep-going --quiet-build=y --jobs=${NPROC} --load-average=${NPROC}\"" >> /etc/portage/make.conf
             echo "MAKEOPTS=\"-j${NPROC}\"" >> /etc/portage/make.conf
+            
+            # ✅ FIX: Download and trust Gentoo official binary GPG keys
             emerge-webrsync -q || true
+            getuto || true
+            
             eselect profile set default/linux/amd64/23.0/desktop
-            emerge --noreplace --quiet dev-vcs/git dev-util/ccache
+            
+            # ✅ Explicitly use binaries for the core toolkit
+            emerge --noreplace --quiet --getbinpkg --usepkg dev-vcs/git dev-util/ccache
+            
             git clone --depth 1 https://github.com/anyc/steam-overlay.git /var/db/repos/steam-overlay 2>/dev/null || true
             mkdir -p /var/db/repos/steam-overlay/metadata
             printf "[repo]\nrepo-name = steam-overlay\nmasters = gentoo\n" > /var/db/repos/steam-overlay/metadata/layout.conf
@@ -172,7 +184,14 @@ jobs:
             cat >> /etc/portage/package.accept_keywords/nexus << 'EOF'
             media-libs/mesa ~amd64
             media-libs/vulkan-loader ~amd64
+            dev-util/mesa_clc ~amd64
+            dev-util/spirv-tools ~amd64
+            dev-util/spirv-headers ~amd64
+            dev-util/vulkan-headers ~amd64
+            dev-util/glslang ~amd64
+            dev-util/vulkan-utility-libraries ~amd64
             sys-kernel/gentoo-kernel ~amd64
+            sys-kernel/linux-firmware ~amd64
             virtual/dist-kernel ~amd64
             EOF
             cat > /etc/portage/package.use/global << 'EOF'
@@ -181,12 +200,24 @@ jobs:
             media-video/ffmpeg -sdl
             sys-libs/ncurses -gpm
             dev-libs/openssl -bindist
+            games-util/steam-launcher steamruntime
+            EOF
+            cat > /etc/portage/env/no-lto << 'EOF'
+            CFLAGS="-O1 -pipe -fno-lto -fno-tree-loop-vectorize -fno-tree-slp-vectorize"
+            CXXFLAGS="-O1 -pipe -fno-lto -fno-tree-loop-vectorize -fno-tree-slp-vectorize"
+            EOF
+            echo "MAKEOPTS=\"-j${NPROC}\"" >> /etc/portage/env/no-lto
+            cat > /etc/portage/package.env/no-lto-packages << 'EOF'
+            dev-util/spirv-tools no-lto
+            media-libs/mesa no-lto
+            gui-libs/gtk no-lto
+            dev-qt/qtbase no-lto
+            dev-qt/qtwayland no-lto
             EOF
         run: |
           echo "$PORTAGE_DNA" > portage_dna.sh
           chmod +x portage_dna.sh
 
-      # ✅ FIX: Moved BUILD_SCRIPT back to GitHub env to avoid Bash Heredoc syntax crashes
       - name: Build Missing Packages (Relay Race)
         env:
           MISSING_PKGS: ${{ steps.check-releases.outputs.missing_pkgs }}
