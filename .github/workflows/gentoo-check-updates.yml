@@ -53,7 +53,6 @@ jobs:
                   if r.status_code == 200:
                       tag = r.json().get("tag_name", "").lstrip("v")
                       if tag and re.match(r'^[0-9]', tag): return tag
-                  # Fallback to tags API if releases API is empty
                   r2 = requests.get(f"https://api.github.com/repos/{repo}/tags", headers=hdrs, timeout=15)
                   if r2.status_code == 200 and r2.json():
                       for tag in r2.json():
@@ -72,14 +71,16 @@ jobs:
               return None
 
           for ebuild_path in Path('.').rglob('*.ebuild'):
-              if any(x in ebuild_path.parts for x in ['cache', 'job_out', '.github', '.git']): continue
+              if any(x in ebuild_path.parts for x in ['cache', 'job_out', 'binpkgs', 'distfiles', 'ccache', '.github', '.git']): continue
               pkg_dir = ebuild_path.parent
               if len(pkg_dir.parts) < 2: continue
               cat_name, pkg_name = pkg_dir.parts[-2], pkg_dir.parts[-1]
               pkg_cat_name = f"{cat_name}/{pkg_name}"
 
               content = ebuild_path.read_text(encoding="utf-8")
-              is_live = ebuild_path.name.endswith('-9999.ebuild') or 'git-r3' in content
+              
+              # ✅ FIX: Strictly checks the filename, ignoring internal git-r3 fallback logic!
+              is_live = ebuild_path.name.endswith('9999.ebuild')
 
               repo_m = re.search(r'github\.com/([A-Za-z0-9_.-]+/[A-Za-z0-9_.-]+?)(?:\.git|/archive|/releases|/tarball|["\s\'])', content)
               if not repo_m: continue
@@ -187,13 +188,20 @@ jobs:
           virtual/dist-kernel ~amd64
           KEYW
           
+          # ✅ FIX: Generate fresh manifests for the overlay so Portage recognizes bumped ebuilds!
+          echo ">>> Generating Manifests for local overlay..."
+          for ebuild_file in $(find /overlay -mindepth 2 -maxdepth 3 -name "*.ebuild"); do
+             ebuild "$ebuild_file" manifest >/dev/null 2>&1 || true
+          done
+          
           LOCAL_PKGS=$(find /overlay -mindepth 2 -maxdepth 3 -name "*.ebuild" | awk -F/ '{print $(NF-2)"/"$(NF-1)}' | sort -u || true)
           UPSTREAM_PKGS="media-libs/mesa media-libs/vulkan-loader sys-kernel/gentoo-kernel virtual/dist-kernel games-util/steam-launcher"
           
           > /overlay/desired_state.txt
           echo ">>> Querying emerge for exact target versions..."
           for pkg in $LOCAL_PKGS $UPSTREAM_PKGS; do
-             RES=$(emerge --best-visible "$pkg" 2>/dev/null | cut -d' ' -f3 || true)
+             # Bulletproof AWK parser for emerge output
+             RES=$(emerge -pqO --color=n "$pkg" 2>/dev/null | awk '/^\[ebuild/ {for(i=1;i<=NF;i++) if($i ~ /\//) {print $i; break}}' || true)
              if [ -n "$RES" ]; then 
                echo "$RES" >> /overlay/desired_state.txt
                echo "Target resolved: $RES"
@@ -209,7 +217,10 @@ jobs:
           GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
           REPO: ${{ github.repository }}
         run: |
-          EXISTING_ASSETS=$(gh api "/repos/$REPO/releases/tags/rolling" --jq '.assets[].name' 2>/dev/null || echo "")
+          echo ">>> Fetching Existing Assets (including Pre-Releases)..."
+          # ✅ FIX: Uses GH CLI to bypass the Prerelease API blindness!
+          EXISTING_ASSETS=$(gh release view rolling --json assets --jq '.assets[].name' 2>/dev/null || echo "")
+          
           CHANGED=$(cat changed_packages.txt 2>/dev/null || echo "")
           > packages_to_build.txt
           FORCE_REQUIRED="false"
