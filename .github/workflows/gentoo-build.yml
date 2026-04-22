@@ -307,8 +307,9 @@ jobs:
                 fname = gpkg.name
                 parts = fname.replace(".gpkg.tar", "").split("-")
                 if len(parts) >= 3:
+                    # Array indices restored to prevent Python string crashes
                     category = parts
-                    pn = parts
+                    pn = parts[1]
                     ver_rev = "-".join(parts[2:])
                     cpv = f"{category}/{pn}-{ver_rev}"
                     block = f"CPV: {cpv}\nPATH: {fname}\nURI: {base_url}{fname}\n"
@@ -349,8 +350,6 @@ jobs:
           git commit -m "Update Binhost Index [skip ci] $(date -u +%Y-%m-%dT%H:%M:%SZ)" || true
           git push https://x-access-token:${GITHUB_TOKEN}@github.com/${REPO}.git gh-pages
 
-      # ✅ FIX: This ensures the GitHub Runner regains ownership of the Docker-created files
-      # so the Cache step doesn't fail with "Permission denied".
       - name: Fix Workspace Permissions for Cache
         if: always()
         run: |
