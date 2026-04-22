@@ -34,6 +34,56 @@ jobs:
           key: gentoo-binpkgs-${{ hashFiles('**/*.ebuild') }}
           restore-keys: gentoo-binpkgs-
 
+      # FIX: Cache the gentoo/stage3 Docker image so we only pull from
+      # Docker Hub once per week instead of every run.
+      # GitHub Actions runners share public IPs — Docker Hub's free tier
+      # allows only 100 unauthenticated pulls per 6 hours per IP, which
+      # shared runners exhaust almost immediately, causing connection resets.
+      # A weekly cache key means the image is refreshed every Monday and
+      # reused for all runs that week without touching Docker Hub.
+      - name: Get week stamp for Docker cache key
+        id: week
+        run: echo "stamp=$(date +%Y-W%V)" >> "$GITHUB_OUTPUT"
+
+      - name: Cache gentoo/stage3 Docker image
+        id: docker-cache
+        uses: actions/cache@v4
+        with:
+          path: /tmp/docker-images/gentoo-stage3.tar
+          key: docker-gentoo-stage3-${{ steps.week.outputs.stamp }}
+          restore-keys: docker-gentoo-stage3-
+
+      - name: Pull or restore gentoo/stage3 image
+        run: |
+          mkdir -p /tmp/docker-images
+
+          if [ -f /tmp/docker-images/gentoo-stage3.tar ]; then
+            echo ">>> Loading gentoo/stage3 from cache..."
+            docker load -i /tmp/docker-images/gentoo-stage3.tar
+            echo ">>> Image loaded from cache, skipping Docker Hub pull."
+          else
+            echo ">>> Cache miss — pulling gentoo/stage3 from Docker Hub with retry..."
+            pulled=false
+            for attempt in 1 2 3 4 5; do
+              if docker pull gentoo/stage3:amd64-desktop-openrc; then
+                pulled=true
+                break
+              fi
+              wait_sec=$((attempt * 15))
+              echo ">>> Pull attempt $attempt failed. Retrying in ${wait_sec}s..."
+              sleep "$wait_sec"
+            done
+
+            if [ "$pulled" = false ]; then
+              echo "ERROR: Failed to pull gentoo/stage3 after 5 attempts."
+              exit 1
+            fi
+
+            echo ">>> Saving image to cache for future runs..."
+            docker save gentoo/stage3:amd64-desktop-openrc \
+              -o /tmp/docker-images/gentoo-stage3.tar
+          fi
+
       - name: Prepare Portage DNA Script
         run: |
           cat > portage_dna.sh << 'DNA_EOF'
