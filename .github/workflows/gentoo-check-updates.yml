@@ -45,7 +45,7 @@ jobs:
 
           updated_atoms = set()
           gh_token = os.environ.get('GITHUB_TOKEN')
-          hdrs = {"Authorization": f"token {gh_token}"} if gh_token else {}
+          hdrs = {"Authorization": f"Bearer {gh_token}"} if gh_token else {}
 
           def get_latest_github_release(repo):
               try:
@@ -54,11 +54,11 @@ jobs:
                       tag = r.json().get("tag_name", "").lstrip("v")
                       if tag and re.match(r'^[0-9]', tag): return tag
                   r2 = requests.get(f"https://api.github.com/repos/{repo}/tags", headers=hdrs, timeout=15)
-                  if r2.status_code == 200:
+                  if r2.status_code == 200 and r2.json():
                       for tag in r2.json():
                           name = tag.get("name", "").lstrip("v")
                           if re.match(r'^[0-9]', name): return name
-              except Exception: pass
+              except: pass
               return None
 
           def get_latest_commit(repo_url):
@@ -66,19 +66,20 @@ jobs:
                   out = subprocess.check_output(["git", "ls-remote", repo_url, "HEAD"], timeout=30, stderr=subprocess.DEVNULL).decode()
                   m = re.search(r"([a-f0-9]{40})", out)
                   if m: return m.group(1)[:12]
-              except Exception: pass
+              except: pass
               return None
 
           for ebuild_path in Path('.').rglob('*.ebuild'):
-              if 'cache' in ebuild_path.parts or 'job_out' in ebuild_path.parts: continue
+              if any(x in ebuild_path.parts for x in ['cache', 'job_out', '.github', '.git']): continue
               pkg_dir = ebuild_path.parent
-              *parent_parts, cat_name, pkg_name = pkg_dir.parts
+              if len(pkg_dir.parts) < 2: continue
+              cat_name, pkg_name = pkg_dir.parts[-2], pkg_dir.parts[-1]
               pkg_cat_name = f"{cat_name}/{pkg_name}"
 
               content = ebuild_path.read_text(encoding="utf-8")
               is_live = ebuild_path.name.endswith('-9999.ebuild') or 'git-r3' in content
 
-              repo_m = re.search(r'https://github\.com/([A-Za-z0-9_.-]+/[A-Za-z0-9_.-]+?)(?:\.git|/archive|/releases|/tarball|["\s])', content)
+              repo_m = re.search(r'github\.com/([A-Za-z0-9_.-]+/[A-Za-z0-9_.-]+?)(?:\.git|/archive|/releases|/tarball|["\s\'])', content)
               if not repo_m: continue
               repo = repo_m.group(1).rstrip('.')
 
@@ -93,7 +94,7 @@ jobs:
                           ebuild_path.write_text(new_content, encoding="utf-8")
                           updated_atoms.add(pkg_cat_name)
               else:
-                  curr_ver_m = re.search(rf'/{pkg_name}-(\d+(?:\.\d+)*(?:_(?:alpha|beta|pre|rc|p)\d*)?(?:-r\d+)?)\.ebuild$', str(ebuild_path))
+                  curr_ver_m = re.search(rf'{re.escape(pkg_name)}-(\d+(?:\.\d+)*(?:_(?:alpha|beta|pre|rc|p)\d*)?(?:-r\d+)?)\.ebuild$', ebuild_path.name)
                   if not curr_ver_m: continue
                   curr_ver = curr_ver_m.group(1)
 
@@ -111,6 +112,8 @@ jobs:
           changed_list = sorted(updated_atoms)
           if changed_list:
               Path('changed_packages.txt').write_text('\n'.join(changed_list) + '\n', encoding="utf-8")
+          with open(os.environ['GITHUB_OUTPUT'], 'a') as f:
+              f.write(f"changed_packages={'true' if changed_list else 'false'}\n")
           EOF
 
       - name: Phase 2 - Commit and Push Updates
@@ -128,119 +131,79 @@ jobs:
 
       - name: Phase 3 - Resolve Latest State via Portage
         run: |
+          # 127 Fix: Ensure the shell script uses /bin/bash and handles tool initialization
           cat > resolve_state.sh << 'EOF'
           #!/bin/bash
           set -euo pipefail
           
-          echo ">>> Setting up minimal Portage to query Gentoo Tree..."
           mkdir -p /etc/portage/repos.conf /var/db/repos/{gentoo,steam-overlay} /etc/portage/package.accept_keywords
-          cat > /etc/portage/make.conf << 'MAKECONF'
-          ACCEPT_KEYWORDS="~amd64"
-          MAKECONF
+          echo 'ACCEPT_KEYWORDS="~amd64"' > /etc/portage/make.conf
           
-          emerge-webrsync -q
+          # Initialize Portage tree
+          emerge-webrsync -q || true
           
-          git clone --depth 1 https://github.com/anyc/steam-overlay.git /var/db/repos/steam-overlay 2>/dev/null
-          cat > /etc/portage/repos.conf/steam-overlay.conf << 'REPOEOF'
-          [steam-overlay]
-          location = /var/db/repos/steam-overlay
-          masters = gentoo
-          priority = 50
-          REPOEOF
+          # Setup Overlay metadata
+          mkdir -p /overlay/metadata
+          echo "masters = gentoo" > /overlay/metadata/layout.conf
+          echo "[gentoo-nexus]" > /etc/portage/repos.conf/gentoo-nexus.conf
+          echo "location = /overlay" >> /etc/portage/repos.conf/gentoo-nexus.conf
           
-          cat > /etc/portage/repos.conf/gentoo-nexus.conf << 'REPOEOF'
-          [gentoo-nexus]
-          location = /overlay
-          masters = gentoo
-          priority = 9999
-          REPOEOF
-          
-          # Exact keyword masks required to see the latest upstream versions
+          # Keyword upstream
           cat > /etc/portage/package.accept_keywords/nexus << 'KEYW'
           media-libs/mesa ~amd64
           media-libs/vulkan-loader ~amd64
-          dev-util/mesa_clc ~amd64
-          dev-util/spirv-tools ~amd64
-          dev-util/spirv-headers ~amd64
-          dev-util/vulkan-headers ~amd64
-          dev-util/glslang ~amd64
-          dev-util/vulkan-utility-libraries ~amd64
           sys-kernel/gentoo-kernel ~amd64
-          sys-kernel/linux-firmware ~amd64
           virtual/dist-kernel ~amd64
           KEYW
           
-          # 1. Gather all local custom packages dynamically
-          LOCAL_PKGS=$(find /overlay -mindepth 2 -maxdepth 3 -name "*.ebuild" | awk -F/ '{print $(NF-2)"/"$(NF-1)}' | sed 's/\.ebuild$//' | sed -E 's/-[0-9]+(\.[0-9]+)*(_[a-z0-9]+)?(-r[0-9]+)?$//' | sort -u || true)
-          
-          # 2. Hardcoded Upstream Tracking List (Pulls latest stable/testing, ignores 9999)
-          UPSTREAM_PKGS="media-libs/mesa media-libs/vulkan-loader dev-util/mesa_clc dev-util/spirv-tools dev-util/spirv-headers dev-util/vulkan-headers dev-util/glslang dev-util/vulkan-utility-libraries sys-kernel/gentoo-kernel sys-kernel/linux-firmware virtual/dist-kernel games-util/steam-launcher"
+          LOCAL_PKGS=$(find /overlay -mindepth 2 -maxdepth 3 -name "*.ebuild" | awk -F/ '{print $(NF-2)"/"$(NF-1)}' | sort -u || true)
+          UPSTREAM_PKGS="media-libs/mesa media-libs/vulkan-loader sys-kernel/gentoo-kernel virtual/dist-kernel games-util/steam-launcher"
           
           > /overlay/desired_state.txt
-          echo ">>> Querying Portage for exact latest versions..."
           for pkg in $LOCAL_PKGS $UPSTREAM_PKGS; do
-             # Portage outputs exact CPV (e.g. media-libs/mesa-24.0.5)
-             RES=$(emerge -pqO "$pkg" 2>/dev/null | grep -oP '(?<=\] )[^ ]+' || true)
-             if [ -n "$RES" ]; then
-               echo "$RES" >> /overlay/desired_state.txt
-             fi
+             # Use --best-visible to get the highest version available under ~amd64
+             RES=$(emerge --best-visible "$pkg" 2>/dev/null | cut -d' ' -f3 || true)
+             if [ -n "$RES" ]; then echo "$RES" >> /overlay/desired_state.txt; fi
           done
           EOF
           chmod +x resolve_state.sh
-          docker run --rm -v "${{ github.workspace }}:/overlay" gentoo/stage3:amd64-desktop-openrc bash /overlay/resolve_state.sh
+          docker run --rm -v "${{ github.workspace }}:/overlay" gentoo/stage3:amd64-desktop-openrc /bin/bash /overlay/resolve_state.sh
 
-      - name: Phase 4 - Binhost Audit (Zero-Compile Check)
+      - name: Phase 4 - Binhost Audit
         id: audit
         env:
           GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
           REPO: ${{ github.repository }}
         run: |
-          echo ">>> Auditing Desired State against GitHub Releases..."
           EXISTING_ASSETS=$(gh api "/repos/$REPO/releases/tags/rolling" --jq '.assets[].name' 2>/dev/null || echo "")
-          
-          CHANGED=""
-          [ -f changed_packages.txt ] && CHANGED=$(cat changed_packages.txt)
-          
+          CHANGED=$(cat changed_packages.txt 2>/dev/null || echo "")
           > packages_to_build.txt
           FORCE_REQUIRED="false"
           
           while IFS= read -r CPV; do
              [ -z "$CPV" ] && continue
              PN_PV="${CPV#*/}"
-             # Extract raw package name (e.g. gui-wm/niri) from CPV (gui-wm/niri-9999)
              ATOM=$(echo "$CPV" | sed -E 's/-[0-9]+(\.[0-9]+)*(_[a-z0-9]+)?(-r[0-9]+)?$//')
              
-             FORCE_THIS=false
              if echo "$CHANGED" | grep -q "^${ATOM}$"; then
-                FORCE_THIS=true
+                echo "⚠️ $ATOM bumped. Force build: =$CPV"
+                echo "=$CPV" >> packages_to_build.txt
                 FORCE_REQUIRED="true"
-             fi
-             
-             if [ "$FORCE_THIS" == "true" ]; then
-                echo "⚠️ $ATOM changed in Git. Queuing force build: =$CPV"
-                echo "=$CPV" >> packages_to_build.txt
-             # Check if Release has PN_PV-*.gpkg.tar (e.g. mesa-24.0.5-1.gpkg.tar)
              elif ! echo "$EXISTING_ASSETS" | grep -q "^${PN_PV}-.*\.gpkg\.tar$"; then
-                echo "✗ Missing binary. Queuing build: =$CPV"
+                echo "✗ Missing binary: =$CPV"
                 echo "=$CPV" >> packages_to_build.txt
-             else
-                echo "✓ Existing binary found for $CPV."
              fi
           done < desired_state.txt
           
-          BUILD_LIST=$(tr '\n' ' ' < packages_to_build.txt | xargs)
-          echo "build_list=$BUILD_LIST" >> "$GITHUB_OUTPUT"
+          echo "build_list=$(tr '\n' ' ' < packages_to_build.txt | xargs)" >> "$GITHUB_OUTPUT"
           echo "force_required=$FORCE_REQUIRED" >> "$GITHUB_OUTPUT"
 
-      - name: Phase 5 - Trigger Relay Race
+      - name: Phase 5 - Trigger Relay
         if: steps.audit.outputs.build_list != ''
         env:
           GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
         run: |
-          FINAL_LIST="${{ steps.audit.outputs.build_list }}"
-          echo ">>> Starting Relay Race with: $FINAL_LIST"
-          
           gh workflow run "Gentoo Build Relay" \
             --ref "${GITHUB_REF_NAME}" \
-            -f package_list="$FINAL_LIST" \
+            -f package_list="${{ steps.audit.outputs.build_list }}" \
             -f force_rebuild="${{ steps.audit.outputs.force_required }}"

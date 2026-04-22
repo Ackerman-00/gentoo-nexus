@@ -4,7 +4,7 @@ on:
   workflow_dispatch:
     inputs:
       package_list:
-        description: 'Space-separated list of package atoms to build (e.g., "gui-wm/niri media-libs/mesa")'
+        description: 'Space-separated list of package atoms to build'
         required: true
       force_rebuild:
         description: 'Force compile from source (ignores existing binary in Release)'
@@ -88,12 +88,12 @@ jobs:
           FORCE_REBUILD="${{ github.event.inputs.force_rebuild }}"
           
           for pkg in "${PKGS[@]}"; do
-            PN="${pkg#*/}"
+            # Strip prefixes like '=' and version numbers to find the raw name
+            PN=$(echo "$pkg" | sed 's/^=//' | awk -F/ '{print $NF}' | sed -E 's/-[0-9]+(\.[0-9]+)*(_[a-z0-9]+)?(-r[0-9]+)?$//')
             
             if [ "$FORCE_REBUILD" == "true" ]; then
               echo "⚠️ Force rebuild requested for $pkg — ignoring local and remote binaries!"
               MISSING+=("$pkg")
-              # Remove local copy so Portage doesn't accidentally use it locally
               rm -f "${{ github.workspace }}/binpkgs/${PN}-"[0-9]*.gpkg.tar 2>/dev/null || true
             elif ls "${{ github.workspace }}/binpkgs/${PN}-"[0-9]*.gpkg.tar 1> /dev/null 2>&1; then
               echo "✓ Found existing binary for $pkg in local binhost"
@@ -112,29 +112,23 @@ jobs:
           PORTAGE_DNA: |
             #!/bin/bash
             set -euo pipefail
-            
             OWNER="${GITHUB_REPOSITORY_OWNER:-}"
             REPO="${GITHUB_REPOSITORY:-}"
             REPO_NAME="${REPO#*/}"
-            
-            echo ">>> Injecting Nexus Portage DNA..."
             mkdir -p /var/db/repos/{gentoo,steam-overlay}
             mkdir -p /etc/portage/{repos.conf,binrepos.conf,env,package.{accept_keywords,license,use,env}}
-            
             cat > /etc/portage/binrepos.conf/nexus-releases.conf << EOF
             [gentoo-nexus-releases]
             priority = 99999
             sync-uri = https://github.com/${OWNER}/${REPO_NAME}/releases/download/rolling/
             verify-signature = false
             EOF
-            
             cat > /etc/portage/binrepos.conf/gentoo.conf << 'EOF'
             [gentoo]
             priority = 1
             sync-uri = https://distfiles.gentoo.org/releases/amd64/binpackages/23.0/x86-64/
             verify-signature = false
             EOF
-            
             cat > /etc/portage/make.conf << 'EOF'
             COMMON_FLAGS="-O2 -march=x86-64-v3 -pipe"
             CFLAGS="${COMMON_FLAGS}"
@@ -152,74 +146,41 @@ jobs:
             ACCEPT_KEYWORDS="~amd64"
             CONFIG_PROTECT_MASK="/etc/portage"
             EOF
-            
             NPROC=$(nproc)
             echo "EMERGE_DEFAULT_OPTS=\"--getbinpkg --usepkg --autounmask=y --autounmask-write --autounmask-continue=y --keep-going --quiet-build=y --jobs=${NPROC} --load-average=${NPROC}\"" >> /etc/portage/make.conf
             echo "MAKEOPTS=\"-j${NPROC}\"" >> /etc/portage/make.conf
-            
             emerge-webrsync -q || true
-            getuto || true
             eselect profile set default/linux/amd64/23.0/desktop
-            
             emerge --noreplace --quiet dev-vcs/git dev-util/ccache
-            chown -R portage:portage /var/cache/ccache
-            chmod -R 2777 /var/cache/ccache
-            
             git clone --depth 1 https://github.com/anyc/steam-overlay.git /var/db/repos/steam-overlay 2>/dev/null || true
             mkdir -p /var/db/repos/steam-overlay/metadata
             printf "[repo]\nrepo-name = steam-overlay\nmasters = gentoo\n" > /var/db/repos/steam-overlay/metadata/layout.conf
-            
             cat > /etc/portage/repos.conf/steam-overlay.conf << 'EOF'
             [steam-overlay]
             location = /var/db/repos/steam-overlay
             masters = gentoo
             priority = 50
             EOF
-            
             cat > /etc/portage/repos.conf/gentoo-nexus.conf << 'EOF'
             [gentoo-nexus]
             location = /overlay
             masters = gentoo
             priority = 9999
             EOF
-            
             echo "*/*::steam-overlay **" > /etc/portage/package.accept_keywords/steam
             echo "*/*::gentoo-nexus **" > /etc/portage/package.accept_keywords/nexus
             cat >> /etc/portage/package.accept_keywords/nexus << 'EOF'
             media-libs/mesa ~amd64
             media-libs/vulkan-loader ~amd64
-            dev-util/mesa_clc ~amd64
-            dev-util/spirv-tools ~amd64
-            dev-util/spirv-headers ~amd64
-            dev-util/vulkan-headers ~amd64
-            dev-util/glslang ~amd64
-            dev-util/vulkan-utility-libraries ~amd64
             sys-kernel/gentoo-kernel ~amd64
-            sys-kernel/linux-firmware ~amd64
             virtual/dist-kernel ~amd64
             EOF
-            
             cat > /etc/portage/package.use/global << 'EOF'
             sys-libs/zlib minizip
             media-video/pipewire extra
             media-video/ffmpeg -sdl
             sys-libs/ncurses -gpm
             dev-libs/openssl -bindist
-            games-util/steam-launcher steamruntime
-            EOF
-            
-            cat > /etc/portage/env/no-lto << 'EOF'
-            CFLAGS="-O1 -pipe -fno-lto -fno-tree-loop-vectorize -fno-tree-slp-vectorize"
-            CXXFLAGS="-O1 -pipe -fno-lto -fno-tree-loop-vectorize -fno-tree-slp-vectorize"
-            EOF
-            echo "MAKEOPTS=\"-j${NPROC}\"" >> /etc/portage/env/no-lto
-            
-            cat > /etc/portage/package.env/no-lto-packages << 'EOF'
-            dev-util/spirv-tools no-lto
-            media-libs/mesa no-lto
-            gui-libs/gtk no-lto
-            dev-qt/qtbase no-lto
-            dev-qt/qtwayland no-lto
             EOF
         run: |
           echo "$PORTAGE_DNA" > portage_dna.sh
@@ -230,32 +191,28 @@ jobs:
         env:
           MISSING_PKGS: ${{ steps.check-releases.outputs.missing_pkgs }}
           FORCE_REBUILD: ${{ github.event.inputs.force_rebuild }}
-          BUILD_SCRIPT: |
-            #!/bin/bash
-            set -euo pipefail
-            source /overlay/portage_dna.sh
-            emaint binhost --fix 2>/dev/null || true
-            
-            # ✅ CRITICAL FIX: If Force Rebuild is true, explicitly exclude the target package from binary resolution!
-            if [ "$FORCE_REBUILD" == "true" ]; then
-              echo ">>> EXECUTING FORCE REBUILD: Ignoring existing binaries for $1..."
-              emerge --getbinpkg --usepkg --buildpkg --usepkg-exclude "$1" "$1"
-            else
-              emerge --getbinpkg --usepkg --buildpkg "$1"
-            fi
         run: |
           if [ -n "${MISSING_PKGS:-}" ]; then
-            echo ">>> Building missing/forced packages: $MISSING_PKGS"
             read -r -a MISSING <<< "$MISSING_PKGS"
             for pkg in "${MISSING[@]}"; do
               echo ">>> Building: $pkg"
-              echo "$BUILD_SCRIPT" > build_script.sh
+              # Script content is injected directly here for speed
+              cat > build_script.sh << 'EOF'
+              #!/bin/bash
+              set -euo pipefail
+              source /overlay/portage_dna.sh
+              emaint binhost --fix 2>/dev/null || true
+              if [ "${FORCE_REBUILD}" == "true" ]; then
+                echo ">>> Force rebuild active for $1"
+                emerge --getbinpkg --usepkg --buildpkg --usepkg-exclude "$1" "$1"
+              else
+                emerge --getbinpkg --usepkg --buildpkg "$1"
+              fi
+          EOF
               sed -i "s/^[[:space:]]*//" build_script.sh
               chmod +x build_script.sh
               docker run --rm --privileged \
-                -e GITHUB_REPOSITORY_OWNER \
-                -e GITHUB_REPOSITORY \
-                -e FORCE_REBUILD \
+                -e GITHUB_REPOSITORY_OWNER -e GITHUB_REPOSITORY -e FORCE_REBUILD \
                 -v "${{ github.workspace }}:/overlay" \
                 -v "${{ github.workspace }}/binpkgs:/var/cache/binpkgs" \
                 -v "${{ github.workspace }}/distfiles:/var/cache/distfiles" \
@@ -263,44 +220,29 @@ jobs:
                 gentoo/stage3:amd64-desktop-openrc \
                 bash /overlay/build_script.sh "$pkg"
             done
-          else
-            echo ">>> All packages already exist locally/in Releases — nothing to build"
           fi
 
       - name: Generate Unified Portage Index
         run: |
           if [ -z "$(find ${{ github.workspace }}/binpkgs -name '*.gpkg.tar' 2>/dev/null)" ]; then
-            echo "⚠️ No binaries found to index. Skipping."
+            echo "⚠️ No binaries to index."
             exit 0
           fi
           docker run --rm \
             -v "${{ github.workspace }}/binpkgs:/var/cache/binpkgs" \
-            -e PKGDIR="/var/cache/binpkgs" \
             gentoo/stage3:amd64-desktop-openrc \
-            bash -c "mkdir -p /var/db/repos/gentoo/metadata && echo 'masters = gentoo' > /var/db/repos/gentoo/metadata/layout.conf && emaint binhost --fix"
+            bash -c "mkdir -p /var/db/repos/gentoo/metadata && echo 'masters = gentoo' > /var/db/repos/gentoo/metadata/layout.conf && PKGDIR='/var/cache/binpkgs' emaint binhost --fix"
 
       - name: Deploy to GitHub Releases
         env:
           GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
           REPO: ${{ github.repository }}
         run: |
-          if [ -z "$(find ${{ github.workspace }}/binpkgs -name '*.gpkg.tar' 2>/dev/null)" ]; then 
-            echo "⚠️ No binaries to deploy."
-            exit 0
-          fi
-          
-          echo ">>> Setting up Rolling Release..."
+          if [ -z "$(find ${{ github.workspace }}/binpkgs -name '*.gpkg.tar' 2>/dev/null)" ]; then exit 0; fi
           gh release view rolling -R "$REPO" 2>/dev/null || \
-            gh release create rolling -R "$REPO" \
-              --title "Nexus Rolling Binaries" \
-              --notes "Automated Gentoo Binhost - Updated $(date -u +%Y-%m-%dT%H:%M:%SZ)" \
-              --prerelease
-          
-          echo ">>> Uploading Binaries and Index to Release..."
+            gh release create rolling -R "$REPO" --title "Nexus Rolling Binaries" --notes "Automated Gentoo Binhost" --prerelease
           find ${{ github.workspace }}/binpkgs -type f \( -name "*.gpkg.tar" -o -name "Packages" \) -exec gh release upload rolling -R "$REPO" {} --clobber \;
 
       - name: Fix Workspace Permissions for Cache
         if: always()
-        run: |
-          echo ">>> Fixing workspace ownership for GitHub Actions Cache..."
-          sudo chown -R $USER:$USER ${{ github.workspace }}
+        run: sudo chown -R $USER:$USER ${{ github.workspace }}
