@@ -32,7 +32,6 @@ jobs:
           mkdir -p "${{ github.workspace }}/binpkgs"
           mkdir -p "${{ github.workspace }}/distfiles"
           mkdir -p "${{ github.workspace }}/ccache"
-          mkdir -p job_out
 
       - name: Cache ccache & distfiles ONLY
         uses: actions/cache@v4
@@ -68,22 +67,25 @@ jobs:
             docker save gentoo/stage3:amd64-desktop-openrc -o "$IMAGE_CACHE"
           fi
 
-      - name: Check Releases for existing binaries
-        id: check-releases
+      # ✅ FIX: Native pre-release download (mirrors your Void Linux logic)
+      - name: Download Existing Binhost
         env:
           GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
-          TARGET_PKG: ${{ github.event.inputs.package_list }}
-          REPO: ${{ github.repository }}
         run: |
-          read -r -a PKGS <<< "$TARGET_PKG"
+          echo ">>> Downloading existing packages from rolling release..."
+          gh release download rolling -p "*.gpkg.tar" -p "Packages" --repo ${{ github.repository }} --dir "${{ github.workspace }}/binpkgs" --clobber || echo "First run or no packages found."
+
+      - name: Check Existing Binaries
+        id: check-releases
+        run: |
+          read -r -a PKGS <<< "${{ github.event.inputs.package_list }}"
           EXISTING=()
           MISSING=()
           for pkg in "${PKGS[@]}"; do
-            CATEGORY="${pkg%%/*}"
             PN="${pkg#*/}"
-            ASSETS=$(gh api "/repos/$REPO/releases/tags/rolling" --jq '.assets[].name' 2>/dev/null | grep "^${CATEGORY}-${PN}-.*\.gpkg\.tar$" || true)
-            if [ -n "$ASSETS" ]; then
-              echo "✓ Found existing binary for $pkg in Releases"
+            # Checks local dir for files matching the package name + version numbers
+            if ls "${{ github.workspace }}/binpkgs/${PN}-"[0-9]*.gpkg.tar 1> /dev/null 2>&1; then
+              echo "✓ Found existing binary for $pkg in local binhost"
               EXISTING+=("$pkg")
             else
               echo "✗ No binary for $pkg — will build"
@@ -214,15 +216,7 @@ jobs:
 
       - name: Build Missing Packages (Relay Race)
         env:
-          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
-          TARGET_PKG: ${{ github.event.inputs.package_list }}
-          EXISTING_PKGS: ${{ steps.check-releases.outputs.existing_pkgs }}
           MISSING_PKGS: ${{ steps.check-releases.outputs.missing_pkgs }}
-          GITHUB_REPOSITORY_OWNER: ${{ github.repository_owner }}
-          GITHUB_REPOSITORY: ${{ github.repository }}
-          HOST_BINPKGS: ${{ github.workspace }}/binpkgs
-          HOST_DISTFILES: ${{ github.workspace }}/distfiles
-          HOST_CCACHE: ${{ github.workspace }}/ccache
           BUILD_SCRIPT: |
             #!/bin/bash
             set -euo pipefail
@@ -230,16 +224,6 @@ jobs:
             emaint binhost --fix 2>/dev/null || true
             emerge --getbinpkg --usepkg --buildpkg "$1"
         run: |
-          if [ -n "${EXISTING_PKGS:-}" ]; then
-            echo ">>> Fetching existing binaries from Releases for dependency resolution..."
-            read -r -a EXISTING <<< "$EXISTING_PKGS"
-            for pkg in "${EXISTING[@]}"; do
-              CATEGORY="${pkg%%/*}"
-              PN="${pkg#*/}"
-              gh release download rolling -R "${GITHUB_REPOSITORY}" -p "${CATEGORY}-${PN}-*.gpkg.tar" -D "${HOST_BINPKGS}" --clobber 2>/dev/null || true
-            done
-          fi
-          
           if [ -n "${MISSING_PKGS:-}" ]; then
             echo ">>> Building missing packages: $MISSING_PKGS"
             read -r -a MISSING <<< "$MISSING_PKGS"
@@ -252,103 +236,50 @@ jobs:
                 -e GITHUB_REPOSITORY_OWNER \
                 -e GITHUB_REPOSITORY \
                 -v "${{ github.workspace }}:/overlay" \
-                -v "${HOST_BINPKGS}:/var/cache/binpkgs" \
-                -v "${HOST_DISTFILES}:/var/cache/distfiles" \
-                -v "${HOST_CCACHE}:/var/cache/ccache" \
+                -v "${{ github.workspace }}/binpkgs:/var/cache/binpkgs" \
+                -v "${{ github.workspace }}/distfiles:/var/cache/distfiles" \
+                -v "${{ github.workspace }}/ccache:/var/cache/ccache" \
                 gentoo/stage3:amd64-desktop-openrc \
                 bash /overlay/build_script.sh "$pkg"
             done
           else
-            echo ">>> All packages already exist in Releases — nothing to build"
+            echo ">>> All packages already exist locally/in Releases — nothing to build"
           fi
 
-      - name: Copy Built Binaries to job_out
-        run: |
-          echo ">>> Copying binaries to job_out/"
-          find "${{ github.workspace }}/binpkgs" -name "*.gpkg.tar" -type f -exec cp {} job_out/ \; || true
-          ls -lah job_out/ || echo "(empty)"
-
+      # ✅ FIX: Unified index is generated directly in the workspace `binpkgs` folder.
       - name: Generate Unified Portage Index
         run: |
-          if [ -z "$(find job_out -name '*.gpkg.tar' 2>/dev/null)" ]; then
-            echo "⚠️ No new binaries to index. Skipping."
+          if [ -z "$(find ${{ github.workspace }}/binpkgs -name '*.gpkg.tar' 2>/dev/null)" ]; then
+            echo "⚠️ No binaries found to index. Skipping."
             exit 0
           fi
           docker run --rm \
-            -v "${{ github.workspace }}/job_out:/var/cache/binpkgs" \
+            -v "${{ github.workspace }}/binpkgs:/var/cache/binpkgs" \
             -e PKGDIR="/var/cache/binpkgs" \
             gentoo/stage3:amd64-desktop-openrc \
             bash -c "mkdir -p /var/db/repos/gentoo/metadata && echo 'masters = gentoo' > /var/db/repos/gentoo/metadata/layout.conf && emaint binhost --fix"
-          [ -f "${{ github.workspace }}/job_out/Packages" ] && mv "${{ github.workspace }}/job_out/Packages" "${{ github.workspace }}/job_out/Packages.new" || true
 
-      - name: Deploy to GitHub Releases & Pages
+      # ✅ FIX: Clean Release-Only deploy. No python, no gh-pages!
+      - name: Deploy to GitHub Releases
         env:
           GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
           REPO: ${{ github.repository }}
-          PAGES_PY_SCRIPT: |
-            import os, re
-            from pathlib import Path
-            repo = os.environ.get("GITHUB_REPOSITORY", "")
-            base_url = f"https://github.com/{repo}/releases/download/rolling/"
-            job_out = Path("job_out")
-            pages_repo = Path("pages_repo")
-            existing = {}
-            packages_file = pages_repo / "Packages"
-            if packages_file.exists():
-                with open(packages_file, "r", encoding="utf-8", errors="ignore") as f:
-                    blocks = re.split(r'\n\s*\n', f.read().strip())
-                    for block in blocks:
-                        if not block.strip(): continue
-                        cpv_match = re.search(r'^CPV:\s*(.+)$', block, re.MULTILINE)
-                        if cpv_match:
-                            existing[cpv_match.group(1).strip()] = block
-            new_blocks = {}
-            for gpkg in job_out.glob("*.gpkg.tar"):
-                fname = gpkg.name
-                parts = fname.replace(".gpkg.tar", "").split("-")
-                if len(parts) >= 3:
-                    # Array indices restored to prevent Python string crashes
-                    category = parts
-                    pn = parts[1]
-                    ver_rev = "-".join(parts[2:])
-                    cpv = f"{category}/{pn}-{ver_rev}"
-                    block = f"CPV: {cpv}\nPATH: {fname}\nURI: {base_url}{fname}\n"
-                    new_blocks[cpv] = block
-                    existing[cpv] = block
-            with open(pages_repo / "Packages", "w", encoding="utf-8") as f:
-                f.write(f"# Created by emaint binhost\n# Base URI: {base_url}\n\n")
-                for cpv in sorted(existing.keys()):
-                    f.write(existing[cpv].strip() + "\n\n")
         run: |
-          if [ -z "$(find job_out -name '*.gpkg.tar' 2>/dev/null)" ]; then 
+          if [ -z "$(find ${{ github.workspace }}/binpkgs -name '*.gpkg.tar' 2>/dev/null)" ]; then 
             echo "⚠️ No binaries to deploy."
             exit 0
           fi
-          echo ">>> Uploading binaries to rolling Release..."
+          
+          echo ">>> Setting up Rolling Release..."
           gh release view rolling -R "$REPO" 2>/dev/null || \
             gh release create rolling -R "$REPO" \
               --title "Nexus Rolling Binaries" \
               --notes "Automated Gentoo Binhost - Updated $(date -u +%Y-%m-%dT%H:%M:%SZ)" \
               --prerelease
           
-          find job_out -name '*.gpkg.tar' -exec gh release upload rolling -R "$REPO" {} --clobber \;
-          
-          echo ">>> Updating Packages index on gh-pages..."
-          git config --global user.name "github-actions[bot]"
-          git config --global user.email "bot@github.com"
-          git clone --branch gh-pages \
-            https://x-access-token:${GITHUB_TOKEN}@github.com/${REPO}.git \
-            pages_repo 2>/dev/null || \
-            (mkdir pages_repo && cd pages_repo && git init && git checkout -b gh-pages)
-          
-          echo "$PAGES_PY_SCRIPT" > update_pages.py
-          python3 update_pages.py
-          
-          cd pages_repo
-          touch .nojekyll
-          git add Packages .nojekyll
-          git commit -m "Update Binhost Index [skip ci] $(date -u +%Y-%m-%dT%H:%M:%SZ)" || true
-          git push https://x-access-token:${GITHUB_TOKEN}@github.com/${REPO}.git gh-pages
+          echo ">>> Uploading Binaries and Index to Release..."
+          # Find all .gpkg.tar files AND the Packages file and upload them
+          find ${{ github.workspace }}/binpkgs -type f \( -name "*.gpkg.tar" -o -name "Packages" \) -exec gh release upload rolling -R "$REPO" {} --clobber \;
 
       - name: Fix Workspace Permissions for Cache
         if: always()
