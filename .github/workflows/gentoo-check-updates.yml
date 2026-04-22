@@ -190,6 +190,7 @@ jobs:
             fi
           fi
 
+      # ✅ FIX: Using the Host Runner to clone the overlay completely avoids Docker/GPG Git traps!
       - name: Fetch Overlays on Runner
         run: |
           git clone --depth 1 https://github.com/anyc/steam-overlay.git steam-overlay 2>/dev/null || true
@@ -202,17 +203,9 @@ jobs:
           
           mkdir -p /etc/portage/repos.conf /etc/portage/binrepos.conf /var/db/repos/{gentoo,steam-overlay} /etc/portage/package.{accept_keywords,use}
           
-          cat > /etc/portage/binrepos.conf/gentoo.conf << 'BINREPO'
-          [gentoo]
-          priority = 1
-          sync-uri = https://distfiles.gentoo.org/releases/amd64/binpackages/23.0/x86-64/
-          BINREPO
-          
           cat > /etc/portage/make.conf << 'MAKECONF'
           ACCEPT_KEYWORDS="~amd64"
           ACCEPT_LICENSE="*"
-          # ✅ FIX: Normal privileges restored for proper resolution
-          FEATURES="-sandbox -usersandbox -ipc-sandbox -network-sandbox -pid-sandbox"
           MAKECONF
           
           cat > /etc/portage/package.use/global << 'USECONF'
@@ -226,14 +219,6 @@ jobs:
           
           echo ">>> Syncing base Gentoo tree..."
           emerge-webrsync -q || true
-          
-          # ✅ FIX: Let root get the keys, then hand to portage
-          getuto || true
-          chown -R portage:portage /etc/portage/gnupg
-          chmod 0700 /etc/portage/gnupg
-          
-          echo ">>> Installing Git to fetch overlays..."
-          emerge --oneshot --quiet --getbinpkg --usepkg dev-vcs/git
           
           mkdir -p /overlay/metadata
           echo "masters = gentoo" > /overlay/metadata/layout.conf
@@ -280,6 +265,7 @@ jobs:
           done
           EOF
           chmod +x resolve_state.sh
+          # ✅ Mounted directly into Docker
           docker run --rm -v "${{ github.workspace }}:/overlay" -v "${{ github.workspace }}/steam-overlay:/var/db/repos/steam-overlay" gentoo/stage3:amd64-desktop-openrc /bin/bash /overlay/resolve_state.sh
 
       - name: Phase 4 - Binhost Audit
