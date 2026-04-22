@@ -13,7 +13,6 @@ HOMEPAGE="https://github.com/niri-wm/niri"
 EGIT_REPO_URI="https://github.com/niri-wm/niri.git"
 
 LICENSE="GPL-3+"
-# Dependent crate licenses
 LICENSE+="
 	Apache-2.0 Apache-2.0-with-LLVM-exceptions BSD-2 BSD ISC MIT MPL-2.0
 	Unicode-3.0 ZLIB
@@ -25,7 +24,9 @@ REQUIRED_USE="
 	systemd? ( dbus )
 "
 
-# Git dependencies via GIT_CRATES – commit hashes match upstream Cargo.lock
+RESTRICT="network-sandbox"
+
+# Git dependencies – must match Cargo.lock
 declare -A GIT_CRATES=(
 	[smithay]="https://github.com/Smithay/smithay.git;27af99ef492ab4d7dc5cd2e625374d2beb2772f7"
 	[smithay-drm-extras]="https://github.com/Smithay/smithay.git;27af99ef492ab4d7dc5cd2e625374d2beb2772f7"
@@ -56,8 +57,6 @@ BDEPEND="
 
 QA_FLAGS_IGNORED="usr/bin/niri"
 
-EGIT_COMMIT="e472b5b0f13d"
-
 pkg_setup() {
 	llvm-r2_pkg_setup
 	rust_pkg_setup
@@ -69,13 +68,12 @@ src_unpack() {
 }
 
 src_prepare() {
-	# niri-session doesn't work on OpenRC
+	default
 	if ! use systemd; then
 		local cmd="niri --session"
 		use dbus && cmd="dbus-run-session $cmd"
 		sed -i "s/niri-session/$cmd/" resources/niri.desktop || die
 	fi
-	default
 }
 
 src_configure() {
@@ -89,7 +87,6 @@ src_configure() {
 
 src_compile() {
 	cargo_src_compile
-
 	"$(cargo_target_dir)"/niri completions bash > niri  || die
 	"$(cargo_target_dir)"/niri completions fish > niri.fish || die
 	"$(cargo_target_dir)"/niri completions zsh > _niri || die
@@ -97,18 +94,14 @@ src_compile() {
 
 src_install() {
 	cargo_src_install
-
 	dobin resources/niri-session
 	if use systemd; then
 		systemd_douserunit resources/niri{.service,-shutdown.target}
 	fi
-
 	insinto /usr/share/wayland-sessions
 	doins resources/niri.desktop
-
 	insinto /usr/share/xdg-desktop-portal
 	doins resources/niri-portals.conf
-
 	dobashcomp niri
 	dofishcomp niri.fish
 	dozshcomp _niri
@@ -118,7 +111,6 @@ src_test() {
 	local -x XDG_RUNTIME_DIR="${T}/xdg"
 	mkdir "${XDG_RUNTIME_DIR}" || die
 	chmod 0700 "${XDG_RUNTIME_DIR}" || die
-
 	local -x RAYON_NUM_THREADS=2
 	local skip=(
 		--skip=::egl
