@@ -197,14 +197,13 @@ jobs:
           set -euo pipefail
           
           mkdir -p /etc/portage/repos.conf /var/db/repos/{gentoo,steam-overlay} /etc/portage/package.{accept_keywords,use}
+          mkdir -p /etc/portage/gnupg
+          chmod 0700 /etc/portage/gnupg
           
-          # ✅ FIX: Added GPG Bypass & Userfetch Drop here too!
           cat > /etc/portage/make.conf << 'MAKECONF'
           ACCEPT_KEYWORDS="~amd64"
           ACCEPT_LICENSE="*"
-          USE="wayland X vulkan pipewire dbus udev opengl dri gbm vaapi vdpau ffmpeg minizip -daemon -aqua -cups -gpm"
-          FEATURES="-sandbox -usersandbox -ipc-sandbox -network-sandbox -pid-sandbox -userfetch -userpriv"
-          PORTAGE_BINPKG_SIGVERIFY="0"
+          FEATURES="-sandbox -usersandbox -ipc-sandbox -network-sandbox -pid-sandbox -userfetch -userpriv -strict -binpkg-request-signature"
           MAKECONF
           
           cat > /etc/portage/package.use/global << 'USECONF'
@@ -218,9 +217,9 @@ jobs:
           
           echo ">>> Syncing base Gentoo tree..."
           emerge-webrsync -q || true
+          getuto || true
           
           echo ">>> Installing Git to fetch overlays..."
-          # ✅ FIX: Ensures Git is downloaded as a binary in 3 seconds
           emerge --oneshot --quiet --getbinpkg --usepkg dev-vcs/git
           
           echo ">>> Fetching Steam Overlay..."
