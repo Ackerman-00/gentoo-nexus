@@ -6,6 +6,12 @@ EAPI=8
 LLVM_COMPAT=( {18..22} )
 RUST_MIN_VER="1.95.0"
 
+# GIT_CRATES MUST be defined BEFORE inheriting cargo
+declare -A GIT_CRATES=(
+	[smithay]="https://github.com/Smithay/smithay.git;27af99ef492ab4d7dc5cd2e625374d2beb2772f7"
+	[smithay-drm-extras]="https://github.com/Smithay/smithay.git;27af99ef492ab4d7dc5cd2e625374d2beb2772f7"
+)
+
 inherit cargo git-r3 llvm-r2 optfeature shell-completion xdg
 
 DESCRIPTION="Scrollable-tiling Wayland compositor"
@@ -25,12 +31,6 @@ REQUIRED_USE="
 "
 
 RESTRICT="network-sandbox"
-
-# Git dependencies – must match Cargo.lock
-declare -A GIT_CRATES=(
-	[smithay]="https://github.com/Smithay/smithay.git;27af99ef492ab4d7dc5cd2e625374d2beb2772f7"
-	[smithay-drm-extras]="https://github.com/Smithay/smithay.git;27af99ef492ab4d7dc5cd2e625374d2beb2772f7"
-)
 
 DEPEND="
 	dev-libs/glib:2
@@ -69,6 +69,14 @@ src_unpack() {
 
 src_prepare() {
 	default
+	# Ensure git dependencies are properly configured for offline build
+	mkdir -p "${CARGO_HOME}" || die
+	cat > "${CARGO_HOME}/config.toml" <<-EOF || die
+	[net]
+	offline = true
+	git-fetch-with-cli = true
+	EOF
+
 	if ! use systemd; then
 		local cmd="niri --session"
 		use dbus && cmd="dbus-run-session $cmd"
