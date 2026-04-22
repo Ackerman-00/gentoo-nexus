@@ -1,23 +1,20 @@
 name: Gentoo Build Relay
-
 on:
   workflow_dispatch:
     inputs:
       package_list:
-        description: 'Space-separated list of package atoms to build (e.g., "gui-wm/niri media-libs/mesa")'
+        description: 'Space-separated atoms: "gui-wm/niri media-libs/mesa"'
         required: true
-
 concurrency:
   group: gentoo-build-${{ github.run_id }}
   cancel-in-progress: false
-
 permissions:
   contents: write
   actions: write
 
 jobs:
   build:
-    name: Build and Deploy
+    name: Build & Deploy to Releases Binhost
     runs-on: ubuntu-latest
     timeout-minutes: 360
     steps:
@@ -27,14 +24,24 @@ jobs:
           token: ${{ secrets.GITHUB_TOKEN }}
           fetch-depth: 0
 
-      - name: Set up Binhost Cache
+      # ✅ FIX: Cache ONLY ccache/distfiles - NOT binpkgs (Releases is source of truth)
+      - name: Prepare Persistent Directories
+        run: |
+          mkdir -p "${{ github.workspace }}/ccache"
+          mkdir -p "${{ github.workspace }}/distfiles"
+          mkdir -p "${{ github.workspace }}/binpkgs"
+          mkdir -p job_out
+
+      - name: Cache ccache & distfiles (speed only)
         uses: actions/cache@v4
         with:
-          path: /tmp/binpkgs
-          key: gentoo-binpkgs-${{ hashFiles('**/*.ebuild') }}
-          restore-keys: gentoo-binpkgs-
+          path: |
+            ${{ github.workspace }}/ccache
+            ${{ github.workspace }}/distfiles
+          key: gentoo-cache-${{ hashFiles('**/*.ebuild', 'metadata/**') }}
+          restore-keys: gentoo-cache-
 
-      - name: Get week stamp for Docker cache key
+      - name: Get week stamp for Docker image cache
         id: week
         run: echo "stamp=$(date +%Y-W%V)" >> "$GITHUB_OUTPUT"
 
@@ -42,279 +49,351 @@ jobs:
         id: docker-cache
         uses: actions/cache@v4
         with:
-          path: /tmp/docker-images/gentoo-stage3.tar
+          path: ${{ github.workspace }}/.docker-cache/gentoo-stage3.tar
           key: docker-gentoo-stage3-${{ steps.week.outputs.stamp }}
           restore-keys: docker-gentoo-stage3-
 
       - name: Pull or restore gentoo/stage3 image
         run: |
-          mkdir -p /tmp/docker-images
-
-          if [ -f /tmp/docker-images/gentoo-stage3.tar ]; then
-            echo ">>> Loading gentoo/stage3 from cache..."
-            docker load -i /tmp/docker-images/gentoo-stage3.tar
-            echo ">>> Image loaded from cache, skipping Docker Hub pull."
+          mkdir -p "${{ github.workspace }}/.docker-cache"
+          IMAGE_CACHE="${{ github.workspace }}/.docker-cache/gentoo-stage3.tar"
+          if [ -f "$IMAGE_CACHE" ]; then
+            docker load -i "$IMAGE_CACHE"
           else
-            echo ">>> Cache miss — pulling gentoo/stage3 from Docker Hub with retry..."
-            pulled=false
-            for attempt in 1 2 3 4 5; do
-              if docker pull gentoo/stage3:amd64-desktop-openrc; then
-                pulled=true
-                break
-              fi
-              wait_sec=$((attempt * 15))
-              echo ">>> Pull attempt $attempt failed. Retrying in ${wait_sec}s..."
-              sleep "$wait_sec"
-            done
-
-            if [ "$pulled" = false ]; then
-              echo "ERROR: Failed to pull gentoo/stage3 after 5 attempts."
-              exit 1
-            fi
-
-            echo ">>> Saving image to cache for future runs..."
-            docker save gentoo/stage3:amd64-desktop-openrc \
-              -o /tmp/docker-images/gentoo-stage3.tar
+            docker pull gentoo/stage3:amd64-desktop-openrc
+            docker save gentoo/stage3:amd64-desktop-openrc -o "$IMAGE_CACHE"
           fi
+
+      # ✅ NEW: Query GitHub Releases for existing binaries BEFORE building
+      - name: Check Releases for existing binaries
+        id: check-releases
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+          TARGET_PKG: ${{ github.event.inputs.package_list }}
+          REPO: ${{ github.repository }}
+        run: |
+          read -r -a PKGS <<< "$TARGET_PKG"
+          EXISTING=()
+          MISSING=()
+          
+          for pkg in "${PKGS[@]}"; do
+            # Extract category and package name: gui-wm/niri → gui-wm niri
+            CATEGORY="${pkg%%/*}"
+            PN="${pkg#*/}"
+            
+            # Query Releases API for assets matching this package
+            # Format: CATEGORY-PN-VERSION-REVISION.gpkg.tar
+            ASSETS=$(gh api "/repos/$REPO/releases/tags/$CATEGORY-$PN" --jq '.assets[].name' 2>/dev/null || echo "")
+            
+            if echo "$ASSETS" | grep -q "\.gpkg\.tar$"; then
+              echo "✓ Found existing binary for $pkg in Releases"
+              EXISTING+=("$pkg")
+            else
+              echo "✗ No binary for $pkg - will build"
+              MISSING+=("$pkg")
+            fi
+          done
+          
+          # Output for next steps
+          echo "existing_pkgs=${EXISTING[*]}" >> "$GITHUB_OUTPUT"
+          echo "missing_pkgs=${MISSING[*]}" >> "$GITHUB_OUTPUT"
+          echo "total_pkgs=${#PKGS[@]}" >> "$GITHUB_OUTPUT"
 
       - name: Prepare Portage DNA Script
         run: |
           cat > portage_dna.sh << 'DNA_EOF'
-          #!/bin/bash
-          set -euo pipefail
+#!/bin/bash
+set -euo pipefail
 
-          OWNER="${GITHUB_REPOSITORY_OWNER:-}"
-          REPO="${GITHUB_REPOSITORY:-}"
-          REPO_NAME="${REPO#*/}"
+OWNER="${GITHUB_REPOSITORY_OWNER:-}"
+REPO="${GITHUB_REPOSITORY:-}"
+REPO_NAME="${REPO#*/}"
 
-          echo ">>> Injecting Nexus Portage DNA..."
-          mkdir -p /var/db/repos/{gentoo,steam-overlay}
-          mkdir -p /etc/portage/{repos.conf,binrepos.conf,env,package.{accept_keywords,license,use,env}}
-          mkdir -p /overlay/job_out
+echo ">>> Injecting Nexus Portage DNA..."
+mkdir -p /var/db/repos/{gentoo,steam-overlay}
+mkdir -p /etc/portage/{repos.conf,binrepos.conf,env,package.{accept_keywords,license,use,env}}
 
-          cat > /etc/portage/binrepos.conf/gentoo.conf << 'EOF'
-          [gentoo]
-          priority = 1
-          sync-uri = https://distfiles.gentoo.org/releases/amd64/binpackages/23.0/x86-64/
-          verify-signature = false
-          EOF
+# ✅ FIX: Configure Releases URL as HIGH-PRIORITY binhost for dependencies
+cat > /etc/portage/binrepos.conf/nexus-releases.conf << EOF
+[gentoo-nexus-releases]
+priority = 99999
+sync-uri = https://github.com/${OWNER}/${REPO_NAME}/releases/download/rolling/
+verify-signature = false
+EOF
 
-          if [[ -n "$OWNER" && -n "$REPO_NAME" ]]; then
-            cat > /etc/portage/binrepos.conf/nexus.conf << EOF
-          [gentoo-nexus]
-          priority = 99999
-          sync-uri = https://${OWNER}.github.io/${REPO_NAME}/
-          verify-signature = false
-          EOF
-          fi
+# Official Gentoo binhost as fallback
+cat > /etc/portage/binrepos.conf/gentoo.conf << 'EOF'
+[gentoo]
+priority = 1
+sync-uri = https://distfiles.gentoo.org/releases/amd64/binpackages/23.0/x86-64/
+verify-signature = false
+EOF
 
-          cat > /etc/portage/make.conf << 'EOF'
-          COMMON_FLAGS="-O2 -march=x86-64-v3 -pipe"
-          CFLAGS="${COMMON_FLAGS}"
-          CXXFLAGS="${COMMON_FLAGS}"
-          RUSTFLAGS="-C target-cpu=x86-64-v3 -C opt-level=2"
-          USE="wayland X vulkan pipewire dbus udev opengl dri gbm vaapi vdpau ffmpeg minizip -daemon -aqua -cups -gpm"
-          VIDEO_CARDS="amdgpu radeon radeonsi intel iris nouveau virgl"
-          FEATURES="-sandbox -usersandbox -ipc-sandbox -network-sandbox -pid-sandbox buildpkg parallel-install getbinpkg -binpkg-request-signature ccache -strict"
-          CCACHE_DIR="/var/cache/ccache"
-          CCACHE_UMASK="002"
-          DISTDIR="/var/cache/distfiles"
-          PKGDIR="/tmp/binpkgs"
-          ACCEPT_LICENSE="*"
-          ACCEPT_KEYWORDS="~amd64"
-          EOF
+# ✅ FIX: Explicit BINPKG_FORMAT + workspace PKGDIR
+cat > /etc/portage/make.conf << 'EOF'
+COMMON_FLAGS="-O2 -march=x86-64-v3 -pipe"
+CFLAGS="${COMMON_FLAGS}"
+CXXFLAGS="${COMMON_FLAGS}"
+RUSTFLAGS="-C target-cpu=x86-64-v3 -C opt-level=2"
+USE="wayland X vulkan pipewire dbus udev opengl dri gbm vaapi vdpau ffmpeg minizip -daemon -aqua -cups -gpm"
+VIDEO_CARDS="amdgpu radeon radeonsi intel iris nouveau virgl"
+FEATURES="buildpkg parallel-install getbinpkg ccache -sandbox -usersandbox -ipc-sandbox -network-sandbox -pid-sandbox -strict -binpkg-request-signature"
+BINPKG_FORMAT="gpkg"
+PKGDIR="/var/cache/binpkgs"
+CCACHE_DIR="/var/cache/ccache"
+CCACHE_UMASK="002"
+DISTDIR="/var/cache/distfiles"
+ACCEPT_LICENSE="*"
+ACCEPT_KEYWORDS="~amd64"
+EOF
 
-          # CRITICAL FIX: Portage does NOT understand $(nproc). Expand it NOW.
-          echo "EMERGE_DEFAULT_OPTS=\"--getbinpkg --usepkg --autounmask=y --autounmask-write --keep-going --quiet-build=y --jobs=$(nproc) --load-average=$(nproc)\"" >> /etc/portage/make.conf
-          echo "MAKEOPTS=\"-j$(nproc)\"" >> /etc/portage/make.conf
+# Expand $(nproc) at generation time (not inside heredoc)
+NPROC=$(nproc)
+echo "EMERGE_DEFAULT_OPTS=\"--getbinpkg --usepkg --autounmask=y --autounmask-write --keep-going --quiet-build=y --jobs=${NPROC} --load-average=${NPROC}\"" >> /etc/portage/make.conf
+echo "MAKEOPTS=\"-j${NPROC}\"" >> /etc/portage/make.conf
 
-          emerge-webrsync -q || true
-          getuto || true
-          eselect profile set default/linux/amd64/23.0/desktop
+emerge-webrsync -q || true
+getuto || true
+eselect profile set default/linux/amd64/23.0/desktop
 
-          emerge --noreplace --quiet dev-vcs/git dev-util/ccache
-          chown -R portage:portage /var/cache/ccache
-          chmod -R 2777 /var/cache/ccache
+emerge --noreplace --quiet dev-vcs/git dev-util/ccache
+chown -R portage:portage /var/cache/ccache
+chmod -R 2777 /var/cache/ccache
 
-          git clone --depth 1 https://github.com/anyc/steam-overlay.git /var/db/repos/steam-overlay 2>/dev/null || true
-          mkdir -p /var/db/repos/steam-overlay/metadata
-          echo -e "[repo]\nrepo-name = steam-overlay\nmasters = gentoo" > /var/db/repos/steam-overlay/metadata/layout.conf
+# Steam overlay
+git clone --depth 1 https://github.com/anyc/steam-overlay.git /var/db/repos/steam-overlay 2>/dev/null || true
+mkdir -p /var/db/repos/steam-overlay/metadata
+echo -e "[repo]\nrepo-name = steam-overlay\nmasters = gentoo" > /var/db/repos/steam-overlay/metadata/layout.conf
 
-          cat > /etc/portage/repos.conf/steam-overlay.conf << 'EOF'
-          [steam-overlay]
-          location = /var/db/repos/steam-overlay
-          masters = gentoo
-          priority = 50
-          EOF
+cat > /etc/portage/repos.conf/steam-overlay.conf << 'EOF'
+[steam-overlay]
+location = /var/db/repos/steam-overlay
+masters = gentoo
+priority = 50
+EOF
 
-          cat > /etc/portage/repos.conf/gentoo-nexus.conf << 'EOF'
-          [gentoo-nexus]
-          location = /overlay
-          masters = gentoo
-          priority = 9999
-          EOF
+cat > /etc/portage/repos.conf/gentoo-nexus.conf << 'EOF'
+[gentoo-nexus]
+location = /overlay
+masters = gentoo
+priority = 9999
+EOF
 
-          echo "*/*::steam-overlay **" >> /etc/portage/package.accept_keywords/steam
-          echo "*/*::gentoo-nexus **" >> /etc/portage/package.accept_keywords/nexus
-          cat >> /etc/portage/package.accept_keywords/nexus << 'EOF'
-          media-libs/mesa ~amd64
-          media-libs/vulkan-loader ~amd64
-          dev-util/mesa_clc ~amd64
-          dev-util/spirv-tools ~amd64
-          dev-util/spirv-headers ~amd64
-          dev-util/vulkan-headers ~amd64
-          dev-util/glslang ~amd64
-          dev-util/vulkan-utility-libraries ~amd64
-          sys-kernel/gentoo-kernel ~amd64
-          sys-kernel/linux-firmware ~amd64
-          virtual/dist-kernel ~amd64
-          EOF
+# Accept keywords
+echo "*/*::steam-overlay **" > /etc/portage/package.accept_keywords/steam
+echo "*/*::gentoo-nexus **" > /etc/portage/package.accept_keywords/nexus
+cat >> /etc/portage/package.accept_keywords/nexus << 'EOF'
+media-libs/mesa ~amd64
+media-libs/vulkan-loader ~amd64
+dev-util/mesa_clc ~amd64
+dev-util/spirv-tools ~amd64
+dev-util/spirv-headers ~amd64
+dev-util/vulkan-headers ~amd64
+dev-util/glslang ~amd64
+dev-util/vulkan-utility-libraries ~amd64
+sys-kernel/gentoo-kernel ~amd64
+sys-kernel/linux-firmware ~amd64
+virtual/dist-kernel ~amd64
+EOF
 
-          cat > /etc/portage/package.use/global << 'EOF'
-          sys-libs/zlib minizip
-          media-video/pipewire extra
-          media-video/ffmpeg -sdl
-          sys-libs/ncurses -gpm
-          dev-libs/openssl -bindist
-          games-util/steam-launcher steamruntime
-          EOF
+# USE flags
+cat > /etc/portage/package.use/global << 'EOF'
+sys-libs/zlib minizip
+media-video/pipewire extra
+media-video/ffmpeg -sdl
+sys-libs/ncurses -gpm
+dev-libs/openssl -bindist
+games-util/steam-launcher steamruntime
+EOF
 
-          cat > /etc/portage/env/no-lto << 'EOF'
-          CFLAGS="-O1 -pipe -fno-lto -fno-tree-loop-vectorize -fno-tree-slp-vectorize"
-          CXXFLAGS="-O1 -pipe -fno-lto -fno-tree-loop-vectorize -fno-tree-slp-vectorize"
-          EOF
-          echo "MAKEOPTS=\"-j$(nproc)\"" >> /etc/portage/env/no-lto
+# No-LTO env for problematic packages
+cat > /etc/portage/env/no-lto << 'EOF'
+CFLAGS="-O1 -pipe -fno-lto -fno-tree-loop-vectorize -fno-tree-slp-vectorize"
+CXXFLAGS="-O1 -pipe -fno-lto -fno-tree-loop-vectorize -fno-tree-slp-vectorize"
+EOF
+echo "MAKEOPTS=\"-j$(nproc)\"" >> /etc/portage/env/no-lto
 
-          cat > /etc/portage/package.env/no-lto-packages << 'EOF'
-          dev-util/spirv-tools no-lto
-          media-libs/mesa no-lto
-          gui-libs/gtk no-lto
-          dev-qt/qtbase no-lto
-          dev-qt/qtwayland no-lto
-          EOF
-          DNA_EOF
+cat > /etc/portage/package.env/no-lto-packages << 'EOF'
+dev-util/spirv-tools no-lto
+media-libs/mesa no-lto
+gui-libs/gtk no-lto
+dev-qt/qtbase no-lto
+dev-qt/qtwayland no-lto
+EOF
+DNA_EOF
           chmod +x portage_dna.sh
 
-      - name: Build Packages (Relay Race)
+      - name: Build Missing Packages (Relay Race)
         env:
           GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
           TARGET_PKG: ${{ github.event.inputs.package_list }}
+          EXISTING_PKGS: ${{ steps.check-releases.outputs.existing_pkgs }}
+          MISSING_PKGS: ${{ steps.check-releases.outputs.missing_pkgs }}
           GITHUB_REPOSITORY_OWNER: ${{ github.repository_owner }}
           GITHUB_REPOSITORY: ${{ github.repository }}
+          HOST_BINPKGS: ${{ github.workspace }}/binpkgs
+          HOST_DISTFILES: ${{ github.workspace }}/distfiles
+          HOST_CCACHE: ${{ github.workspace }}/ccache
         run: |
-          read -r -a PKGS <<< "$TARGET_PKG"
-          for pkg in "${PKGS[@]}"; do
-            echo ">>> Building: $pkg"
+          # Existing packages: just ensure they're in binpkgs dir for dependency resolution
+          if [ -n "$EXISTING_PKGS" ]; then
+            echo ">>> Fetching existing binaries from Releases for dependency resolution..."
+            read -r -a EXISTING <<< "$EXISTING_PKGS"
+            for pkg in "${EXISTING[@]}"; do
+              CATEGORY="${pkg%%/*}"
+              PN="${pkg#*/}"
+              # Download latest .gpkg.tar for this package from rolling release
+              gh release download rolling -R "${GITHUB_REPOSITORY}" -p "${CATEGORY}-${PN}-*.gpkg.tar" -D "${HOST_BINPKGS}" --clobber 2>/dev/null || true
+            done
+          fi
+          
+          # Missing packages: BUILD them
+          if [ -n "$MISSING_PKGS" ]; then
+            echo ">>> Building missing packages: $MISSING_PKGS"
+            read -r -a MISSING <<< "$MISSING_PKGS"
+            
+            for pkg in "${MISSING[@]}"; do
+              echo ">>> Building: $pkg"
+              
+              cat > build_script.sh << BUILDEOF
+#!/bin/bash
+set -euo pipefail
+source /overlay/portage_dna.sh
 
-            cat > build_script.sh << 'BUILDEOF'
-          #!/bin/bash
-          set -euo pipefail
-          source /overlay/portage_dna.sh
+emaint binhost --fix 2>/dev/null || true
+# ✅ FIX: --buildpkgonly ensures binary is created even if already installed
+emerge --getbinpkg --usepkg --buildpkgonly "\$1"
+BUILDEOF
+              chmod +x build_script.sh
 
-          emaint binhost --fix 2>/dev/null || true
-          emerge --getbinpkg --usepkg --buildpkg "$1"
-          BUILDEOF
-            chmod +x build_script.sh
+              # ✅ FIX: Mount workspace paths, use /var/cache/binpkgs inside (matches PKGDIR)
+              docker run --rm --privileged \
+                -e GITHUB_REPOSITORY_OWNER \
+                -e GITHUB_REPOSITORY \
+                -v "${{ github.workspace }}:/overlay" \
+                -v "${HOST_BINPKGS}:/var/cache/binpkgs" \
+                -v "${HOST_DISTFILES}:/var/cache/distfiles" \
+                -v "${HOST_CCACHE}:/var/cache/ccache" \
+                gentoo/stage3:amd64-desktop-openrc \
+                bash /overlay/build_script.sh "$pkg"
+            done
+          else
+            echo ">>> All packages already exist in Releases - nothing to build"
+          fi
 
-            docker run --rm --privileged \
-              -e GITHUB_REPOSITORY_OWNER \
-              -e GITHUB_REPOSITORY \
-              -v "${{ github.workspace }}:/overlay" \
-              -v "/tmp/binpkgs:/tmp/binpkgs" \
-              -v "/tmp/distfiles:/var/cache/distfiles" \
-              -v "/tmp/ccache:/var/cache/ccache" \
-              gentoo/stage3:amd64-desktop-openrc bash /overlay/build_script.sh "$pkg"
-          done
+      - name: Copy Built Binaries to job_out
+        run: |
+          echo ">>> Copying binaries from ${{ github.workspace }}/binpkgs to job_out/"
+          find "${{ github.workspace }}/binpkgs" -name "*.gpkg.tar" -type f -exec cp {} job_out/ \; || true
+          echo ">>> Files in job_out/:"
+          ls -lah job_out/ || echo "(empty)"
 
       - name: Generate Unified Portage Index
         run: |
-          if [ -z "$(ls /tmp/binpkgs/*.gpkg.tar 2>/dev/null)" ]; then
-            echo "No binaries generated. Exiting."
+          if [ -z "$(find job_out -name '*.gpkg.tar' 2>/dev/null)" ]; then
+            echo "⚠️ No new binaries to index. Skipping."
             exit 0
           fi
+          # Generate Packages index using emaint
           docker run --rm \
-            -v "/tmp/binpkgs:/tmp/binpkgs" \
+            -v "${{ github.workspace }}/job_out:/var/cache/binpkgs" \
+            -e PKGDIR="/var/cache/binpkgs" \
             gentoo/stage3:amd64-desktop-openrc \
-            bash -c "PKGDIR='/tmp/binpkgs' emaint binhost --fix"
-          mkdir -p job_out
-          cp /tmp/binpkgs/*.gpkg.tar job_out/ 2>/dev/null || true
+            bash -c "emaint binhost --fix"
+          # Move generated Packages file
+          [ -f "${{ github.workspace }}/job_out/Packages" ] && mv "${{ github.workspace }}/job_out/Packages" "${{ github.workspace }}/job_out/Packages.new" || true
 
       - name: Deploy to GitHub Releases & Pages
         env:
           GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+          REPO: ${{ github.repository }}
         run: |
-          if [ -z "$(find job_out -name '*.gpkg.tar' 2>/dev/null)" ]; then exit 0; fi
+          if [ -z "$(find job_out -name '*.gpkg.tar' 2>/dev/null)" ]; then 
+            echo "⚠️ No binaries to deploy."
+            exit 0
+          fi
 
-          echo ">>> Uploading binaries to Releases..."
-          gh release view rolling || gh release create rolling \
-            --title "Nexus Rolling Binaries" \
-            --notes "Automated Gentoo Binhost"
-          find job_out -name '*.gpkg.tar' -exec gh release upload rolling {} --clobber \;
+          echo ">>> Uploading binaries to rolling Release..."
+          # Ensure rolling release exists
+          gh release view rolling -R "$REPO" 2>/dev/null || \
+            gh release create rolling -R "$REPO" \
+              --title "Nexus Rolling Binaries" \
+              --notes "Automated Gentoo Binhost - Updated $(date -u +%Y-%m-%dT%H:%M:%SZ)" \
+              --prerelease
+          
+          # ✅ FIX: Upload with --clobber to REPLACE old versions of same package
+          find job_out -name '*.gpkg.tar' -exec gh release upload rolling -R "$REPO" {} --clobber \;
 
-          echo ">>> Updating Packages index on Pages..."
+          echo ">>> Updating Packages index on gh-pages..."
           git config --global user.name "github-actions[bot]"
           git config --global user.email "bot@github.com"
 
+          # Clone/init gh-pages
           git clone --branch gh-pages \
-            https://x-access-token:${GITHUB_TOKEN}@github.com/${{ github.repository }}.git \
-            pages_repo || \
+            https://x-access-token:${GITHUB_TOKEN}@github.com/${REPO}.git \
+            pages_repo 2>/dev/null || \
             (mkdir pages_repo && cd pages_repo && git init && git checkout -b gh-pages)
 
-          python3 << 'EOF'
-          import os
-          base_url = f"https://github.com/{os.environ.get('GITHUB_REPOSITORY')}/releases/download/rolling/"
+          # ✅ FIX: Python script to merge Packages with correct Releases URIs
+          python3 << PYEOF
+import os, re, hashlib
+from pathlib import Path
 
-          headers = []
-          if os.path.exists('job_out/Packages'):
-              with open('job_out/Packages', 'r', encoding='utf-8') as f:
-                  for line in f:
-                      if line.strip() == '': break
-                      headers.append(line.rstrip())
+repo = os.environ.get("GITHUB_REPOSITORY", "")
+base_url = f"https://github.com/{repo}/releases/download/rolling/"
+job_out = Path("job_out")
+pages_repo = Path("pages_repo")
 
-          def get_blocks(path):
-              blocks = {}
-              if not os.path.exists(path): return blocks
-              with open(path, 'r', encoding='utf-8') as f:
-                  lines = f.readlines()
-                  start_idx = 0
-                  for i, line in enumerate(lines):
-                      if line.strip() == '':
-                          start_idx = i + 1
-                          break
-                  cpv, cur = None, []
-                  for line in lines[start_idx:]:
-                      if line.strip() == '':
-                          if cpv: blocks[cpv] = cur
-                          cpv, cur = None, []
-                      else:
-                          if line.startswith('CPV:'):
-                              cpv = line.split(':', 1)[1].strip()
-                          cur.append(line.rstrip())
-                  if cpv: blocks[cpv] = cur
-              return blocks
+# Read existing Packages from gh-pages
+existing = {}
+packages_file = pages_repo / "Packages"
+if packages_file.exists():
+    with open(packages_file, "r", encoding="utf-8", errors="ignore") as f:
+        content = f.read()
+        blocks = re.split(r'\n\s*\n', content.strip())
+        for block in blocks:
+            if not block.strip(): continue
+            cpv_match = re.search(r'^CPV:\s*(.+)$', block, re.MULTILINE)
+            if cpv_match:
+                cpv = cpv_match.group(1).strip()
+                existing[cpv] = block
 
-          new_b = get_blocks('job_out/Packages')
-          old_b = get_blocks('pages_repo/Packages')
+# Process new binaries from job_out
+new_blocks = {}
+for gpkg in job_out.glob("*.gpkg.tar"):
+    fname = gpkg.name
+    # Extract CPV from filename: category-pkgname-version-revision.gpkg.tar
+    # Simple heuristic: split by first two dashes after category
+    parts = fname.replace(".gpkg.tar", "").split("-")
+    if len(parts) >= 3:
+        category = parts[0]
+        pn = parts[1]
+        # Rest is version-revision
+        ver_rev = "-".join(parts[2:])
+        cpv = f"{category}/{pn}-{ver_rev}"
+        
+        # Read metadata from the .gpkg.tar (simplified: use filename as identifier)
+        block = f"""CPV: {cpv}
+PATH: {fname}
+URI: {base_url}{fname}
+"""
+        new_blocks[cpv] = block
+        # Also update existing if same CPV
+        existing[cpv] = block
 
-          for cpv, lines in new_b.items():
-              old_b[cpv] = lines
-
-          for cpv, lines in old_b.items():
-              rel_path = next((l.split(':', 1)[1].strip() for l in lines if l.startswith('PATH:')), None)
-              fname = os.path.basename(rel_path) if rel_path else \
-                      f"{(cpv.split('/')[-1] if '/' in cpv else cpv)}.gpkg.tar"
-              lines = [l for l in lines if not l.startswith('URI:')]
-              lines.append(f"URI: {base_url}{fname}")
-              old_b[cpv] = lines
-
-          with open('pages_repo/Packages', 'w', encoding='utf-8') as f:
-              f.write("\n".join(headers) + "\n\n")
-              for cpv in sorted(old_b.keys()):
-                  f.write("\n".join(old_b[cpv]) + "\n\n")
-          EOF
+# Write merged Packages
+with open(pages_repo / "Packages", "w", encoding="utf-8") as f:
+    # Write header
+    f.write("# Created by emaint binhost\n")
+    f.write(f"# Base URI: {base_url}\n\n")
+    # Write all blocks (new + existing, deduplicated)
+    all_blocks = {**existing, **new_blocks}
+    for cpv in sorted(all_blocks.keys()):
+        f.write(all_blocks[cpv].strip() + "\n\n")
+PYEOF
 
           cd pages_repo
           touch .nojekyll
           git add Packages .nojekyll
-          git commit -m "Update Binhost Index" || true
-          git push https://x-access-token:${GITHUB_TOKEN}@github.com/${{ github.repository }}.git gh-pages
+          git commit -m "Update Binhost Index [skip ci] $(date -u +%Y-%m-%dT%H:%M:%SZ)" || true
+          git push https://x-access-token:${GITHUB_TOKEN}@github.com/${REPO}.git gh-pages
