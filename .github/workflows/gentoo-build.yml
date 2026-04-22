@@ -184,32 +184,30 @@ jobs:
             EOF
         run: |
           echo "$PORTAGE_DNA" > portage_dna.sh
-          sed -i "s/^[[:space:]]*//" portage_dna.sh
           chmod +x portage_dna.sh
 
+      # ✅ FIX: Moved BUILD_SCRIPT back to GitHub env to avoid Bash Heredoc syntax crashes
       - name: Build Missing Packages (Relay Race)
         env:
           MISSING_PKGS: ${{ steps.check-releases.outputs.missing_pkgs }}
           FORCE_REBUILD: ${{ github.event.inputs.force_rebuild }}
+          BUILD_SCRIPT: |
+            #!/bin/bash
+            set -euo pipefail
+            source /overlay/portage_dna.sh
+            emaint binhost --fix 2>/dev/null || true
+            if [ "${FORCE_REBUILD}" == "true" ]; then
+              echo ">>> Force rebuild active for $1"
+              emerge --getbinpkg --usepkg --buildpkg --usepkg-exclude "$1" "$1"
+            else
+              emerge --getbinpkg --usepkg --buildpkg "$1"
+            fi
         run: |
           if [ -n "${MISSING_PKGS:-}" ]; then
             read -r -a MISSING <<< "$MISSING_PKGS"
             for pkg in "${MISSING[@]}"; do
               echo ">>> Building: $pkg"
-              # Script content is injected directly here for speed
-              cat > build_script.sh << 'EOF'
-              #!/bin/bash
-              set -euo pipefail
-              source /overlay/portage_dna.sh
-              emaint binhost --fix 2>/dev/null || true
-              if [ "${FORCE_REBUILD}" == "true" ]; then
-                echo ">>> Force rebuild active for $1"
-                emerge --getbinpkg --usepkg --buildpkg --usepkg-exclude "$1" "$1"
-              else
-                emerge --getbinpkg --usepkg --buildpkg "$1"
-              fi
-          EOF
-              sed -i "s/^[[:space:]]*//" build_script.sh
+              echo "$BUILD_SCRIPT" > build_script.sh
               chmod +x build_script.sh
               docker run --rm --privileged \
                 -e GITHUB_REPOSITORY_OWNER -e GITHUB_REPOSITORY -e FORCE_REBUILD \

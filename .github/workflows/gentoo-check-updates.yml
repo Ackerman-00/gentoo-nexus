@@ -53,12 +53,14 @@ jobs:
                   if r.status_code == 200:
                       tag = r.json().get("tag_name", "").lstrip("v")
                       if tag and re.match(r'^[0-9]', tag): return tag
+                  # Fallback to tags API if releases API is empty
                   r2 = requests.get(f"https://api.github.com/repos/{repo}/tags", headers=hdrs, timeout=15)
                   if r2.status_code == 200 and r2.json():
                       for tag in r2.json():
                           name = tag.get("name", "").lstrip("v")
                           if re.match(r'^[0-9]', name): return name
-              except: pass
+              except Exception as e:
+                  print(f"API Error for {repo}: {e}")
               return None
 
           def get_latest_commit(repo_url):
@@ -66,7 +68,7 @@ jobs:
                   out = subprocess.check_output(["git", "ls-remote", repo_url, "HEAD"], timeout=30, stderr=subprocess.DEVNULL).decode()
                   m = re.search(r"([a-f0-9]{40})", out)
                   if m: return m.group(1)[:12]
-              except: pass
+              except Exception: pass
               return None
 
           for ebuild_path in Path('.').rglob('*.ebuild'):
@@ -83,6 +85,8 @@ jobs:
               if not repo_m: continue
               repo = repo_m.group(1).rstrip('.')
 
+              print(f"--- Scanning {pkg_cat_name} ({repo}) ---")
+
               if is_live:
                   repo_url = f"https://github.com/{repo}.git"
                   new_commit = get_latest_commit(repo_url)
@@ -93,9 +97,14 @@ jobs:
                       if new_content != content:
                           ebuild_path.write_text(new_content, encoding="utf-8")
                           updated_atoms.add(pkg_cat_name)
+                          print(f"  [+] Bumped live commit to: {new_commit}")
+                      else:
+                          print("  [-] Commit hash already up to date.")
               else:
                   curr_ver_m = re.search(rf'{re.escape(pkg_name)}-(\d+(?:\.\d+)*(?:_(?:alpha|beta|pre|rc|p)\d*)?(?:-r\d+)?)\.ebuild$', ebuild_path.name)
-                  if not curr_ver_m: continue
+                  if not curr_ver_m: 
+                      print("  [!] Could not extract current version from filename.")
+                      continue
                   curr_ver = curr_ver_m.group(1)
 
                   latest_ver = get_latest_github_release(repo)
@@ -103,11 +112,18 @@ jobs:
                       if pkg_name == "mangowc" and latest_ver.startswith("12."): latest_ver = "0." + latest_ver
                       try: is_newer = parse_version(latest_ver) > parse_version(curr_ver)
                       except: is_newer = (latest_ver != curr_ver)
+                      
+                      print(f"  [*] Current: {curr_ver} | Upstream Latest: {latest_ver}")
 
                       if is_newer:
                           new_path = pkg_dir / f"{pkg_name}-{latest_ver}.ebuild"
                           ebuild_path.rename(new_path)
                           updated_atoms.add(pkg_cat_name)
+                          print(f"  [+] Renamed to: {new_path.name}")
+                      else:
+                          print("  [-] Already up to date.")
+                  else:
+                      print("  [!] Failed to find latest version on GitHub API.")
 
           changed_list = sorted(updated_atoms)
           if changed_list:
@@ -131,7 +147,6 @@ jobs:
 
       - name: Phase 3 - Resolve Latest State via Portage
         run: |
-          # 127 Fix: Ensure the shell script uses /bin/bash and handles tool initialization
           cat > resolve_state.sh << 'EOF'
           #!/bin/bash
           set -euo pipefail
@@ -139,16 +154,32 @@ jobs:
           mkdir -p /etc/portage/repos.conf /var/db/repos/{gentoo,steam-overlay} /etc/portage/package.accept_keywords
           echo 'ACCEPT_KEYWORDS="~amd64"' > /etc/portage/make.conf
           
-          # Initialize Portage tree
+          echo ">>> Syncing base Gentoo tree..."
           emerge-webrsync -q || true
           
-          # Setup Overlay metadata
+          echo ">>> Installing Git to fetch overlays..."
+          emerge --oneshot --quiet dev-vcs/git
+          
+          echo ">>> Fetching Steam Overlay..."
+          git clone --depth 1 https://github.com/anyc/steam-overlay.git /var/db/repos/steam-overlay 2>/dev/null
+          
           mkdir -p /overlay/metadata
           echo "masters = gentoo" > /overlay/metadata/layout.conf
-          echo "[gentoo-nexus]" > /etc/portage/repos.conf/gentoo-nexus.conf
-          echo "location = /overlay" >> /etc/portage/repos.conf/gentoo-nexus.conf
           
-          # Keyword upstream
+          cat > /etc/portage/repos.conf/gentoo-nexus.conf << 'REPOEOF'
+          [gentoo-nexus]
+          location = /overlay
+          masters = gentoo
+          priority = 9999
+          REPOEOF
+          
+          cat > /etc/portage/repos.conf/steam-overlay.conf << 'REPOEOF'
+          [steam-overlay]
+          location = /var/db/repos/steam-overlay
+          masters = gentoo
+          priority = 50
+          REPOEOF
+          
           cat > /etc/portage/package.accept_keywords/nexus << 'KEYW'
           media-libs/mesa ~amd64
           media-libs/vulkan-loader ~amd64
@@ -160,10 +191,13 @@ jobs:
           UPSTREAM_PKGS="media-libs/mesa media-libs/vulkan-loader sys-kernel/gentoo-kernel virtual/dist-kernel games-util/steam-launcher"
           
           > /overlay/desired_state.txt
+          echo ">>> Querying emerge for exact target versions..."
           for pkg in $LOCAL_PKGS $UPSTREAM_PKGS; do
-             # Use --best-visible to get the highest version available under ~amd64
              RES=$(emerge --best-visible "$pkg" 2>/dev/null | cut -d' ' -f3 || true)
-             if [ -n "$RES" ]; then echo "$RES" >> /overlay/desired_state.txt; fi
+             if [ -n "$RES" ]; then 
+               echo "$RES" >> /overlay/desired_state.txt
+               echo "Target resolved: $RES"
+             fi
           done
           EOF
           chmod +x resolve_state.sh
@@ -186,12 +220,14 @@ jobs:
              ATOM=$(echo "$CPV" | sed -E 's/-[0-9]+(\.[0-9]+)*(_[a-z0-9]+)?(-r[0-9]+)?$//')
              
              if echo "$CHANGED" | grep -q "^${ATOM}$"; then
-                echo "⚠️ $ATOM bumped. Force build: =$CPV"
+                echo "⚠️ $ATOM bumped via script. Forcing build: =$CPV"
                 echo "=$CPV" >> packages_to_build.txt
                 FORCE_REQUIRED="true"
              elif ! echo "$EXISTING_ASSETS" | grep -q "^${PN_PV}-.*\.gpkg\.tar$"; then
                 echo "✗ Missing binary: =$CPV"
                 echo "=$CPV" >> packages_to_build.txt
+             else
+                echo "✓ Binary already deployed: =$CPV"
              fi
           done < desired_state.txt
           
@@ -203,6 +239,7 @@ jobs:
         env:
           GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
         run: |
+          echo ">>> Queueing the following for compilation: ${{ steps.audit.outputs.build_list }}"
           gh workflow run "Gentoo Build Relay" \
             --ref "${GITHUB_REF_NAME}" \
             -f package_list="${{ steps.audit.outputs.build_list }}" \
