@@ -170,10 +170,10 @@ jobs:
           virtual/dist-kernel ~amd64
           KEYW
           
-          # 1. Gather all local custom packages
+          # 1. Gather all local custom packages dynamically
           LOCAL_PKGS=$(find /overlay -mindepth 2 -maxdepth 3 -name "*.ebuild" | awk -F/ '{print $(NF-2)"/"$(NF-1)}' | sed 's/\.ebuild$//' | sed -E 's/-[0-9]+(\.[0-9]+)*(_[a-z0-9]+)?(-r[0-9]+)?$//' | sort -u || true)
           
-          # 2. Hardcoded Upstream Tracking List
+          # 2. Hardcoded Upstream Tracking List (Pulls latest stable/testing, ignores 9999)
           UPSTREAM_PKGS="media-libs/mesa media-libs/vulkan-loader dev-util/mesa_clc dev-util/spirv-tools dev-util/spirv-headers dev-util/vulkan-headers dev-util/glslang dev-util/vulkan-utility-libraries sys-kernel/gentoo-kernel sys-kernel/linux-firmware virtual/dist-kernel games-util/steam-launcher"
           
           > /overlay/desired_state.txt
@@ -237,40 +237,7 @@ jobs:
         env:
           GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
         run: |
-          # Same priority queuing logic from Void
-          PRIORITY_ORDER=(
-            "gui-libs/scenefx"
-            "gui-apps/quickshell"
-            "gui-apps/noctalia-qs"
-            "x11-misc/matugen"
-            "gui-wm/niri"
-            "gui-wm/mangowc"
-            "gui-wm/noctalia-shell"
-            "gui-wm/dank-material-shell"
-            "sys-apps/danksearch"
-            "x11-base/xwayland-satellite"
-          )
-          
-          RAW_LIST="${{ steps.audit.outputs.build_list }}"
-          ORDERED=()
-          
-          for priority_pkg in "${PRIORITY_ORDER[@]}"; do
-            for exact_pkg in $RAW_LIST; do
-              if echo "$exact_pkg" | grep -q "$priority_pkg"; then
-                ORDERED+=("$exact_pkg")
-              fi
-            done
-          done
-          
-          for exact_pkg in $RAW_LIST; do
-            already=false
-            for p in "${ORDERED[@]}"; do
-              if [ "$p" == "$exact_pkg" ]; then already=true; break; fi
-            done
-            if [ "$already" = false ]; then ORDERED+=("$exact_pkg"); fi
-          done
-          
-          FINAL_LIST="${ORDERED[*]}"
+          FINAL_LIST="${{ steps.audit.outputs.build_list }}"
           echo ">>> Starting Relay Race with: $FINAL_LIST"
           
           gh workflow run "Gentoo Build Relay" \
