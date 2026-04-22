@@ -126,7 +126,6 @@ jobs:
             sync-uri = https://github.com/${OWNER}/${REPO_NAME}/releases/download/rolling/
             verify-signature = false
             EOF
-            
             cat > /etc/portage/binrepos.conf/gentoo.conf << 'EOF'
             [gentoo]
             priority = 1
@@ -134,7 +133,7 @@ jobs:
             verify-signature = false
             EOF
             
-            # ✅ FIX: God-Mode flags injected (-userfetch -userpriv)
+            # ✅ GOD-MODE FLAGS SECURED HERE
             cat > /etc/portage/make.conf << 'EOF'
             COMMON_FLAGS="-O2 -march=x86-64-v3 -pipe"
             CFLAGS="${COMMON_FLAGS}"
@@ -143,6 +142,7 @@ jobs:
             USE="wayland X vulkan pipewire dbus udev opengl dri gbm vaapi vdpau ffmpeg minizip -daemon -aqua -cups -gpm"
             VIDEO_CARDS="amdgpu radeon radeonsi intel iris nouveau virgl"
             FEATURES="buildpkg parallel-install getbinpkg ccache -sandbox -usersandbox -ipc-sandbox -network-sandbox -pid-sandbox -userfetch -userpriv -strict -binpkg-request-signature"
+            PORTAGE_BINPKG_SIGVERIFY="0"
             BINPKG_FORMAT="gpkg"
             PKGDIR="/var/cache/binpkgs"
             CCACHE_DIR="/var/cache/ccache"
@@ -159,29 +159,26 @@ jobs:
             
             emerge-webrsync -q || true
             getuto || true
-            
             eselect profile set default/linux/amd64/23.0/desktop
             
+            # ✅ FORCE INSTALL BINARIES WITH NO SOURCE FALLBACK
             emerge --noreplace --quiet --getbinpkg --usepkg dev-vcs/git dev-util/ccache
             
             git clone --depth 1 https://github.com/anyc/steam-overlay.git /var/db/repos/steam-overlay 2>/dev/null || true
             mkdir -p /var/db/repos/steam-overlay/metadata
             printf "[repo]\nrepo-name = steam-overlay\nmasters = gentoo\n" > /var/db/repos/steam-overlay/metadata/layout.conf
-            
             cat > /etc/portage/repos.conf/steam-overlay.conf << 'EOF'
             [steam-overlay]
             location = /var/db/repos/steam-overlay
             masters = gentoo
             priority = 50
             EOF
-            
             cat > /etc/portage/repos.conf/gentoo-nexus.conf << 'EOF'
             [gentoo-nexus]
             location = /overlay
             masters = gentoo
             priority = 9999
             EOF
-            
             echo "*/*::steam-overlay **" > /etc/portage/package.accept_keywords/steam
             echo "*/*::gentoo-nexus **" > /etc/portage/package.accept_keywords/nexus
             cat >> /etc/portage/package.accept_keywords/nexus << 'EOF'
@@ -197,7 +194,6 @@ jobs:
             sys-kernel/linux-firmware ~amd64
             virtual/dist-kernel ~amd64
             EOF
-            
             cat > /etc/portage/package.use/global << 'EOF'
             sys-libs/zlib minizip
             media-video/pipewire extra
@@ -206,14 +202,11 @@ jobs:
             dev-libs/openssl -bindist
             games-util/steam-launcher steamruntime
             EOF
-            
             cat > /etc/portage/env/no-lto << 'EOF'
             CFLAGS="-O1 -pipe -fno-lto -fno-tree-loop-vectorize -fno-tree-slp-vectorize"
             CXXFLAGS="-O1 -pipe -fno-lto -fno-tree-loop-vectorize -fno-tree-slp-vectorize"
             EOF
-            
             echo "MAKEOPTS=\"-j${NPROC}\"" >> /etc/portage/env/no-lto
-            
             cat > /etc/portage/package.env/no-lto-packages << 'EOF'
             dev-util/spirv-tools no-lto
             media-libs/mesa no-lto

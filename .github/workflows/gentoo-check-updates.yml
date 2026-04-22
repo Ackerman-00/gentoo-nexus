@@ -200,10 +200,12 @@ jobs:
           mkdir -p /etc/portage/gnupg
           chmod 0700 /etc/portage/gnupg
           
+          # ✅ GOD-MODE FLAGS SECURED HERE TOO
           cat > /etc/portage/make.conf << 'MAKECONF'
           ACCEPT_KEYWORDS="~amd64"
           ACCEPT_LICENSE="*"
           FEATURES="-sandbox -usersandbox -ipc-sandbox -network-sandbox -pid-sandbox -userfetch -userpriv -strict -binpkg-request-signature"
+          PORTAGE_BINPKG_SIGVERIFY="0"
           MAKECONF
           
           cat > /etc/portage/package.use/global << 'USECONF'
