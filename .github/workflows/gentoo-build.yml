@@ -132,8 +132,6 @@ jobs:
             sync-uri = https://distfiles.gentoo.org/releases/amd64/binpackages/23.0/x86-64/
             verify-signature = false
             EOF
-            
-            # ✅ GOD-MODE FLAGS SECURED HERE
             cat > /etc/portage/make.conf << 'EOF'
             COMMON_FLAGS="-O2 -march=x86-64-v3 -pipe"
             CFLAGS="${COMMON_FLAGS}"
@@ -152,16 +150,16 @@ jobs:
             ACCEPT_KEYWORDS="~amd64"
             CONFIG_PROTECT_MASK="/etc/portage"
             EOF
-            
             NPROC=$(nproc)
             echo "EMERGE_DEFAULT_OPTS=\"--getbinpkg --usepkg --autounmask=y --autounmask-write --autounmask-continue=y --keep-going --quiet-build=y --jobs=${NPROC} --load-average=${NPROC}\"" >> /etc/portage/make.conf
             echo "MAKEOPTS=\"-j${NPROC}\"" >> /etc/portage/make.conf
             
+            # ✅ FIX: Fetch keys, then give ownership to portage so it doesn't get locked out!
             emerge-webrsync -q || true
             getuto || true
-            eselect profile set default/linux/amd64/23.0/desktop
+            chown -R portage:portage /etc/portage/gnupg
             
-            # ✅ FORCE INSTALL BINARIES WITH NO SOURCE FALLBACK
+            eselect profile set default/linux/amd64/23.0/desktop
             emerge --noreplace --quiet --getbinpkg --usepkg dev-vcs/git dev-util/ccache
             
             git clone --depth 1 https://github.com/anyc/steam-overlay.git /var/db/repos/steam-overlay 2>/dev/null || true
