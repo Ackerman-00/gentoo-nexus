@@ -39,7 +39,7 @@ jobs:
           GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
         run: |
           python3 << 'EOF'
-          import os, re, requests, subprocess, stat, shutil
+          import os, re, requests, subprocess, stat, shutil, tempfile
           from pathlib import Path
           from packaging.version import parse as parse_version
 
@@ -70,18 +70,62 @@ jobs:
               except Exception: pass
               return None
 
+          def extract_appimage_version(appimage_path):
+              try:
+                  subprocess.run(['chmod', '+x', appimage_path], check=True)
+                  res = subprocess.run([appimage_path, '--appimage-version'], capture_output=True, text=True, timeout=30)
+                  if res.returncode == 0 and res.stdout.strip(): return res.stdout.strip()
+              except Exception: pass
+              try:
+                  with tempfile.TemporaryDirectory() as tmpdir:
+                      subprocess.run([appimage_path, '--appimage-extract'], cwd=tmpdir, capture_output=True, timeout=120)
+                      extracted_dir = Path(tmpdir) / 'squashfs-root'
+                      if extracted_dir.is_dir():
+                          for d_file in extracted_dir.glob('*.desktop'):
+                              content = d_file.read_text(encoding='utf-8', errors='ignore')
+                              match = re.search(r'^X-AppImage-Version=(.+)', content, re.MULTILINE)
+                              if match: return match.group(1).strip()
+                              match = re.search(r'^Version=(.+)', content, re.MULTILINE)
+                              if match: return match.group(1).strip()
+              except Exception: pass
+              return None
+
           for ebuild_path in Path('.').rglob('*.ebuild'):
               if any(x in ebuild_path.parts for x in ['cache', 'job_out', 'binpkgs', 'distfiles', 'ccache', '.github', '.git']): continue
               pkg_dir = ebuild_path.parent
               if len(pkg_dir.parts) < 2: continue
               cat_name, pkg_name = pkg_dir.parts[-2], pkg_dir.parts[-1]
               pkg_cat_name = f"{cat_name}/{pkg_name}"
-
               content = ebuild_path.read_text(encoding="utf-8")
-              
-              # ✅ FIX: Strictly checks the filename, ignoring internal git-r3 fallback logic!
-              is_live = ebuild_path.name.endswith('9999.ebuild')
 
+              if pkg_name == "rootapp-bin":
+                  print(f"--- Scanning {pkg_cat_name} (AppImage) ---")
+                  curr_ver_m = re.search(rf'{re.escape(pkg_name)}-(\d+(?:\.\d+)*(?:_(?:alpha|beta|pre|rc|p)\d*)?(?:-r\d+)?)\.ebuild$', ebuild_path.name)
+                  if not curr_ver_m: continue
+                  curr_ver = curr_ver_m.group(1)
+                  
+                  appimage_url = "https://installer.rootapp.com/installer/Linux/X64/Root.AppImage"
+                  with tempfile.NamedTemporaryFile(delete=False, suffix=".AppImage") as tmp: tmp_path = tmp.name
+                  try:
+                      subprocess.run(['curl', '-sSL', '-o', tmp_path, appimage_url], timeout=120)
+                      new_ver = extract_appimage_version(tmp_path)
+                  finally:
+                      if os.path.exists(tmp_path): os.unlink(tmp_path)
+                  
+                  if new_ver:
+                      try: is_newer = parse_version(new_ver) > parse_version(curr_ver)
+                      except: is_newer = (new_ver != curr_ver)
+                      print(f"  [*] Current: {curr_ver} | Upstream Latest: {new_ver}")
+                      if is_newer:
+                          new_path = pkg_dir / f"{pkg_name}-{new_ver}.ebuild"
+                          ebuild_path.rename(new_path)
+                          updated_atoms.add(pkg_cat_name)
+                          print(f"  [+] Renamed to: {new_path.name}")
+                      else: print("  [-] Already up to date.")
+                  else: print("  [!] Failed to extract version from AppImage.")
+                  continue
+
+              is_live = ebuild_path.name.endswith('9999.ebuild')
               repo_m = re.search(r'github\.com/([A-Za-z0-9_.-]+/[A-Za-z0-9_.-]+?)(?:\.git|/archive|/releases|/tarball|["\s\'])', content)
               if not repo_m: continue
               repo = repo_m.group(1).rstrip('.')
@@ -152,8 +196,23 @@ jobs:
           #!/bin/bash
           set -euo pipefail
           
-          mkdir -p /etc/portage/repos.conf /var/db/repos/{gentoo,steam-overlay} /etc/portage/package.accept_keywords
-          echo 'ACCEPT_KEYWORDS="~amd64"' > /etc/portage/make.conf
+          mkdir -p /etc/portage/repos.conf /var/db/repos/{gentoo,steam-overlay} /etc/portage/package.{accept_keywords,use}
+          
+          # ✅ FIX: Mirror the Build Relay's USE flags and settings so Portage can see Steam
+          cat > /etc/portage/make.conf << 'MAKECONF'
+          ACCEPT_KEYWORDS="~amd64"
+          ACCEPT_LICENSE="*"
+          USE="wayland X vulkan pipewire dbus udev opengl dri gbm vaapi vdpau ffmpeg minizip -daemon -aqua -cups -gpm"
+          MAKECONF
+          
+          cat > /etc/portage/package.use/global << 'USECONF'
+          sys-libs/zlib minizip
+          media-video/pipewire extra
+          media-video/ffmpeg -sdl
+          sys-libs/ncurses -gpm
+          dev-libs/openssl -bindist
+          games-util/steam-launcher steamruntime
+          USECONF
           
           echo ">>> Syncing base Gentoo tree..."
           emerge-webrsync -q || true
@@ -182,13 +241,14 @@ jobs:
           REPOEOF
           
           cat > /etc/portage/package.accept_keywords/nexus << 'KEYW'
+          */*::steam-overlay **
+          */*::gentoo-nexus **
           media-libs/mesa ~amd64
           media-libs/vulkan-loader ~amd64
           sys-kernel/gentoo-kernel ~amd64
           virtual/dist-kernel ~amd64
           KEYW
           
-          # ✅ FIX: Generate fresh manifests for the overlay so Portage recognizes bumped ebuilds!
           echo ">>> Generating Manifests for local overlay..."
           for ebuild_file in $(find /overlay -mindepth 2 -maxdepth 3 -name "*.ebuild"); do
              ebuild "$ebuild_file" manifest >/dev/null 2>&1 || true
@@ -200,7 +260,6 @@ jobs:
           > /overlay/desired_state.txt
           echo ">>> Querying emerge for exact target versions..."
           for pkg in $LOCAL_PKGS $UPSTREAM_PKGS; do
-             # Bulletproof AWK parser for emerge output
              RES=$(emerge -pqO --color=n "$pkg" 2>/dev/null | awk '/^\[ebuild/ {for(i=1;i<=NF;i++) if($i ~ /\//) {print $i; break}}' || true)
              if [ -n "$RES" ]; then 
                echo "$RES" >> /overlay/desired_state.txt
@@ -218,7 +277,6 @@ jobs:
           REPO: ${{ github.repository }}
         run: |
           echo ">>> Fetching Existing Assets (including Pre-Releases)..."
-          # ✅ FIX: Uses GH CLI to bypass the Prerelease API blindness!
           EXISTING_ASSETS=$(gh release view rolling --json assets --jq '.assets[].name' 2>/dev/null || echo "")
           
           CHANGED=$(cat changed_packages.txt 2>/dev/null || echo "")
@@ -250,8 +308,48 @@ jobs:
         env:
           GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
         run: |
-          echo ">>> Queueing the following for compilation: ${{ steps.audit.outputs.build_list }}"
+          # ✅ FIX: Hardcoded priority order for essential system packages
+          PRIORITY_ORDER=(
+            "media-libs/mesa"
+            "media-libs/vulkan-loader"
+            "sys-kernel/gentoo-kernel"
+            "virtual/dist-kernel"
+            "games-util/steam-launcher"
+            "gui-libs/scenefx"
+            "gui-apps/quickshell"
+            "gui-apps/noctalia-qs"
+            "x11-misc/matugen"
+            "gui-wm/niri"
+            "gui-wm/mangowc"
+            "gui-wm/noctalia-shell"
+            "gui-wm/dank-material-shell"
+            "sys-apps/danksearch"
+            "x11-base/xwayland-satellite"
+          )
+          
+          RAW_LIST="${{ steps.audit.outputs.build_list }}"
+          ORDERED=()
+          
+          for priority_pkg in "${PRIORITY_ORDER[@]}"; do
+            for exact_pkg in $RAW_LIST; do
+              if echo "$exact_pkg" | grep -q "$priority_pkg"; then
+                ORDERED+=("$exact_pkg")
+              fi
+            done
+          done
+          
+          for exact_pkg in $RAW_LIST; do
+            already=false
+            for p in "${ORDERED[@]}"; do
+              if [ "$p" == "$exact_pkg" ]; then already=true; break; fi
+            done
+            if [ "$already" = false ]; then ORDERED+=("$exact_pkg"); fi
+          done
+          
+          FINAL_LIST="${ORDERED[*]}"
+          echo ">>> Queueing the following for compilation: $FINAL_LIST"
+          
           gh workflow run "Gentoo Build Relay" \
             --ref "${GITHUB_REF_NAME}" \
-            -f package_list="${{ steps.audit.outputs.build_list }}" \
+            -f package_list="$FINAL_LIST" \
             -f force_rebuild="${{ steps.audit.outputs.force_required }}"
