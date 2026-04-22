@@ -154,10 +154,9 @@ jobs:
             echo "EMERGE_DEFAULT_OPTS=\"--getbinpkg --usepkg --autounmask=y --autounmask-write --autounmask-continue=y --keep-going --quiet-build=y --jobs=${NPROC} --load-average=${NPROC}\"" >> /etc/portage/make.conf
             echo "MAKEOPTS=\"-j${NPROC}\"" >> /etc/portage/make.conf
             
-            # ✅ FIX: Fetch keys, then give ownership to portage so it doesn't get locked out!
             emerge-webrsync -q || true
+            # ✅ FIX: Root runs getuto, no chown!
             getuto || true
-            chown -R portage:portage /etc/portage/gnupg
             
             eselect profile set default/linux/amd64/23.0/desktop
             emerge --noreplace --quiet --getbinpkg --usepkg dev-vcs/git dev-util/ccache
