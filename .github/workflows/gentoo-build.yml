@@ -79,34 +79,42 @@ jobs:
           echo ">>> Downloading existing packages from rolling release..."
           gh release download rolling -p "*.gpkg.tar" -p "Packages" --repo ${{ github.repository }} --dir "${{ github.workspace }}/binpkgs" --clobber || echo "First run or no packages found."
 
-      - name: Check Existing Binaries
-        id: check-releases
+      # ✅ FIX: The Void Relay Logic. Pop the first missing package, pass the rest.
+      - name: Check Existing Binaries & Pop Queue
+        id: queue
         run: |
           read -r -a PKGS <<< "${{ github.event.inputs.package_list }}"
-          EXISTING=()
-          MISSING=()
           FORCE_REBUILD="${{ github.event.inputs.force_rebuild }}"
+          MISSING=()
           
           for pkg in "${PKGS[@]}"; do
             PN=$(echo "$pkg" | sed 's/^=//' | awk -F/ '{print $NF}' | sed -E 's/-[0-9]+(\.[0-9]+)*(_[a-z0-9]+)?(-r[0-9]+)?$//')
-            
             if [ "$FORCE_REBUILD" == "true" ]; then
-              echo "⚠️ Force rebuild requested for $pkg — ignoring local and remote binaries!"
               MISSING+=("$pkg")
               rm -f "${{ github.workspace }}/binpkgs/${PN}-"[0-9]*.gpkg.tar 2>/dev/null || true
             elif ls "${{ github.workspace }}/binpkgs/${PN}-"[0-9]*.gpkg.tar 1> /dev/null 2>&1; then
-              echo "✓ Found existing binary for $pkg in local binhost"
-              EXISTING+=("$pkg")
+              echo "✓ Found existing binary for $pkg"
             else
-              echo "✗ No binary for $pkg — will build"
               MISSING+=("$pkg")
             fi
           done
           
-          echo "existing_pkgs=${EXISTING[*]}" >> "$GITHUB_OUTPUT"
-          echo "missing_pkgs=${MISSING[*]}" >> "$GITHUB_OUTPUT"
+          if [ ${#MISSING[@]} -gt 0 ]; then
+            echo "target_pkg=${MISSING}" >> "$GITHUB_OUTPUT"
+            echo "remaining_pkgs=${MISSING[@]:1}" >> "$GITHUB_OUTPUT"
+          else
+            echo "target_pkg=" >> "$GITHUB_OUTPUT"
+            echo "remaining_pkgs=" >> "$GITHUB_OUTPUT"
+          fi
+
+      # ✅ FIX: Clone overlays on the host. Bypasses the Docker Git/GPG crash!
+      - name: Fetch Overlays on Host Runner
+        if: steps.queue.outputs.target_pkg != ''
+        run: |
+          git clone --depth 1 https://github.com/anyc/steam-overlay.git steam-overlay 2>/dev/null || true
 
       - name: Prepare Portage DNA Script
+        if: steps.queue.outputs.target_pkg != ''
         env:
           PORTAGE_DNA: |
             #!/bin/bash
@@ -117,20 +125,19 @@ jobs:
             mkdir -p /var/db/repos/{gentoo,steam-overlay}
             mkdir -p /etc/portage/{repos.conf,binrepos.conf,env,package.{accept_keywords,license,use,env}}
             
-            mkdir -p /etc/portage/gnupg
-            
             cat > /etc/portage/binrepos.conf/nexus-releases.conf << EOF
             [gentoo-nexus-releases]
             priority = 99999
             sync-uri = https://github.com/${OWNER}/${REPO_NAME}/releases/download/rolling/
-            verify-signature = no
+            verify-signature = false
             EOF
             cat > /etc/portage/binrepos.conf/gentoo.conf << 'EOF'
             [gentoo]
             priority = 1
             sync-uri = https://distfiles.gentoo.org/releases/amd64/binpackages/23.0/x86-64/
-            verify-signature = no
+            verify-signature = false
             EOF
+            
             cat > /etc/portage/make.conf << 'EOF'
             COMMON_FLAGS="-O2 -march=x86-64-v3 -pipe"
             CFLAGS="${COMMON_FLAGS}"
@@ -138,8 +145,7 @@ jobs:
             RUSTFLAGS="-C target-cpu=x86-64-v3 -C opt-level=2"
             USE="wayland X vulkan pipewire dbus udev opengl dri gbm vaapi vdpau ffmpeg minizip -daemon -aqua -cups -gpm"
             VIDEO_CARDS="amdgpu radeon radeonsi intel iris nouveau virgl"
-            FEATURES="buildpkg parallel-install getbinpkg ccache -sandbox -usersandbox -ipc-sandbox -network-sandbox -pid-sandbox -strict"
-            PORTAGE_BINPKG_SIGVERIFY="0"
+            FEATURES="buildpkg parallel-install getbinpkg ccache -sandbox -usersandbox -ipc-sandbox -network-sandbox -pid-sandbox -strict -binpkg-request-signature"
             BINPKG_FORMAT="gpkg"
             PKGDIR="/var/cache/binpkgs"
             CCACHE_DIR="/var/cache/ccache"
@@ -149,22 +155,17 @@ jobs:
             ACCEPT_KEYWORDS="~amd64"
             CONFIG_PROTECT_MASK="/etc/portage"
             EOF
+            
             NPROC=$(nproc)
             echo "EMERGE_DEFAULT_OPTS=\"--getbinpkg --usepkg --autounmask=y --autounmask-write --autounmask-continue=y --keep-going --quiet-build=y --jobs=${NPROC} --load-average=${NPROC}\"" >> /etc/portage/make.conf
             echo "MAKEOPTS=\"-j${NPROC}\"" >> /etc/portage/make.conf
             
             emerge-webrsync -q || true
-            
-            # ✅ FIX: Fetch keys, then give ownership to portage
-            getuto || true
-            chown -R portage:portage /etc/portage/gnupg
-            chmod 0700 /etc/portage/gnupg
-            
             eselect profile set default/linux/amd64/23.0/desktop
-            emerge --noreplace --quiet --getbinpkg --usepkg dev-vcs/git dev-util/ccache
             
-            git clone --depth 1 https://github.com/anyc/steam-overlay.git /var/db/repos/steam-overlay 2>/dev/null || true
-            mkdir -p /var/db/repos/steam-overlay/metadata
+            # ✅ FIX: Compile ccache from source rapidly to avoid GPG verification of bins
+            emerge --noreplace --quiet dev-util/ccache
+            
             printf "[repo]\nrepo-name = steam-overlay\nmasters = gentoo\n" > /var/db/repos/steam-overlay/metadata/layout.conf
             cat > /etc/portage/repos.conf/steam-overlay.conf << 'EOF'
             [steam-overlay]
@@ -217,9 +218,10 @@ jobs:
           echo "$PORTAGE_DNA" > portage_dna.sh
           chmod +x portage_dna.sh
 
-      - name: Build Missing Packages (Relay Race)
+      - name: Build Target Package
+        if: steps.queue.outputs.target_pkg != ''
         env:
-          MISSING_PKGS: ${{ steps.check-releases.outputs.missing_pkgs }}
+          TARGET: ${{ steps.queue.outputs.target_pkg }}
           FORCE_REBUILD: ${{ github.event.inputs.force_rebuild }}
           BUILD_SCRIPT: |
             #!/bin/bash
@@ -233,35 +235,30 @@ jobs:
               emerge --getbinpkg --usepkg --buildpkg "$1"
             fi
         run: |
-          if [ -n "${MISSING_PKGS:-}" ]; then
-            read -r -a MISSING <<< "$MISSING_PKGS"
-            for pkg in "${MISSING[@]}"; do
-              echo ">>> Building: $pkg"
-              echo "$BUILD_SCRIPT" > build_script.sh
-              chmod +x build_script.sh
-              docker run --rm --privileged \
-                -e GITHUB_REPOSITORY_OWNER -e GITHUB_REPOSITORY -e FORCE_REBUILD \
-                -v "${{ github.workspace }}:/overlay" \
-                -v "${{ github.workspace }}/binpkgs:/var/cache/binpkgs" \
-                -v "${{ github.workspace }}/distfiles:/var/cache/distfiles" \
-                -v "${{ github.workspace }}/ccache:/var/cache/ccache" \
-                gentoo/stage3:amd64-desktop-openrc \
-                bash /overlay/build_script.sh "$pkg"
-            done
-          fi
+          echo ">>> Building: $TARGET"
+          echo "$BUILD_SCRIPT" > build_script.sh
+          chmod +x build_script.sh
+          docker run --rm --privileged \
+            -e GITHUB_REPOSITORY_OWNER -e GITHUB_REPOSITORY -e FORCE_REBUILD \
+            -v "${{ github.workspace }}:/overlay" \
+            -v "${{ github.workspace }}/steam-overlay:/var/db/repos/steam-overlay" \
+            -v "${{ github.workspace }}/binpkgs:/var/cache/binpkgs" \
+            -v "${{ github.workspace }}/distfiles:/var/cache/distfiles" \
+            -v "${{ github.workspace }}/ccache:/var/cache/ccache" \
+            gentoo/stage3:amd64-desktop-openrc \
+            bash /overlay/build_script.sh "$TARGET"
 
       - name: Generate Unified Portage Index
+        if: steps.queue.outputs.target_pkg != ''
         run: |
-          if [ -z "$(find ${{ github.workspace }}/binpkgs -name '*.gpkg.tar' 2>/dev/null)" ]; then
-            echo "⚠️ No binaries to index."
-            exit 0
-          fi
+          if [ -z "$(find ${{ github.workspace }}/binpkgs -name '*.gpkg.tar' 2>/dev/null)" ]; then exit 0; fi
           docker run --rm \
             -v "${{ github.workspace }}/binpkgs:/var/cache/binpkgs" \
             gentoo/stage3:amd64-desktop-openrc \
             bash -c "mkdir -p /var/db/repos/gentoo/metadata && echo 'masters = gentoo' > /var/db/repos/gentoo/metadata/layout.conf && PKGDIR='/var/cache/binpkgs' emaint binhost --fix"
 
       - name: Deploy to GitHub Releases
+        if: steps.queue.outputs.target_pkg != ''
         env:
           GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
           REPO: ${{ github.repository }}
@@ -274,3 +271,15 @@ jobs:
       - name: Fix Workspace Permissions for Cache
         if: always()
         run: sudo chown -R $USER:$USER ${{ github.workspace }}
+
+      # ✅ FIX: The Void Relay logic. Hands the baton to the next package.
+      - name: Trigger Relay Race
+        if: steps.queue.outputs.remaining_pkgs != ''
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+        run: |
+          echo ">>> Passing the baton to: ${{ steps.queue.outputs.remaining_pkgs }}"
+          gh workflow run "Gentoo Build Relay" \
+            --ref "${GITHUB_REF_NAME}" \
+            -f package_list="${{ steps.queue.outputs.remaining_pkgs }}" \
+            -f force_rebuild="${{ github.event.inputs.force_rebuild }}"
