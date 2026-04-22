@@ -139,7 +139,6 @@ jobs:
             CONFIG_PROTECT_MASK="/etc/portage"
             EOF
             
-            # ✅ FIX: Added --autounmask-continue=y to automatically resume after config updates
             NPROC=$(nproc)
             echo "EMERGE_DEFAULT_OPTS=\"--getbinpkg --usepkg --autounmask=y --autounmask-write --autounmask-continue=y --keep-going --quiet-build=y --jobs=${NPROC} --load-average=${NPROC}\"" >> /etc/portage/make.conf
             echo "MAKEOPTS=\"-j${NPROC}\"" >> /etc/portage/make.conf
@@ -210,6 +209,7 @@ jobs:
             EOF
         run: |
           echo "$PORTAGE_DNA" > portage_dna.sh
+          sed -i "s/^[[:space:]]*//" portage_dna.sh
           chmod +x portage_dna.sh
 
       - name: Build Missing Packages (Relay Race)
@@ -246,6 +246,7 @@ jobs:
             for pkg in "${MISSING[@]}"; do
               echo ">>> Building: $pkg"
               echo "$BUILD_SCRIPT" > build_script.sh
+              sed -i "s/^[[:space:]]*//" build_script.sh
               chmod +x build_script.sh
               docker run --rm --privileged \
                 -e GITHUB_REPOSITORY_OWNER \
@@ -277,7 +278,7 @@ jobs:
             -v "${{ github.workspace }}/job_out:/var/cache/binpkgs" \
             -e PKGDIR="/var/cache/binpkgs" \
             gentoo/stage3:amd64-desktop-openrc \
-            bash -c "emaint binhost --fix"
+            bash -c "mkdir -p /var/db/repos/gentoo/metadata && echo 'masters = gentoo' > /var/db/repos/gentoo/metadata/layout.conf && emaint binhost --fix"
           [ -f "${{ github.workspace }}/job_out/Packages" ] && mv "${{ github.workspace }}/job_out/Packages" "${{ github.workspace }}/job_out/Packages.new" || true
 
       - name: Deploy to GitHub Releases & Pages
@@ -347,3 +348,11 @@ jobs:
           git add Packages .nojekyll
           git commit -m "Update Binhost Index [skip ci] $(date -u +%Y-%m-%dT%H:%M:%SZ)" || true
           git push https://x-access-token:${GITHUB_TOKEN}@github.com/${REPO}.git gh-pages
+
+      # ✅ FIX: This ensures the GitHub Runner regains ownership of the Docker-created files
+      # so the Cache step doesn't fail with "Permission denied".
+      - name: Fix Workspace Permissions for Cache
+        if: always()
+        run: |
+          echo ">>> Fixing workspace ownership for GitHub Actions Cache..."
+          sudo chown -R $USER:$USER ${{ github.workspace }}
