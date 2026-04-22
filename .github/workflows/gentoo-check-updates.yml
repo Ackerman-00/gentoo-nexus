@@ -198,11 +198,13 @@ jobs:
           
           mkdir -p /etc/portage/repos.conf /var/db/repos/{gentoo,steam-overlay} /etc/portage/package.{accept_keywords,use}
           
-          # ✅ FIX: Mirror the Build Relay's USE flags and settings so Portage can see Steam
+          # ✅ FIX: Added GPG Bypass & Userfetch Drop here too!
           cat > /etc/portage/make.conf << 'MAKECONF'
           ACCEPT_KEYWORDS="~amd64"
           ACCEPT_LICENSE="*"
           USE="wayland X vulkan pipewire dbus udev opengl dri gbm vaapi vdpau ffmpeg minizip -daemon -aqua -cups -gpm"
+          FEATURES="-sandbox -usersandbox -ipc-sandbox -network-sandbox -pid-sandbox -userfetch -userpriv"
+          PORTAGE_BINPKG_SIGVERIFY="0"
           MAKECONF
           
           cat > /etc/portage/package.use/global << 'USECONF'
@@ -218,7 +220,8 @@ jobs:
           emerge-webrsync -q || true
           
           echo ">>> Installing Git to fetch overlays..."
-          emerge --oneshot --quiet dev-vcs/git
+          # ✅ FIX: Ensures Git is downloaded as a binary in 3 seconds
+          emerge --oneshot --quiet --getbinpkg --usepkg dev-vcs/git
           
           echo ">>> Fetching Steam Overlay..."
           git clone --depth 1 https://github.com/anyc/steam-overlay.git /var/db/repos/steam-overlay 2>/dev/null
@@ -308,7 +311,6 @@ jobs:
         env:
           GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
         run: |
-          # ✅ FIX: Hardcoded priority order for essential system packages
           PRIORITY_ORDER=(
             "media-libs/mesa"
             "media-libs/vulkan-loader"

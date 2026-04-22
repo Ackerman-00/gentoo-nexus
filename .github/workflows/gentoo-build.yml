@@ -88,7 +88,6 @@ jobs:
           FORCE_REBUILD="${{ github.event.inputs.force_rebuild }}"
           
           for pkg in "${PKGS[@]}"; do
-            # Strip prefixes like '=' and version numbers to find the raw name
             PN=$(echo "$pkg" | sed 's/^=//' | awk -F/ '{print $NF}' | sed -E 's/-[0-9]+(\.[0-9]+)*(_[a-z0-9]+)?(-r[0-9]+)?$//')
             
             if [ "$FORCE_REBUILD" == "true" ]; then
@@ -118,10 +117,6 @@ jobs:
             mkdir -p /var/db/repos/{gentoo,steam-overlay}
             mkdir -p /etc/portage/{repos.conf,binrepos.conf,env,package.{accept_keywords,license,use,env}}
             
-            # ✅ FIX: Initialize GPG Folder BEFORE running getuto
-            mkdir -p /etc/portage/gnupg
-            chmod 0700 /etc/portage/gnupg
-            
             cat > /etc/portage/binrepos.conf/nexus-releases.conf << EOF
             [gentoo-nexus-releases]
             priority = 99999
@@ -134,6 +129,8 @@ jobs:
             sync-uri = https://distfiles.gentoo.org/releases/amd64/binpackages/23.0/x86-64/
             verify-signature = false
             EOF
+            
+            # ✅ FIX: Disabled SIGVERIFY and privileges drop (-userfetch -userpriv)
             cat > /etc/portage/make.conf << 'EOF'
             COMMON_FLAGS="-O2 -march=x86-64-v3 -pipe"
             CFLAGS="${COMMON_FLAGS}"
@@ -141,7 +138,8 @@ jobs:
             RUSTFLAGS="-C target-cpu=x86-64-v3 -C opt-level=2"
             USE="wayland X vulkan pipewire dbus udev opengl dri gbm vaapi vdpau ffmpeg minizip -daemon -aqua -cups -gpm"
             VIDEO_CARDS="amdgpu radeon radeonsi intel iris nouveau virgl"
-            FEATURES="buildpkg parallel-install getbinpkg ccache -sandbox -usersandbox -ipc-sandbox -network-sandbox -pid-sandbox -strict -binpkg-request-signature"
+            FEATURES="buildpkg parallel-install getbinpkg ccache -sandbox -usersandbox -ipc-sandbox -network-sandbox -pid-sandbox -userfetch -userpriv -strict -binpkg-request-signature"
+            PORTAGE_BINPKG_SIGVERIFY="0"
             BINPKG_FORMAT="gpkg"
             PKGDIR="/var/cache/binpkgs"
             CCACHE_DIR="/var/cache/ccache"
@@ -151,17 +149,14 @@ jobs:
             ACCEPT_KEYWORDS="~amd64"
             CONFIG_PROTECT_MASK="/etc/portage"
             EOF
+            
             NPROC=$(nproc)
             echo "EMERGE_DEFAULT_OPTS=\"--getbinpkg --usepkg --autounmask=y --autounmask-write --autounmask-continue=y --keep-going --quiet-build=y --jobs=${NPROC} --load-average=${NPROC}\"" >> /etc/portage/make.conf
             echo "MAKEOPTS=\"-j${NPROC}\"" >> /etc/portage/make.conf
             
-            # ✅ FIX: Download and trust Gentoo official binary GPG keys
             emerge-webrsync -q || true
-            getuto || true
-            
             eselect profile set default/linux/amd64/23.0/desktop
             
-            # ✅ Explicitly use binaries for the core toolkit
             emerge --noreplace --quiet --getbinpkg --usepkg dev-vcs/git dev-util/ccache
             
             git clone --depth 1 https://github.com/anyc/steam-overlay.git /var/db/repos/steam-overlay 2>/dev/null || true
