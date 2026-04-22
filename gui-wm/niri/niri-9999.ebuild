@@ -4,7 +4,7 @@
 EAPI=8
 
 LLVM_COMPAT=( {18..22} )
-RUST_MIN_VER="1.95.0"  # Updated to latest stable as of April 2026
+RUST_MIN_VER="1.95.0"
 
 inherit cargo git-r3 llvm-r2 optfeature shell-completion xdg
 
@@ -56,10 +56,8 @@ BDEPEND="
 
 QA_FLAGS_IGNORED="usr/bin/niri"
 
-<<<<<<< HEAD
 EGIT_COMMIT="e472b5b0f13d"
-=======
->>>>>>> 048ea36 (updated)
+
 pkg_setup() {
 	llvm-r2_pkg_setup
 	rust_pkg_setup
@@ -71,7 +69,6 @@ src_unpack() {
 }
 
 src_prepare() {
-	# GIT_CRATES handles Git dependencies – no sed hacks needed
 	# niri-session doesn't work on OpenRC
 	if ! use systemd; then
 		local cmd="niri --session"

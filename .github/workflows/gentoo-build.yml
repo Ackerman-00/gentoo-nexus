@@ -27,11 +27,6 @@ jobs:
           token: ${{ secrets.GITHUB_TOKEN }}
           fetch-depth: 0
 
-      # BUG-FIX: Cache the ACTUAL PKGDIR path (/tmp/binpkgs) so that
-      # pre-built packages survive across workflow runs on the same runner.
-      # DeepSeek cached /tmp/binpkgs but then emerge wrote to /overlay/job_out
-      # (= workspace/job_out per the PKGDIR in make.conf), meaning /tmp/binpkgs
-      # stayed empty forever. Both the cache path and PKGDIR now agree.
       - name: Set up Binhost Cache
         uses: actions/cache@v4
         with:
@@ -54,7 +49,6 @@ jobs:
           mkdir -p /etc/portage/{repos.conf,binrepos.conf,env,package.{accept_keywords,license,use,env}}
           mkdir -p /overlay/job_out
 
-          # Official Gentoo binhost (fastest deps, baseline packages)
           cat > /etc/portage/binrepos.conf/gentoo.conf << 'EOF'
           [gentoo]
           priority = 1
@@ -62,7 +56,6 @@ jobs:
           verify-signature = false
           EOF
 
-          # Custom Nexus binhost from GitHub Pages (highest priority — our built packages)
           if [[ -n "$OWNER" && -n "$REPO_NAME" ]]; then
             cat > /etc/portage/binrepos.conf/nexus.conf << EOF
           [gentoo-nexus]
@@ -72,19 +65,6 @@ jobs:
           EOF
           fi
 
-          # BUG-FIX: PKGDIR is now /tmp/binpkgs (mapped by Docker volume) so that:
-          #   1. emerge writes built binaries to /tmp/binpkgs (= runner's /tmp/binpkgs)
-          #   2. actions/cache@v4 saves /tmp/binpkgs, which is now NOT empty
-          #   3. On next run, cache is restored to /tmp/binpkgs, emaint fixes index,
-          #      and Portage finds them via --usepkg before reaching the remote binhosts
-          #
-          # BUG-FIX: make.conf written with quoted heredoc (<< 'EOF').
-          # This prevents bash from expanding ${COMMON_FLAGS} at write-time.
-          # Portage reads make.conf with its own Python shlex parser which DOES
-          # support var="${var}" expansion — so CFLAGS="${COMMON_FLAGS}" is valid
-          # and will be expanded by Portage, not by bash.
-          # Source: make.conf(5): "supports simple shell-like expansion of the
-          # form var=\"\${var}\""
           cat > /etc/portage/make.conf << 'EOF'
           COMMON_FLAGS="-O2 -march=x86-64-v3 -pipe"
           CFLAGS="${COMMON_FLAGS}"
@@ -154,9 +134,6 @@ jobs:
           games-util/steam-launcher steamruntime
           EOF
 
-          # BUG-FIX: no-lto uses explicit CFLAGS values (not ${COMMON_FLAGS}).
-          # Gentoo wiki: "In per-package environment files, variables like CFLAGS
-          # must be set explicitly. Portage does not automatically expand COMMON_FLAGS."
           cat > /etc/portage/env/no-lto << 'EOF'
           CFLAGS="-O1 -pipe -fno-lto -fno-tree-loop-vectorize -fno-tree-slp-vectorize"
           CXXFLAGS="-O1 -pipe -fno-lto -fno-tree-loop-vectorize -fno-tree-slp-vectorize"
@@ -170,11 +147,6 @@ jobs:
           dev-qt/qtbase no-lto
           dev-qt/qtwayland no-lto
           EOF
-
-          # BUG-FIX: emaint binhost --fix is removed from here.
-          # It was called BEFORE building, when PKGDIR is empty — a no-op.
-          # It is now called INSIDE the build script AFTER cache packages
-          # are pre-seeded into PKGDIR, so Portage can find them.
           DNA_EOF
           chmod +x portage_dna.sh
 
@@ -194,11 +166,7 @@ jobs:
           set -euo pipefail
           source /overlay/portage_dna.sh
 
-          # Regenerate PKGDIR index so Portage finds the pre-seeded binaries.
-          # Without this, pkgdir-index-trusted causes Portage to skip them.
           emaint binhost --fix 2>/dev/null || true
-
-          # $1 is the package atom passed as an argument from the docker run command
           emerge --getbinpkg --usepkg --buildpkg "$1"
           BUILDEOF
             chmod +x build_script.sh
@@ -219,13 +187,10 @@ jobs:
             echo "No binaries generated. Exiting."
             exit 0
           fi
-          # Regenerate the Packages index for the binaries that were just built.
-          # The -v maps /tmp/binpkgs as PKGDIR so emaint can find and index them.
           docker run --rm \
             -v "/tmp/binpkgs:/tmp/binpkgs" \
             gentoo/stage3:amd64-desktop-openrc \
             bash -c "PKGDIR='/tmp/binpkgs' emaint binhost --fix"
-          # Copy built packages to job_out for the Deploy step
           mkdir -p job_out
           cp /tmp/binpkgs/*.gpkg.tar job_out/ 2>/dev/null || true
 
