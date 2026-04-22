@@ -12,24 +12,22 @@ LICENSE="MIT"
 SLOT="0"
 KEYWORDS="~amd64"
 
+# This global declaration is all you need to disable the sandbox
 RESTRICT="network-sandbox"
 BDEPEND=">=dev-lang/go-1.21"
 
 src_unpack() {
     default
-    # Required for Go modules to be properly fetched and unpacked
     go-module_src_unpack
 }
 
 src_compile() {
     export GOPROXY="https://proxy.golang.org,direct"
-    # Use ego from go-module.eclass, which sets up the Go environment correctly
     ego build -ldflags="-s -w" -o dgop ./cmd/dgop || die "ego build failed"
 }
 
 src_install() {
     dobin dgop
-    # The sample config is at the root of the source
     insinto /etc/dgop
     if [[ -f config.sample.toml ]]; then
         newins config.sample.toml config.toml

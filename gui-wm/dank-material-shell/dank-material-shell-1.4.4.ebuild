@@ -3,7 +3,7 @@
 
 EAPI=8
 
-inherit desktop go-module xdg
+inherit desktop go-module shell-completion xdg
 
 DESCRIPTION="A complete desktop shell for niri and other Wayland compositors"
 HOMEPAGE="https://github.com/AvengeMedia/DankMaterialShell"
@@ -43,7 +43,7 @@ src_compile() {
     mkdir -p completions || die
     chmod 755 ./dms
     chmod o+rx "${WORKDIR}" "${S}" completions
-    # Generate completions
+    
     ./dms completion bash > completions/dms 2>/dev/null || die "bash completion failed"
     ./dms completion fish > completions/dms.fish 2>/dev/null || die "fish completion failed"
     ./dms completion zsh  > completions/_dms 2>/dev/null || die "zsh completion failed"
@@ -64,5 +64,4 @@ src_install() {
 pkg_postinst() {
     xdg_pkg_postinst
     elog "DankMaterialShell requires a running Wayland compositor."
-    elog "For Niri, add 'dms' to your autostart."
 }

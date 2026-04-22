@@ -23,23 +23,24 @@ RDEPEND="
     x11-libs/gtk+:3
 "
 
+BDEPEND="sys-fs/squashfs-tools"
+
 S="${WORKDIR}"
 
 src_unpack() {
     mkdir -p "${S}" || die
-    cp "${DISTDIR}/${P}.AppImage" "${S}" || die
     cd "${S}" || die
-    chmod +x "${P}.AppImage" || die
-    ./"${P}.AppImage" --appimage-extract || die "Failed to extract AppImage"
+    cp "${DISTDIR}/${P}.AppImage" . || die
+    
+    unsquashfs -d squashfs-root "${P}.AppImage" || die "Failed to extract AppImage"
 }
 
 src_install() {
     local target_dir="/opt/rootapp"
     dodir "${target_dir}"
     cp -a squashfs-root/* "${ED}${target_dir}/" || die "Failed to copy application files"
-    # Create symlink in /usr/bin for easy launch
     dosym "../../opt/rootapp/AppRun" /usr/bin/rootapp
-    # Install icons
+    
     local icon_found=0
     if [[ -f "squashfs-root/Root.png" ]]; then
         doicon "squashfs-root/Root.png"
@@ -48,7 +49,7 @@ src_install() {
         newicon "squashfs-root/.DirIcon" Root.png
         icon_found=1
     fi
-    # Create desktop entry only if icon was found
+    
     if [[ ${icon_found} -eq 1 ]]; then
         make_desktop_entry "rootapp" "RootApp" "Root" "Network;Chat;"
     fi
@@ -57,6 +58,6 @@ src_install() {
 pkg_postinst() {
     if use suid; then
         chmod u+s "${EROOT}/opt/rootapp/chrome-sandbox" 2>/dev/null || \
-            ewarn "Could not set SUID bit on chrome-sandbox. Some Electron features may not work."
+            ewarn "Could not set SUID bit on chrome-sandbox."
     fi
 }
