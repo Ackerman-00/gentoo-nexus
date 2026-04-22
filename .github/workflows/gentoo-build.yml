@@ -6,6 +6,11 @@ on:
       package_list:
         description: 'Space-separated list of package atoms to build (e.g., "gui-wm/niri media-libs/mesa")'
         required: true
+      force_rebuild:
+        description: 'Force compile from source (ignores existing binary in Release)'
+        type: boolean
+        required: false
+        default: false
 
 concurrency:
   group: gentoo-build-${{ github.run_id }}
@@ -67,7 +72,6 @@ jobs:
             docker save gentoo/stage3:amd64-desktop-openrc -o "$IMAGE_CACHE"
           fi
 
-      # ✅ FIX: Native pre-release download (mirrors your Void Linux logic)
       - name: Download Existing Binhost
         env:
           GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
@@ -81,10 +85,17 @@ jobs:
           read -r -a PKGS <<< "${{ github.event.inputs.package_list }}"
           EXISTING=()
           MISSING=()
+          FORCE_REBUILD="${{ github.event.inputs.force_rebuild }}"
+          
           for pkg in "${PKGS[@]}"; do
             PN="${pkg#*/}"
-            # Checks local dir for files matching the package name + version numbers
-            if ls "${{ github.workspace }}/binpkgs/${PN}-"[0-9]*.gpkg.tar 1> /dev/null 2>&1; then
+            
+            if [ "$FORCE_REBUILD" == "true" ]; then
+              echo "⚠️ Force rebuild requested for $pkg — ignoring local and remote binaries!"
+              MISSING+=("$pkg")
+              # Remove local copy so Portage doesn't accidentally use it locally
+              rm -f "${{ github.workspace }}/binpkgs/${PN}-"[0-9]*.gpkg.tar 2>/dev/null || true
+            elif ls "${{ github.workspace }}/binpkgs/${PN}-"[0-9]*.gpkg.tar 1> /dev/null 2>&1; then
               echo "✓ Found existing binary for $pkg in local binhost"
               EXISTING+=("$pkg")
             else
@@ -92,6 +103,7 @@ jobs:
               MISSING+=("$pkg")
             fi
           done
+          
           echo "existing_pkgs=${EXISTING[*]}" >> "$GITHUB_OUTPUT"
           echo "missing_pkgs=${MISSING[*]}" >> "$GITHUB_OUTPUT"
 
@@ -217,15 +229,23 @@ jobs:
       - name: Build Missing Packages (Relay Race)
         env:
           MISSING_PKGS: ${{ steps.check-releases.outputs.missing_pkgs }}
+          FORCE_REBUILD: ${{ github.event.inputs.force_rebuild }}
           BUILD_SCRIPT: |
             #!/bin/bash
             set -euo pipefail
             source /overlay/portage_dna.sh
             emaint binhost --fix 2>/dev/null || true
-            emerge --getbinpkg --usepkg --buildpkg "$1"
+            
+            # ✅ CRITICAL FIX: If Force Rebuild is true, explicitly exclude the target package from binary resolution!
+            if [ "$FORCE_REBUILD" == "true" ]; then
+              echo ">>> EXECUTING FORCE REBUILD: Ignoring existing binaries for $1..."
+              emerge --getbinpkg --usepkg --buildpkg --usepkg-exclude "$1" "$1"
+            else
+              emerge --getbinpkg --usepkg --buildpkg "$1"
+            fi
         run: |
           if [ -n "${MISSING_PKGS:-}" ]; then
-            echo ">>> Building missing packages: $MISSING_PKGS"
+            echo ">>> Building missing/forced packages: $MISSING_PKGS"
             read -r -a MISSING <<< "$MISSING_PKGS"
             for pkg in "${MISSING[@]}"; do
               echo ">>> Building: $pkg"
@@ -235,6 +255,7 @@ jobs:
               docker run --rm --privileged \
                 -e GITHUB_REPOSITORY_OWNER \
                 -e GITHUB_REPOSITORY \
+                -e FORCE_REBUILD \
                 -v "${{ github.workspace }}:/overlay" \
                 -v "${{ github.workspace }}/binpkgs:/var/cache/binpkgs" \
                 -v "${{ github.workspace }}/distfiles:/var/cache/distfiles" \
@@ -246,7 +267,6 @@ jobs:
             echo ">>> All packages already exist locally/in Releases — nothing to build"
           fi
 
-      # ✅ FIX: Unified index is generated directly in the workspace `binpkgs` folder.
       - name: Generate Unified Portage Index
         run: |
           if [ -z "$(find ${{ github.workspace }}/binpkgs -name '*.gpkg.tar' 2>/dev/null)" ]; then
@@ -259,7 +279,6 @@ jobs:
             gentoo/stage3:amd64-desktop-openrc \
             bash -c "mkdir -p /var/db/repos/gentoo/metadata && echo 'masters = gentoo' > /var/db/repos/gentoo/metadata/layout.conf && emaint binhost --fix"
 
-      # ✅ FIX: Clean Release-Only deploy. No python, no gh-pages!
       - name: Deploy to GitHub Releases
         env:
           GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
@@ -278,7 +297,6 @@ jobs:
               --prerelease
           
           echo ">>> Uploading Binaries and Index to Release..."
-          # Find all .gpkg.tar files AND the Packages file and upload them
           find ${{ github.workspace }}/binpkgs -type f \( -name "*.gpkg.tar" -o -name "Packages" \) -exec gh release upload rolling -R "$REPO" {} --clobber \;
 
       - name: Fix Workspace Permissions for Cache
