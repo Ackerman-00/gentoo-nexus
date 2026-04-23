@@ -102,8 +102,8 @@ jobs:
           emerge --autounmask=y --autounmask-write {{TARGET}}
           SCRIPT
 
-          # Replace placeholder with actual target
-          sed -i "s/{{TARGET}}/${{ steps.queue.outputs.TARGET_PKG }}/" /tmp/docker-build.sh
+          # Replace placeholder with actual target (use | delimiter to avoid / conflict)
+          sed -i "s|{{TARGET}}|${{ steps.queue.outputs.TARGET_PKG }}|" /tmp/docker-build.sh
           chmod +x /tmp/docker-build.sh
 
           # Run the build inside Docker
