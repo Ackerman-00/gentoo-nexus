@@ -26,14 +26,29 @@ jobs:
         uses: actions/checkout@v4
         with:
           token: ${{ secrets.GITHUB_TOKEN }}
+          fetch-depth: 0
 
-      - name: Prepare Directories
+      - name: Prepare Workspace
         run: |
           mkdir -p binpkgs overlay distfiles ccache
-          # Ensure proper permissions for Docker mounts
           chmod -R 777 binpkgs overlay distfiles ccache
 
-      - name: Download Release Binaries (Primary Source)
+      - name: Copy Custom Ebuilds to Overlay
+        run: |
+          # Copy full category/package structure to overlay/
+          # This mirrors your repo: app-misc/dgop/, gui-wm/niri/, etc.
+          find . -mindepth 2 -maxdepth 2 -type d -name "*.ebuild" 2>/dev/null | \
+            xargs -r dirname | sort -u | while read -r pkgdir; do
+            category=$(basename "$(dirname "$pkgdir")")
+            pkgname=$(basename "$pkgdir")
+            mkdir -p "overlay/$category/$pkgname"
+            cp -r "$pkgdir"/* "overlay/$category/$pkgname/" 2>/dev/null || true
+          done
+          # Also copy repo metadata
+          [ -d metadata ] && cp -r metadata overlay/
+          [ -f profiles/repo_name ] && mkdir -p overlay/profiles && cp profiles/repo_name overlay/profiles/
+
+      - name: Download Release Binaries
         env:
           GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
         run: |
@@ -43,21 +58,21 @@ jobs:
             --repo ${{ github.repository }} \
             --dir binpkgs --clobber 2>/dev/null || true
 
-      - name: Parse & Check Queue
+      - name: Parse Queue
         id: queue
         run: |
           read -r -a PKGS <<< "${{ github.event.inputs.package_list }}"
           echo "TARGET_PKG=${PKGS[0]:-}" >> "$GITHUB_OUTPUT"
           echo "REMAINING_PKGS=${PKGS[*]:1}" >> "$GITHUB_OUTPUT"
 
-      - name: Check if Binary Exists (Void-Style Skip)
+      - name: Check Binary Exists (Void-Style Skip)
         id: check_bin
         run: |
           TARGET="${{ steps.queue.outputs.TARGET_PKG }}"
           [ -z "$TARGET" ] && { echo "skip_compile=true" >> "$GITHUB_OUTPUT"; exit 0; }
           
-          PN=$(echo "$TARGET" | sed 's/^=//' | awk -F/ '{print $NF}' | \
-               sed -E 's/-[0-9]+(\.[0-9]+)*(_[a-z0-9]+)?(-r[0-9]+)?$//')
+          # Extract package name (PN) correctly: handles =category/pkg-ver, pkg-ver, etc.
+          PN=$(echo "$TARGET" | sed -E 's/^=//' | awk -F/ '{print $NF}' | sed -E 's/-[0-9].*//')
           
           if [ "${{ github.event.inputs.force_rebuild }}" == "true" ]; then
             echo "⚡ Force rebuild: Will compile $TARGET"
@@ -70,7 +85,7 @@ jobs:
             echo "skip_compile=false" >> "$GITHUB_OUTPUT"
           fi
 
-      - name: Build Package (Minimal Docker Setup)
+      - name: Build Package (Fixed Docker Setup)
         if: steps.check_bin.outputs.skip_compile != 'true'
         run: |
           TARGET="${{ steps.queue.outputs.TARGET_PKG }}"
@@ -79,59 +94,56 @@ jobs:
             -v "${{ github.workspace }}/overlay:/var/db/repos/gentoo-nexus:ro" \
             -v "${{ github.workspace }}/distfiles:/var/cache/distfiles:rw" \
             -v "${{ github.workspace }}/ccache:/var/cache/ccache:rw" \
-            gentoo/stage3:amd64-desktop-openrc bash -c '
+            gentoo/stage3:amd64-desktop-openrc bash -c "
             set -euo pipefail
             
-            # === 1. Setup Gentoo repo FIRST ===
+            # 1. Initialize Gentoo repo (MUST exist before webrsync)
             mkdir -p /var/db/repos/gentoo
             emerge-webrsync -q
             
-            # === 2. Set profile properly ===
+            # 2. Set profile with fallback
             eselect profile set default/linux/amd64/23.0/desktop 2>/dev/null || \
-            eselect profile list | grep desktop | head -1 | awk "{print \$1}" | xargs -r eselect profile set || \
-            eselect profile set 1
+              eselect profile list 2>/dev/null | grep -m1 desktop | awk '{print \$1}' | xargs -r eselect profile set || \
+              eselect profile set 1
             
-            # === 3. Configure make.conf (critical: PKGDIR for emaint) ===
-            cat > /etc/portage/make.conf << '\''EOF'\''
-            COMMON_FLAGS="-O2 -march=x86-64 -pipe"
-            CFLAGS="${COMMON_FLAGS}"
-            CXXFLAGS="${COMMON_FLAGS}"
-            USE="wayland X vulkan pipewire dbus udev opengl dri gbm vaapi vdpau ffmpeg minizip -daemon -aqua -cups -gpm"
-            VIDEO_CARDS="amdgpu radeon radeonsi intel iris nouveau virgl"
-            FEATURES="buildpkg parallel-install getbinpkg ccache -sandbox -usersandbox -ipc-sandbox -network-sandbox -pid-sandbox -binpkg-request-signature -binpkg-sigverify"
-            BINPKG_FORMAT="gpkg"
-            PKGDIR="/var/cache/binpkgs"
-            CCACHE_DIR="/var/cache/ccache"
-            DISTDIR="/var/cache/distfiles"
-            ACCEPT_LICENSE="*"
-            ACCEPT_KEYWORDS="~amd64"
-            CONFIG_PROTECT_MASK="/etc/portage"
-            EMERGE_DEFAULT_OPTS="--getbinpkg --usepkg --buildpkg --quiet-build=y --jobs=4 --load-average=4 --keep-going"
-            MAKEOPTS="-j4"
-            PORTAGE_BINPKG_SIGVERIFY="0"
-            EOF
+            # 3. Write make.conf using printf (avoids heredoc issues)
+            printf '%s\n' \
+              'COMMON_FLAGS=\"-O2 -march=x86-64 -pipe\"' \
+              'CFLAGS=\"\${COMMON_FLAGS}\"' \
+              'CXXFLAGS=\"\${COMMON_FLAGS}\"' \
+              'USE=\"wayland X vulkan pipewire dbus udev opengl dri gbm vaapi vdpau ffmpeg minizip -daemon -aqua -cups -gpm\"' \
+              'VIDEO_CARDS=\"amdgpu radeon radeonsi intel iris nouveau virgl\"' \
+              'FEATURES=\"buildpkg parallel-install getbinpkg ccache -sandbox -usersandbox -ipc-sandbox -network-sandbox -pid-sandbox -binpkg-request-signature -binpkg-sigverify\"' \
+              'BINPKG_FORMAT=\"gpkg\"' \
+              'PKGDIR=\"/var/cache/binpkgs\"' \
+              'CCACHE_DIR=\"/var/cache/ccache\"' \
+              'DISTDIR=\"/var/cache/distfiles\"' \
+              'ACCEPT_LICENSE=\"*\"' \
+              'ACCEPT_KEYWORDS=\"~amd64\"' \
+              'CONFIG_PROTECT_MASK=\"/etc/portage\"' \
+              'EMERGE_DEFAULT_OPTS=\"--getbinpkg --usepkg --buildpkg --quiet-build=y --jobs=4 --load-average=4 --keep-going\"' \
+              'MAKEOPTS=\"-j4\"' \
+              'PORTAGE_BINPKG_SIGVERIFY=\"0\"' \
+              > /etc/portage/make.conf
             
-            # === 4. Setup custom overlay repo ===
+            # 4. Configure gentoo-nexus overlay repo
             mkdir -p /var/db/repos/gentoo-nexus/metadata
-            echo "masters = gentoo" > /var/db/repos/gentoo-nexus/metadata/layout.conf
-            echo "gentoo-nexus" > /var/db/repos/gentoo-nexus/profiles/repo_name
+            echo 'masters = gentoo' > /var/db/repos/gentoo-nexus/metadata/layout.conf
+            printf '%s\n' '[gentoo-nexus]' \
+              'location = /var/db/repos/gentoo-nexus' \
+              'masters = gentoo' \
+              'priority = 9999' \
+              'auto-sync = no' \
+              > /etc/portage/repos.conf/gentoo-nexus.conf
             
-            cat > /etc/portage/repos.conf/gentoo-nexus.conf << '\''EOF'\''
-            [gentoo-nexus]
-            location = /var/db/repos/gentoo-nexus
-            masters = gentoo
-            priority = 9999
-            auto-sync = no
-            EOF
-            
-            # === 5. Accept keywords for ~amd64 overlays ===
+            # 5. Accept ~amd64 keywords for overlay
             mkdir -p /etc/portage/package.accept_keywords
-            echo "*/*::gentoo-nexus **" > /etc/portage/package.accept_keywords/nexus
+            echo '*/*::gentoo-nexus **' > /etc/portage/package.accept_keywords/nexus
             
-            # === 6. Build the target ===
-            echo ">>> Building: '"'"'$TARGET'"'"'"
-            emerge --autounmask=y --autounmask-write --autounmask-continue=y "$TARGET"
-            '
+            # 6. Build the target package
+            echo \">>> Building: $TARGET\"
+            emerge --autounmask=y --autounmask-write --autounmask-continue=y \"$TARGET\"
+            "
 
       - name: Generate Packages Index (Correct Syntax)
         run: |
@@ -139,17 +151,13 @@ jobs:
             echo ">>> Regenerating Packages index..."
             docker run --rm \
               -v "${{ github.workspace }}/binpkgs:/var/cache/binpkgs:ro" \
-              gentoo/stage3:amd64-desktop-openrc bash -c '
-              # PKGDIR in make.conf tells emaint where to look
-              cat > /etc/portage/make.conf << '\''EOF'\''
-              PKGDIR="/var/cache/binpkgs"
-              BINPKG_FORMAT="gpkg"
-              EOF
+              gentoo/stage3:amd64-desktop-openrc bash -c "
+              printf '%s\n' 'PKGDIR=\"/var/cache/binpkgs\"' 'BINPKG_FORMAT=\"gpkg\"' > /etc/portage/make.conf
               emaint binhost --fix
-              '
+              "
           fi
 
-      - name: Upload to GitHub Release (Infinite Storage Pattern)
+      - name: Upload to GitHub Release (Infinite Storage)
         env:
           GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
         run: |
@@ -161,7 +169,7 @@ jobs:
               --notes "Automated Gentoo Binhost - GPKG format" \
               --prerelease
           
-          # Upload files one-by-one (avoids 2GB limit issues)
+          # Upload files one-by-one (avoids aggregate 2GB limit)
           for file in binpkgs/*.gpkg.tar binpkgs/Packages*; do
             [ -f "$file" ] || continue
             echo "📦 Uploading $(basename "$file")..."
@@ -179,7 +187,7 @@ jobs:
         env:
           GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
         run: |
-          echo "⚡ Relaying to next package: ${{ steps.queue.outputs.REMAINING_PKGS }}"
+          echo "⚡ Relaying to: ${{ steps.queue.outputs.REMAINING_PKGS }}"
           gh workflow run "${{ github.workflow }}" \
             --ref "${GITHUB_REF_NAME}" \
             --repo ${{ github.repository }} \
