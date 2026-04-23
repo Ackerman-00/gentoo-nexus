@@ -95,6 +95,8 @@ jobs:
             eselect profile list 2>/dev/null | grep -m1 desktop | awk '{print $1}' | tr -d '[]' | xargs -r eselect profile set || \
             eselect profile set 1
 
+          # Remove all pre-existing binhost configuration to avoid GPG verification
+          rm -f /etc/portage/binrepos.conf/*.conf 2>/dev/null || true
           mkdir -p /etc/portage/binrepos.conf
           cat > /etc/portage/binrepos.conf/gentoobinhost.conf << 'BINHOST'
           [gentoo]
