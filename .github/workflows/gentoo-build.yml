@@ -122,7 +122,7 @@ jobs:
             
             rm -rf /etc/portage/binrepos.conf/*
             
-            # Disable GPG checking ONLY for your custom Github packages
+            # Disable verification ONLY for your custom repo
             cat > /etc/portage/binrepos.conf/nexus-releases.conf << EOF
             [gentoo-nexus-releases]
             priority = 99999
@@ -130,14 +130,13 @@ jobs:
             verify-signature = false
             EOF
             
-            # Let the official Gentoo binhost naturally verify its own keys
+            # Official repo natively verifies signatures
             cat > /etc/portage/binrepos.conf/gentoobinhost.conf << 'EOF'
             [gentoobinhost]
             priority = 1
             sync-uri = https://distfiles.gentoo.org/releases/amd64/binpackages/23.0/x86-64/
             EOF
             
-            # Clean, vanilla FEATURES.
             cat > /etc/portage/make.conf << 'EOF'
             COMMON_FLAGS="-O2 -march=x86-64-v3 -pipe"
             CFLAGS="${COMMON_FLAGS}"
@@ -161,15 +160,16 @@ jobs:
             echo "MAKEOPTS=\"-j${NPROC}\"" >> /etc/portage/make.conf
             
             emerge-webrsync -q || true
-            
-            # ✅ THE ACTUAL FIX: Run getuto first, THEN hand the keys to portage user.
-            getuto || true
-            chown -R portage:portage /etc/portage/gnupg
-            chmod -R 0700 /etc/portage/gnupg
-            
             eselect profile set default/linux/amd64/23.0/desktop
             
-            # Fetch dependencies naturally
+            # 1. Let Gentoo fetch the keys and build the database natively
+            getuto
+            
+            # 2. Hand the database directly to the portage user so it has write access to lockfiles
+            chown -R portage:portage /etc/portage/gnupg
+            chmod -R u+rwX,go-rwx /etc/portage/gnupg
+            
+            # Verify and fetch binaries (GPG will now pass securely)
             emerge --noreplace --quiet --getbinpkg --usepkg dev-util/ccache dev-vcs/git
             
             printf "[repo]\nrepo-name = steam-overlay\nmasters = gentoo\n" > /var/db/repos/steam-overlay/metadata/layout.conf
@@ -240,6 +240,7 @@ jobs:
               emerge --getbinpkg --usepkg --buildpkg "$1"
             fi
         run: |
+          echo ">>> Building: $TARGET"
           echo "$BUILD_SCRIPT" > build_script.sh
           chmod +x build_script.sh
           docker run --rm --privileged \
