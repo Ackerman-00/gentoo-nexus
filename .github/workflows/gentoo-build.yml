@@ -90,7 +90,7 @@ jobs:
           mkdir -p /var/db/repos/gentoo
           emerge-webrsync -q
 
-          # Set profile with fallback (Fixed bracket parsing bug)
+          # Set profile with fallback
           eselect profile set default/linux/amd64/23.0/desktop 2>/dev/null || \
             eselect profile list 2>/dev/null | grep -m1 desktop | awk '{print $1}' | tr -d '[]' | xargs -r eselect profile set || \
             eselect profile set 1
@@ -129,11 +129,15 @@ jobs:
           mkdir -p /etc/portage/package.accept_keywords
           echo '*/*::gentoo-nexus **' > /etc/portage/package.accept_keywords/nexus
 
+          # --- BUG FIX: GENERATE MISSING MANIFESTS ---
+          echo ">>> Generating cryptographic Manifest files for the overlay..."
+          find /var/db/repos/gentoo-nexus -name "*.ebuild" -exec ebuild {} manifest \;
+
           # Build target
           echo ">>> Building: $1"
           emerge --autounmask=y --autounmask-write --autounmask-continue=y "$1"
           
-          # Regenerate Packages index immediately while tree is synced (Fixes isolated container crash)
+          # Regenerate Packages index immediately while tree is synced
           echo ">>> Regenerating Packages index..."
           emaint binhost --fix
           BUILDSCRIPT
