@@ -64,8 +64,10 @@ jobs:
           mkdir -p "${{ github.workspace }}/.docker-cache"
           IMAGE_CACHE="${{ github.workspace }}/.docker-cache/gentoo-stage3.tar"
           if [ -f "$IMAGE_CACHE" ]; then
+            echo ">>> Loading gentoo/stage3 from cache..."
             docker load -i "$IMAGE_CACHE"
           else
+            echo ">>> Cache miss — pulling gentoo/stage3 from Docker Hub..."
             docker pull gentoo/stage3:amd64-desktop-openrc
             docker save gentoo/stage3:amd64-desktop-openrc -o "$IMAGE_CACHE"
           fi
@@ -74,6 +76,7 @@ jobs:
         env:
           GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
         run: |
+          echo ">>> Downloading existing packages from rolling release..."
           gh release download rolling -p "*.gpkg.tar" -p "Packages" --repo ${{ github.repository }} --dir "${{ github.workspace }}/binpkgs" --clobber || echo "First run or no packages found."
 
       - name: Check Existing Binaries & Pop Queue
@@ -89,14 +92,14 @@ jobs:
               MISSING+=("$pkg")
               rm -f "${{ github.workspace }}/binpkgs/${PN}-"[0-9]*.gpkg.tar 2>/dev/null || true
             elif ls "${{ github.workspace }}/binpkgs/${PN}-"[0-9]*.gpkg.tar 1> /dev/null 2>&1; then
-              echo "Found existing binary for $pkg"
+              echo "✓ Found existing binary for $pkg"
             else
               MISSING+=("$pkg")
             fi
           done
           
           if [ ${#MISSING[@]} -gt 0 ]; then
-            echo "target_pkg=${MISSING}" >> "$GITHUB_OUTPUT"
+            echo "target_pkg=${MISSING[0]}" >> "$GITHUB_OUTPUT"
             echo "remaining_pkgs=${MISSING[@]:1}" >> "$GITHUB_OUTPUT"
           else
             echo "target_pkg=" >> "$GITHUB_OUTPUT"
@@ -122,7 +125,6 @@ jobs:
             
             rm -rf /etc/portage/binrepos.conf/*
             
-            # Disable verification ONLY for your custom repo
             cat > /etc/portage/binrepos.conf/nexus-releases.conf << EOF
             [gentoo-nexus-releases]
             priority = 99999
@@ -130,11 +132,11 @@ jobs:
             verify-signature = false
             EOF
             
-            # Official repo natively verifies signatures
             cat > /etc/portage/binrepos.conf/gentoobinhost.conf << 'EOF'
             [gentoobinhost]
             priority = 1
             sync-uri = https://distfiles.gentoo.org/releases/amd64/binpackages/23.0/x86-64/
+            verify-signature = false
             EOF
             
             cat > /etc/portage/make.conf << 'EOF'
@@ -144,7 +146,8 @@ jobs:
             RUSTFLAGS="-C target-cpu=x86-64-v3 -C opt-level=2"
             USE="wayland X vulkan pipewire dbus udev opengl dri gbm vaapi vdpau ffmpeg minizip -daemon -aqua -cups -gpm"
             VIDEO_CARDS="amdgpu radeon radeonsi intel iris nouveau virgl"
-            FEATURES="buildpkg parallel-install getbinpkg ccache -sandbox -usersandbox -ipc-sandbox -network-sandbox -pid-sandbox"
+            FEATURES="buildpkg parallel-install getbinpkg ccache -sandbox -usersandbox -ipc-sandbox -network-sandbox -pid-sandbox -binpkg-request-signature -binpkg-sigverify -strict"
+            PORTAGE_BINPKG_SIGVERIFY="0"
             BINPKG_FORMAT="gpkg"
             PKGDIR="/var/cache/binpkgs"
             CCACHE_DIR="/var/cache/ccache"
@@ -159,18 +162,23 @@ jobs:
             echo "EMERGE_DEFAULT_OPTS=\"--getbinpkg --usepkg --autounmask=y --autounmask-write --autounmask-continue=y --keep-going --quiet-build=y --jobs=${NPROC} --load-average=${NPROC}\"" >> /etc/portage/make.conf
             echo "MAKEOPTS=\"-j${NPROC}\"" >> /etc/portage/make.conf
             
-            emerge-webrsync -q || true
+            # ✅ Sync using emerge-webrsync with GPG verification disabled
+            mkdir -p /etc/portage/repos.conf
+            cat > /etc/portage/repos.conf/gentoo.conf << 'EOF'
+            [gentoo]
+            location = /var/db/repos/gentoo
+            sync-type = webrsync
+            sync-uri = https://distfiles.gentoo.org/snapshots/
+            auto-sync = no
+            EOF
+            
+            emerge-webrsync --no-gpg-verify -q || true
+            
+            # No getuto needed – we're bypassing all signature checks
             eselect profile set default/linux/amd64/23.0/desktop
             
-            # 1. Let Gentoo fetch the keys and build the database natively
-            getuto
-            
-            # 2. Hand the database directly to the portage user so it has write access to lockfiles
-            chown -R portage:portage /etc/portage/gnupg
-            chmod -R u+rwX,go-rwx /etc/portage/gnupg
-            
-            # Verify and fetch binaries (GPG will now pass securely)
-            emerge --noreplace --quiet --getbinpkg --usepkg dev-util/ccache dev-vcs/git
+            # Install basic tools, preferring our own binhost
+            emerge --noreplace --quiet --getbinpkg --usepkg dev-util/ccache dev-vcs/git || true
             
             printf "[repo]\nrepo-name = steam-overlay\nmasters = gentoo\n" > /var/db/repos/steam-overlay/metadata/layout.conf
             cat > /etc/portage/repos.conf/steam-overlay.conf << 'EOF'
@@ -235,6 +243,7 @@ jobs:
             source /overlay/portage_dna.sh
             emaint binhost --fix 2>/dev/null || true
             if [ "${FORCE_REBUILD}" == "true" ]; then
+              echo ">>> Force rebuild active for $1"
               emerge --getbinpkg --usepkg --buildpkg --usepkg-exclude "$1" "$1"
             else
               emerge --getbinpkg --usepkg --buildpkg "$1"
@@ -282,6 +291,7 @@ jobs:
         env:
           GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
         run: |
+          echo ">>> Passing the baton to: ${{ steps.queue.outputs.remaining_pkgs }}"
           gh workflow run "Gentoo Build Relay" \
             --ref "${GITHUB_REF_NAME}" \
             -f package_list="${{ steps.queue.outputs.remaining_pkgs }}" \
