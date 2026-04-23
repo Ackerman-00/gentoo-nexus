@@ -37,7 +37,11 @@ jobs:
         run: |
           rsync -a --exclude='.git' --exclude='binpkgs' --exclude='overlay' ./ overlay/
           mkdir -p overlay/metadata
-          echo "masters = gentoo" > overlay/metadata/layout.conf
+          cat > overlay/metadata/layout.conf << 'LAYOUTEOF'
+          masters = gentoo
+          thin-manifests = true
+          sign-manifests = false
+          LAYOUTEOF
           mkdir -p overlay/profiles
           echo "gentoo-nexus" > overlay/profiles/repo_name
           chmod -R 777 overlay/
@@ -56,25 +60,23 @@ jobs:
         id: queue
         run: |
           read -r -a PKGS <<< "${{ github.event.inputs.package_list }}"
-          echo "TARGET_PKG=${PKGS:-}" >> "$GITHUB_OUTPUT"
+          echo "TARGET_PKG=${PKGS[0]:-}" >> "$GITHUB_OUTPUT"
           echo "REMAINING_PKGS=${PKGS[*]:1}" >> "$GITHUB_OUTPUT"
 
-      - name: Check Binary Exists (Void-Style Skip)
+      - name: Check Binary Exists
         id: check_bin
         run: |
           TARGET="${{ steps.queue.outputs.TARGET_PKG }}"
           [ -z "$TARGET" ] && { echo "skip_compile=true" >> "$GITHUB_OUTPUT"; exit 0; }
-          # Isolate the Package Name (PN) by stripping category and versioning
           PN=$(echo "$TARGET" | sed -E 's/^=//' | awk -F/ '{print $NF}' | sed -E 's/-[0-9].*//')
-          
           if [ "${{ github.event.inputs.force_rebuild }}" == "true" ]; then
-            echo "⚡ Force rebuild: Will compile $TARGET"
+            echo "Force rebuild: Will compile $TARGET"
             echo "skip_compile=false" >> "$GITHUB_OUTPUT"
           elif ls binpkgs/${PN}-*.gpkg.tar >/dev/null 2>&1; then
-            echo "✓ Binary ${PN}-*.gpkg.tar exists. Skipping compile."
+            echo "Binary ${PN}-*.gpkg.tar exists. Skipping compile."
             echo "skip_compile=true" >> "$GITHUB_OUTPUT"
           else
-            echo "❌ No binary for $PN. Will compile from source."
+            echo "No binary for $PN. Will compile from source."
             echo "skip_compile=false" >> "$GITHUB_OUTPUT"
           fi
 
@@ -86,36 +88,28 @@ jobs:
           #!/bin/bash
           set -euo pipefail
 
-          # Initialize Gentoo repo
           mkdir -p /var/db/repos/gentoo
           emerge-webrsync -q
 
-          # Set profile with fallback
           eselect profile set default/linux/amd64/23.0/desktop 2>/dev/null || \
             eselect profile list 2>/dev/null | grep -m1 desktop | awk '{print $1}' | tr -d '[]' | xargs -r eselect profile set || \
             eselect profile set 1
 
-          # Write make.conf
           cat > /etc/portage/make.conf << 'MAKECONF'
           COMMON_FLAGS="-O2 -march=x86-64 -pipe"
           CFLAGS="${COMMON_FLAGS}"
           CXXFLAGS="${COMMON_FLAGS}"
-          USE="wayland X vulkan pipewire dbus udev opengl dri gbm vaapi vdpau ffmpeg minizip -daemon -aqua -cups -gpm"
-          VIDEO_CARDS="amdgpu radeon radeonsi intel iris nouveau virgl"
-          FEATURES="buildpkg parallel-install getbinpkg ccache -sandbox -usersandbox -ipc-sandbox -network-sandbox -pid-sandbox -binpkg-request-signature -binpkg-sigverify"
+          FEATURES="buildpkg parallel-install getbinpkg -sandbox -usersandbox -ipc-sandbox -network-sandbox -pid-sandbox -binpkg-request-signature -binpkg-sigverify"
           BINPKG_FORMAT="gpkg"
           PKGDIR="/var/cache/binpkgs"
-          CCACHE_DIR="/var/cache/ccache"
           DISTDIR="/var/cache/distfiles"
           ACCEPT_LICENSE="*"
           ACCEPT_KEYWORDS="~amd64"
-          CONFIG_PROTECT_MASK="/etc/portage"
           EMERGE_DEFAULT_OPTS="--getbinpkg --usepkg --buildpkg --quiet-build=y --jobs=4 --load-average=4 --keep-going"
           MAKEOPTS="-j4"
           PORTAGE_BINPKG_SIGVERIFY="0"
           MAKECONF
 
-          # Register overlay repo
           mkdir -p /etc/portage/repos.conf
           cat > /etc/portage/repos.conf/gentoo-nexus.conf << 'REPOCONF'
           [gentoo-nexus]
@@ -125,23 +119,16 @@ jobs:
           auto-sync = no
           REPOCONF
 
-          # Accept keywords for overlay
           mkdir -p /etc/portage/package.accept_keywords
           echo '*/*::gentoo-nexus **' > /etc/portage/package.accept_keywords/nexus
 
-          # --- BUG FIX: GENERATE MISSING MANIFESTS ---
-          echo ">>> Generating cryptographic Manifest files for the overlay..."
-          find /var/db/repos/gentoo-nexus -name "*.ebuild" -exec ebuild {} manifest \;
-
-          # Build target
           echo ">>> Building: $1"
           emerge --autounmask=y --autounmask-write --autounmask-continue=y "$1"
-          
-          # Regenerate Packages index immediately while tree is synced
+
           echo ">>> Regenerating Packages index..."
           emaint binhost --fix
           BUILDSCRIPT
-          
+
           chmod +x build_inside_docker.sh
           echo "TARGET=$TARGET" >> "$GITHUB_ENV"
 
@@ -160,21 +147,34 @@ jobs:
       - name: Upload to GitHub Release
         env:
           GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+          REPO: ${{ github.repository }}
         run: |
-          gh release view rolling --repo ${{ github.repository }} 2>/dev/null || \
+          gh release view rolling --repo "$REPO" 2>/dev/null || \
             gh release create rolling \
-              --repo ${{ github.repository }} \
+              --repo "$REPO" \
               --title "Nexus Rolling Binaries" \
               --notes "Automated Gentoo Binhost - GPKG format" \
               --prerelease
-              
+
+          retry_upload() {
+            local file="$1"
+            local max_retries=3
+            for i in $(seq 1 $max_retries); do
+              if gh release upload rolling "$file" --repo "$REPO" --clobber 2>&1; then
+                return 0
+              fi
+              sleep 5
+            done
+            echo "::error::Failed to upload $file after $max_retries attempts"
+            return 1
+          }
+
           shopt -s nullglob
-          for file in binpkgs/*.gpkg.tar binpkgs/Packages*; do
-            [ -f "$file" ] || continue
-            echo "📦 Uploading $(basename "$file")..."
-            gh release upload rolling "$file" \
-              --repo ${{ github.repository }} \
-              --clobber 2>/dev/null || true
+          for file in binpkgs/Packages*; do
+            [ -f "$file" ] && retry_upload "$file"
+          done
+          for file in binpkgs/*.gpkg.tar; do
+            [ -f "$file" ] && retry_upload "$file"
           done
 
       - name: Fix Workspace Permissions
@@ -186,7 +186,7 @@ jobs:
         env:
           GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
         run: |
-          echo "⚡ Relaying to: ${{ steps.queue.outputs.REMAINING_PKGS }}"
+          echo "Relaying to: ${{ steps.queue.outputs.REMAINING_PKGS }}"
           gh workflow run "${{ github.workflow }}" \
             --ref "${GITHUB_REF_NAME}" \
             --repo ${{ github.repository }} \
