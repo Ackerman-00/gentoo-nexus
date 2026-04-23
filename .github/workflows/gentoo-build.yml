@@ -76,62 +76,25 @@ jobs:
             echo "skip_compile=false" >> "$GITHUB_OUTPUT"
           fi
 
-      - name: Write Docker Build Script to File
+      # === KEY FIX: Write Docker script using printf (NO HEREDOCS) ===
+      - name: Write Build Script to File
         if: steps.check_bin.outputs.skip_compile != 'true'
         run: |
-          TARGET="${{ steps.queue.outputs.TARGET_PKG }}"
-          cat > build_inside_docker.sh << 'BUILDSCRIPT'
+          cat > build_inside_docker.sh << 'ENDOFSCRIPT'
 #!/bin/bash
 set -euo pipefail
-
-# Initialize Gentoo repo
 mkdir -p /var/db/repos/gentoo
 emerge-webrsync -q
-
-# Set profile with fallback
-eselect profile set default/linux/amd64/23.0/desktop 2>/dev/null || \
-  eselect profile list 2>/dev/null | grep -m1 desktop | awk '{print $1}' | xargs -r eselect profile set || \
-  eselect profile set 1
-
-# Write make.conf
-cat > /etc/portage/make.conf << 'MAKECONF'
-COMMON_FLAGS="-O2 -march=x86-64 -pipe"
-CFLAGS="${COMMON_FLAGS}"
-CXXFLAGS="${COMMON_FLAGS}"
-USE="wayland X vulkan pipewire dbus udev opengl dri gbm vaapi vdpau ffmpeg minizip -daemon -aqua -cups -gpm"
-VIDEO_CARDS="amdgpu radeon radeonsi intel iris nouveau virgl"
-FEATURES="buildpkg parallel-install getbinpkg ccache -sandbox -usersandbox -ipc-sandbox -network-sandbox -pid-sandbox -binpkg-request-signature -binpkg-sigverify"
-BINPKG_FORMAT="gpkg"
-PKGDIR="/var/cache/binpkgs"
-CCACHE_DIR="/var/cache/ccache"
-DISTDIR="/var/cache/distfiles"
-ACCEPT_LICENSE="*"
-ACCEPT_KEYWORDS="~amd64"
-CONFIG_PROTECT_MASK="/etc/portage"
-EMERGE_DEFAULT_OPTS="--getbinpkg --usepkg --buildpkg --quiet-build=y --jobs=4 --load-average=4 --keep-going"
-MAKEOPTS="-j4"
-PORTAGE_BINPKG_SIGVERIFY="0"
-MAKECONF
-
-# Register overlay repo
-cat > /etc/portage/repos.conf/gentoo-nexus.conf << 'REPOCONF'
-[gentoo-nexus]
-location = /var/db/repos/gentoo-nexus
-masters = gentoo
-priority = 9999
-auto-sync = no
-REPOCONF
-
-# Accept keywords for overlay
+eselect profile set default/linux/amd64/23.0/desktop 2>/dev/null || eselect profile list 2>/dev/null | grep -m1 desktop | awk '{print $1}' | xargs -r eselect profile set || eselect profile set 1
+printf '%s\n' 'COMMON_FLAGS="-O2 -march=x86-64 -pipe"' 'CFLAGS="${COMMON_FLAGS}"' 'CXXFLAGS="${COMMON_FLAGS}"' 'USE="wayland X vulkan pipewire dbus udev opengl dri gbm vaapi vdpau ffmpeg minizip -daemon -aqua -cups -gpm"' 'VIDEO_CARDS="amdgpu radeon radeonsi intel iris nouveau virgl"' 'FEATURES="buildpkg parallel-install getbinpkg ccache -sandbox -usersandbox -ipc-sandbox -network-sandbox -pid-sandbox -binpkg-request-signature -binpkg-sigverify"' 'BINPKG_FORMAT="gpkg"' 'PKGDIR="/var/cache/binpkgs"' 'CCACHE_DIR="/var/cache/ccache"' 'DISTDIR="/var/cache/distfiles"' 'ACCEPT_LICENSE="*"' 'ACCEPT_KEYWORDS="~amd64"' 'CONFIG_PROTECT_MASK="/etc/portage"' 'EMERGE_DEFAULT_OPTS="--getbinpkg --usepkg --buildpkg --quiet-build=y --jobs=4 --load-average=4 --keep-going"' 'MAKEOPTS="-j4"' 'PORTAGE_BINPKG_SIGVERIFY="0"' > /etc/portage/make.conf
+printf '%s\n' '[gentoo-nexus]' 'location = /var/db/repos/gentoo-nexus' 'masters = gentoo' 'priority = 9999' 'auto-sync = no' > /etc/portage/repos.conf/gentoo-nexus.conf
 mkdir -p /etc/portage/package.accept_keywords
 echo '*/*::gentoo-nexus **' > /etc/portage/package.accept_keywords/nexus
-
-# Build target (TARGET is passed as $1)
 echo ">>> Building: $1"
 emerge --autounmask=y --autounmask-write --autounmask-continue=y "$1"
-BUILDSCRIPT
+ENDOFSCRIPT
           chmod +x build_inside_docker.sh
-          echo "TARGET=$TARGET" >> "$GITHUB_ENV"
+          echo "TARGET=${{ steps.queue.outputs.TARGET_PKG }}" >> "$GITHUB_ENV"
 
       - name: Build Package in Docker
         if: steps.check_bin.outputs.skip_compile != 'true'
@@ -149,12 +112,11 @@ BUILDSCRIPT
         run: |
           if ls binpkgs/*.gpkg.tar >/dev/null 2>&1; then
             echo ">>> Regenerating Packages index..."
-            # Write minimal make.conf for emaint
-            echo 'PKGDIR="/var/cache/binpkgs"' > /tmp/emaint_make.conf
-            echo 'BINPKG_FORMAT="gpkg"' >> /tmp/emaint_make.conf
+            echo 'PKGDIR="/var/cache/binpkgs"' > /tmp/emaint.conf
+            echo 'BINPKG_FORMAT="gpkg"' >> /tmp/emaint.conf
             docker run --rm \
               -v "${{ github.workspace }}/binpkgs:/var/cache/binpkgs:rw" \
-              -v /tmp/emaint_make.conf:/etc/portage/make.conf:ro \
+              -v /tmp/emaint.conf:/etc/portage/make.conf:ro \
               gentoo/stage3:amd64-desktop-openrc \
               emaint binhost --fix
           fi
