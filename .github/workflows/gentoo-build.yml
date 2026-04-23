@@ -123,11 +123,11 @@ jobs:
             mkdir -p /var/db/repos/{gentoo,steam-overlay}
             mkdir -p /etc/portage/{repos.conf,binrepos.conf,env,package.{accept_keywords,license,use,env}}
             
-            # ✅ THE FIX: Nuke system defaults so they can't secretly re-enable GPG
+            # Nuke default binrepos so they can't secretly re-enable GPG
             rm -rf /etc/portage/binrepos.conf/*
             rm -f /usr/share/portage/config/binrepos.conf || true
             
-            # ✅ THE FIX: Explicitly disable signatures across ALL layers
+            # Binrepos config: disable signatures everywhere
             cat > /etc/portage/binrepos.conf/00-nexus.conf << EOF
             [DEFAULT]
             verify-signature = false
@@ -143,7 +143,25 @@ jobs:
             verify-signature = false
             EOF
             
-            # ✅ THE FIX: Add PORTAGE_TRUST_HELPER silencer and remove GPG FEATURES
+            # Main Gentoo repo config (no GPG; no rsync)
+            mkdir -p /etc/portage/repos.conf
+            cat > /etc/portage/repos.conf/gentoo.conf << 'EOF'
+            [gentoo]
+            location = /var/db/repos/gentoo
+            sync-type = webrsync
+            sync-uri = https://snapshots.gentoo.org/portage
+            auto-sync = yes
+            sync-webrsync-verify-signature = no
+            EOF
+            
+            # Standard Gentoo profile directory (minimal)
+            mkdir -p /var/db/repos/gentoo/profiles
+            mkdir -p /var/db/repos/gentoo/profiles/default/linux/amd64
+            mkdir -p /var/db/repos/gentoo/profiles/default/linux/amd64/23.0
+            mkdir -p /var/db/repos/gentoo/profiles/default/linux/amd64/23.0/desktop
+            echo "default/linux/amd64/23.0/desktop" > /etc/portage/make.profile || true
+            
+            # Make.conf (no GPG, always prefer binpkgs)
             cat > /etc/portage/make.conf << 'EOF'
             COMMON_FLAGS="-O2 -march=x86-64-v3 -pipe"
             CFLAGS="${COMMON_FLAGS}"
@@ -168,29 +186,43 @@ jobs:
             echo "EMERGE_DEFAULT_OPTS=\"--getbinpkg --usepkg --autounmask=y --autounmask-write --autounmask-continue=y --keep-going --quiet-build=y --jobs=${NPROC} --load-average=${NPROC}\"" >> /etc/portage/make.conf
             echo "MAKEOPTS=\"-j${NPROC}\"" >> /etc/portage/make.conf
             
-            # Sync without verifying the tarball
-            emerge-webrsync --no-gpg-verify -q || true
+            # Sync without GPG (no --no-gpg-verify; controlled by config)
+            emerge-webrsync -q || true
             
-            eselect profile set default/linux/amd64/23.0/desktop
+            # Resilient profile setting
+            if eselect profile list 2>/dev/null | grep -q "default/linux/amd64/23.0/desktop"; then
+              eselect profile set default/linux/amd64/23.0/desktop
+            else
+              echo ">>> default/linux/amd64/23.0/desktop not found; choosing first profile." >&2
+              eselect profile set 1
+            fi
             
-            # Install native binaries without checks
-            emerge --noreplace --quiet --getbinpkg --usepkg dev-util/ccache dev-vcs/git
+            # Install helper tools (ccache, git)
+            emerge --noreplace --quiet --getbinpkg --usepkg dev-util/ccache dev-vcs/git 2>/dev/null || true
             
+            # Steam overlay
+            mkdir -p /var/db/repos/steam-overlay/profiles
+            echo "steam-overlay" > /var/db/repos/steam-overlay/profiles/repo_name
+            echo "8" > /var/db/repos/steam-overlay/profiles/eapi
             printf "[repo]\nrepo-name = steam-overlay\nmasters = gentoo\n" > /var/db/repos/steam-overlay/metadata/layout.conf
+            
             cat > /etc/portage/repos.conf/steam-overlay.conf << 'EOF'
             [steam-overlay]
             location = /var/db/repos/steam-overlay
             masters = gentoo
             priority = 50
             EOF
+            
             cat > /etc/portage/repos.conf/gentoo-nexus.conf << 'EOF'
             [gentoo-nexus]
             location = /overlay
             masters = gentoo
             priority = 9999
             EOF
+            
             echo "*/*::steam-overlay **" > /etc/portage/package.accept_keywords/steam
             echo "*/*::gentoo-nexus **" > /etc/portage/package.accept_keywords/nexus
+            
             cat >> /etc/portage/package.accept_keywords/nexus << 'EOF'
             media-libs/mesa ~amd64
             media-libs/vulkan-loader ~amd64
@@ -204,6 +236,7 @@ jobs:
             sys-kernel/linux-firmware ~amd64
             virtual/dist-kernel ~amd64
             EOF
+            
             cat > /etc/portage/package.use/global << 'EOF'
             sys-libs/zlib minizip
             media-video/pipewire extra
@@ -212,11 +245,13 @@ jobs:
             dev-libs/openssl -bindist
             games-util/steam-launcher steamruntime
             EOF
+            
             cat > /etc/portage/env/no-lto << 'EOF'
             CFLAGS="-O1 -pipe -fno-lto -fno-tree-loop-vectorize -fno-tree-slp-vectorize"
             CXXFLAGS="-O1 -pipe -fno-lto -fno-tree-loop-vectorize -fno-tree-slp-vectorize"
             EOF
             echo "MAKEOPTS=\"-j${NPROC}\"" >> /etc/portage/env/no-lto
+            
             cat > /etc/portage/package.env/no-lto-packages << 'EOF'
             dev-util/spirv-tools no-lto
             media-libs/mesa no-lto
@@ -264,7 +299,7 @@ jobs:
           docker run --rm \
             -v "${{ github.workspace }}/binpkgs:/var/cache/binpkgs" \
             gentoo/stage3:amd64-desktop-openrc \
-            bash -c "mkdir -p /var/db/repos/gentoo/metadata && echo 'masters = gentoo' > /var/db/repos/gentoo/metadata/layout.conf && PKGDIR='/var/cache/binpkgs' emaint binhost --fix"
+            bash -c 'mkdir -p /var/db/repos/gentoo/metadata && echo "masters = gentoo" > /var/db/repos/gentoo/metadata/layout.conf && PKGDIR="/var/cache/binpkgs" emaint binhost --fix'
 
       - name: Deploy to GitHub Releases
         if: steps.queue.outputs.target_pkg != ''
