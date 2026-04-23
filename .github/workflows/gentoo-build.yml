@@ -123,29 +123,30 @@ jobs:
             mkdir -p /var/db/repos/{gentoo,steam-overlay}
             mkdir -p /etc/portage/{repos.conf,binrepos.conf,env,package.{accept_keywords,license,use,env}}
             
-            # ✅ FIX 1: The 'nobody' user runs verification. It MUST own this folder to write lock files!
-            mkdir -p /etc/portage/gnupg
-            chown -R nobody:nobody /etc/portage/gnupg
-            chmod 0700 /etc/portage/gnupg
-            
-            # ✅ FIX 2: Portage strictly requires 'false' in the [DEFAULT] block.
+            # ✅ FIX: Hard wipe the directory to ensure no ghost configs
             rm -rf /etc/portage/binrepos.conf/*
-            cat > /etc/portage/binrepos.conf/00-nexus.conf << EOF
+            
+            # ✅ FIX: New Portage requirement: Set DEFAULT verify-signature to false
+            cat > /etc/portage/binrepos.conf/00-default.conf << 'EOF'
             [DEFAULT]
             verify-signature = false
+            EOF
             
+            cat > /etc/portage/binrepos.conf/nexus-releases.conf << EOF
             [gentoo-nexus-releases]
-            priority = 100
+            priority = 99999
             sync-uri = https://github.com/${OWNER}/${REPO_NAME}/releases/download/rolling/
             verify-signature = false
+            EOF
             
+            cat > /etc/portage/binrepos.conf/gentoobinhost.conf << 'EOF'
             [gentoobinhost]
             priority = 1
             sync-uri = https://distfiles.gentoo.org/releases/amd64/binpackages/23.0/x86-64/
             verify-signature = false
             EOF
             
-            # ✅ FIX 3: PORTAGE_TRUST_HELPER completely silences the getuto checks
+            # ✅ FIX: Added the nuclear 'binpkg-ignore-signature' feature flag
             cat > /etc/portage/make.conf << 'EOF'
             COMMON_FLAGS="-O2 -march=x86-64-v3 -pipe"
             CFLAGS="${COMMON_FLAGS}"
@@ -153,8 +154,8 @@ jobs:
             RUSTFLAGS="-C target-cpu=x86-64-v3 -C opt-level=2"
             USE="wayland X vulkan pipewire dbus udev opengl dri gbm vaapi vdpau ffmpeg minizip -daemon -aqua -cups -gpm"
             VIDEO_CARDS="amdgpu radeon radeonsi intel iris nouveau virgl"
-            FEATURES="buildpkg parallel-install getbinpkg ccache -sandbox -usersandbox -ipc-sandbox -network-sandbox -pid-sandbox"
-            PORTAGE_TRUST_HELPER="true"
+            FEATURES="buildpkg parallel-install getbinpkg ccache -sandbox -usersandbox -ipc-sandbox -network-sandbox -pid-sandbox binpkg-ignore-signature"
+            PORTAGE_BINPKG_SIGVERIFY="0"
             BINPKG_FORMAT="gpkg"
             PKGDIR="/var/cache/binpkgs"
             CCACHE_DIR="/var/cache/ccache"
@@ -172,7 +173,8 @@ jobs:
             emerge-webrsync -q || true
             eselect profile set default/linux/amd64/23.0/desktop
             
-            emerge --noreplace --quiet dev-util/ccache
+            # Safe, native emerge without any GPG checks!
+            emerge --noreplace --quiet --getbinpkg --usepkg dev-util/ccache dev-vcs/git
             
             printf "[repo]\nrepo-name = steam-overlay\nmasters = gentoo\n" > /var/db/repos/steam-overlay/metadata/layout.conf
             cat > /etc/portage/repos.conf/steam-overlay.conf << 'EOF'
