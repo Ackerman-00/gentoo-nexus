@@ -20,7 +20,7 @@ DEPEND="
     gui-libs/gtk:4
     gui-libs/libadwaita:1
     net-libs/libsoup:3.0
-    net-libs/webkit-gtk:6.0
+    net-libs/webkit-gtk
 "
 RDEPEND="${DEPEND}"
 BDEPEND="
