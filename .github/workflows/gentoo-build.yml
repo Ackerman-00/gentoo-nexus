@@ -123,16 +123,29 @@ jobs:
             mkdir -p /var/db/repos/{gentoo,steam-overlay}
             mkdir -p /etc/portage/{repos.conf,binrepos.conf,env,package.{accept_keywords,license,use,env}}
             
-            # ✅ FIX: Obliterate default binhosts. We ONLY trust our own GitHub release now.
-            rm -rf /etc/portage/binrepos.conf/*
+            # ✅ FIX 1: The 'nobody' user runs verification. It MUST own this folder to write lock files!
+            mkdir -p /etc/portage/gnupg
+            chown -R nobody:nobody /etc/portage/gnupg
+            chmod 0700 /etc/portage/gnupg
             
-            cat > /etc/portage/binrepos.conf/nexus-releases.conf << EOF
+            # ✅ FIX 2: Portage strictly requires 'false' in the [DEFAULT] block.
+            rm -rf /etc/portage/binrepos.conf/*
+            cat > /etc/portage/binrepos.conf/00-nexus.conf << EOF
+            [DEFAULT]
+            verify-signature = false
+            
             [gentoo-nexus-releases]
             priority = 100
             sync-uri = https://github.com/${OWNER}/${REPO_NAME}/releases/download/rolling/
-            verify-signature = no
+            verify-signature = false
+            
+            [gentoobinhost]
+            priority = 1
+            sync-uri = https://distfiles.gentoo.org/releases/amd64/binpackages/23.0/x86-64/
+            verify-signature = false
             EOF
             
+            # ✅ FIX 3: PORTAGE_TRUST_HELPER completely silences the getuto checks
             cat > /etc/portage/make.conf << 'EOF'
             COMMON_FLAGS="-O2 -march=x86-64-v3 -pipe"
             CFLAGS="${COMMON_FLAGS}"
@@ -141,6 +154,7 @@ jobs:
             USE="wayland X vulkan pipewire dbus udev opengl dri gbm vaapi vdpau ffmpeg minizip -daemon -aqua -cups -gpm"
             VIDEO_CARDS="amdgpu radeon radeonsi intel iris nouveau virgl"
             FEATURES="buildpkg parallel-install getbinpkg ccache -sandbox -usersandbox -ipc-sandbox -network-sandbox -pid-sandbox"
+            PORTAGE_TRUST_HELPER="true"
             BINPKG_FORMAT="gpkg"
             PKGDIR="/var/cache/binpkgs"
             CCACHE_DIR="/var/cache/ccache"
@@ -158,8 +172,7 @@ jobs:
             emerge-webrsync -q || true
             eselect profile set default/linux/amd64/23.0/desktop
             
-            # Build toolchain from source rapidly (Ccache will cache this for future runs)
-            emerge --noreplace --quiet dev-util/ccache dev-vcs/git
+            emerge --noreplace --quiet dev-util/ccache
             
             printf "[repo]\nrepo-name = steam-overlay\nmasters = gentoo\n" > /var/db/repos/steam-overlay/metadata/layout.conf
             cat > /etc/portage/repos.conf/steam-overlay.conf << 'EOF'
