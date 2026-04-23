@@ -95,20 +95,20 @@ jobs:
             eselect profile list 2>/dev/null | grep -m1 desktop | awk '{print $1}' | tr -d '[]' | xargs -r eselect profile set || \
             eselect profile set 1
 
-          # Completely remove all official binary hosts – build everything from source
+          # No official binhost; use only locally stored binary packages from our own cache
           rm -rf /etc/portage/binrepos.conf/
 
           cat > /etc/portage/make.conf << 'MAKECONF'
           COMMON_FLAGS="-O2 -march=x86-64 -pipe"
           CFLAGS="${COMMON_FLAGS}"
           CXXFLAGS="${COMMON_FLAGS}"
-          FEATURES="buildpkg parallel-install getbinpkg -sandbox -usersandbox -ipc-sandbox -network-sandbox -pid-sandbox"
+          FEATURES="buildpkg parallel-install -sandbox -usersandbox -ipc-sandbox -network-sandbox -pid-sandbox"
           BINPKG_FORMAT="gpkg"
           PKGDIR="/var/cache/binpkgs"
           DISTDIR="/var/cache/distfiles"
           ACCEPT_LICENSE="*"
           ACCEPT_KEYWORDS="~amd64"
-          EMERGE_DEFAULT_OPTS="--getbinpkg --usepkg --buildpkg --quiet-build=y --jobs=4 --load-average=4 --keep-going"
+          EMERGE_DEFAULT_OPTS="--usepkg --buildpkg --quiet-build=y --jobs=4 --load-average=4 --keep-going"
           MAKEOPTS="-j4"
           PORTAGE_BINPKG_SIGVERIFY="0"
           MAKECONF
