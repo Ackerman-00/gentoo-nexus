@@ -33,20 +33,20 @@ jobs:
           mkdir -p binpkgs overlay distfiles ccache
           chmod -R 777 binpkgs overlay distfiles ccache
 
-      - name: Copy Custom Ebuilds to Overlay
+      - name: Prepare Overlay with Full Repo Structure
         run: |
-          # Copy full category/package structure to overlay/
-          # This mirrors your repo: app-misc/dgop/, gui-wm/niri/, etc.
-          find . -mindepth 2 -maxdepth 2 -type d -name "*.ebuild" 2>/dev/null | \
-            xargs -r dirname | sort -u | while read -r pkgdir; do
-            category=$(basename "$(dirname "$pkgdir")")
-            pkgname=$(basename "$pkgdir")
-            mkdir -p "overlay/$category/$pkgname"
-            cp -r "$pkgdir"/* "overlay/$category/$pkgname/" 2>/dev/null || true
-          done
-          # Also copy repo metadata
-          [ -d metadata ] && cp -r metadata overlay/
-          [ -f profiles/repo_name ] && mkdir -p overlay/profiles && cp profiles/repo_name overlay/profiles/
+          # Copy ENTIRE repo structure to overlay/ (preserves metadata/, profiles/, categories)
+          rsync -a --exclude='.git' --exclude='binpkgs' --exclude='overlay' ./ overlay/
+          
+          # Ensure overlay has required Gentoo repo metadata
+          mkdir -p overlay/metadata
+          echo "masters = gentoo" > overlay/metadata/layout.conf
+          
+          mkdir -p overlay/profiles
+          echo "gentoo-nexus" > overlay/profiles/repo_name
+          
+          # Make overlay writable for Docker
+          chmod -R 777 overlay/
 
       - name: Download Release Binaries
         env:
@@ -71,7 +71,7 @@ jobs:
           TARGET="${{ steps.queue.outputs.TARGET_PKG }}"
           [ -z "$TARGET" ] && { echo "skip_compile=true" >> "$GITHUB_OUTPUT"; exit 0; }
           
-          # Extract package name (PN) correctly: handles =category/pkg-ver, pkg-ver, etc.
+          # Extract package name (PN) - handles =cat/pkg-ver, cat/pkg, etc.
           PN=$(echo "$TARGET" | sed -E 's/^=//' | awk -F/ '{print $NF}' | sed -E 's/-[0-9].*//')
           
           if [ "${{ github.event.inputs.force_rebuild }}" == "true" ]; then
@@ -85,83 +85,85 @@ jobs:
             echo "skip_compile=false" >> "$GITHUB_OUTPUT"
           fi
 
-      - name: Build Package (Fixed Docker Setup)
+      - name: Build Package (Fixed: rw mount + pre-configured overlay)
         if: steps.check_bin.outputs.skip_compile != 'true'
         run: |
           TARGET="${{ steps.queue.outputs.TARGET_PKG }}"
           docker run --rm --privileged \
             -v "${{ github.workspace }}/binpkgs:/var/cache/binpkgs:rw" \
-            -v "${{ github.workspace }}/overlay:/var/db/repos/gentoo-nexus:ro" \
+            -v "${{ github.workspace }}/overlay:/var/db/repos/gentoo-nexus:rw" \
             -v "${{ github.workspace }}/distfiles:/var/cache/distfiles:rw" \
             -v "${{ github.workspace }}/ccache:/var/cache/ccache:rw" \
-            gentoo/stage3:amd64-desktop-openrc bash -c "
+            gentoo/stage3:amd64-desktop-openrc bash << 'DOCKER_SCRIPT'
             set -euo pipefail
             
-            # 1. Initialize Gentoo repo (MUST exist before webrsync)
+            # 1. Initialize official Gentoo repo
             mkdir -p /var/db/repos/gentoo
             emerge-webrsync -q
             
-            # 2. Set profile with fallback
+            # 2. Set profile with fallback chain
             eselect profile set default/linux/amd64/23.0/desktop 2>/dev/null || \
-              eselect profile list 2>/dev/null | grep -m1 desktop | awk '{print \$1}' | xargs -r eselect profile set || \
+              eselect profile list 2>/dev/null | grep -m1 desktop | awk '{print $1}' | xargs -r eselect profile set || \
               eselect profile set 1
             
-            # 3. Write make.conf using printf (avoids heredoc issues)
-            printf '%s\n' \
-              'COMMON_FLAGS=\"-O2 -march=x86-64 -pipe\"' \
-              'CFLAGS=\"\${COMMON_FLAGS}\"' \
-              'CXXFLAGS=\"\${COMMON_FLAGS}\"' \
-              'USE=\"wayland X vulkan pipewire dbus udev opengl dri gbm vaapi vdpau ffmpeg minizip -daemon -aqua -cups -gpm\"' \
-              'VIDEO_CARDS=\"amdgpu radeon radeonsi intel iris nouveau virgl\"' \
-              'FEATURES=\"buildpkg parallel-install getbinpkg ccache -sandbox -usersandbox -ipc-sandbox -network-sandbox -pid-sandbox -binpkg-request-signature -binpkg-sigverify\"' \
-              'BINPKG_FORMAT=\"gpkg\"' \
-              'PKGDIR=\"/var/cache/binpkgs\"' \
-              'CCACHE_DIR=\"/var/cache/ccache\"' \
-              'DISTDIR=\"/var/cache/distfiles\"' \
-              'ACCEPT_LICENSE=\"*\"' \
-              'ACCEPT_KEYWORDS=\"~amd64\"' \
-              'CONFIG_PROTECT_MASK=\"/etc/portage\"' \
-              'EMERGE_DEFAULT_OPTS=\"--getbinpkg --usepkg --buildpkg --quiet-build=y --jobs=4 --load-average=4 --keep-going\"' \
-              'MAKEOPTS=\"-j4\"' \
-              'PORTAGE_BINPKG_SIGVERIFY=\"0\"' \
-              > /etc/portage/make.conf
+            # 3. Write make.conf (simple, no heredoc issues)
+            cat > /etc/portage/make.conf << 'EOF'
+COMMON_FLAGS="-O2 -march=x86-64 -pipe"
+CFLAGS="${COMMON_FLAGS}"
+CXXFLAGS="${COMMON_FLAGS}"
+USE="wayland X vulkan pipewire dbus udev opengl dri gbm vaapi vdpau ffmpeg minizip -daemon -aqua -cups -gpm"
+VIDEO_CARDS="amdgpu radeon radeonsi intel iris nouveau virgl"
+FEATURES="buildpkg parallel-install getbinpkg ccache -sandbox -usersandbox -ipc-sandbox -network-sandbox -pid-sandbox -binpkg-request-signature -binpkg-sigverify"
+BINPKG_FORMAT="gpkg"
+PKGDIR="/var/cache/binpkgs"
+CCACHE_DIR="/var/cache/ccache"
+DISTDIR="/var/cache/distfiles"
+ACCEPT_LICENSE="*"
+ACCEPT_KEYWORDS="~amd64"
+CONFIG_PROTECT_MASK="/etc/portage"
+EMERGE_DEFAULT_OPTS="--getbinpkg --usepkg --buildpkg --quiet-build=y --jobs=4 --load-average=4 --keep-going"
+MAKEOPTS="-j4"
+PORTAGE_BINPKG_SIGVERIFY="0"
+EOF
             
-            # 4. Configure gentoo-nexus overlay repo
-            mkdir -p /var/db/repos/gentoo-nexus/metadata
-            echo 'masters = gentoo' > /var/db/repos/gentoo-nexus/metadata/layout.conf
-            printf '%s\n' '[gentoo-nexus]' \
-              'location = /var/db/repos/gentoo-nexus' \
-              'masters = gentoo' \
-              'priority = 9999' \
-              'auto-sync = no' \
-              > /etc/portage/repos.conf/gentoo-nexus.conf
+            # 4. Register gentoo-nexus overlay (already mounted with correct structure)
+            cat > /etc/portage/repos.conf/gentoo-nexus.conf << 'EOF'
+[gentoo-nexus]
+location = /var/db/repos/gentoo-nexus
+masters = gentoo
+priority = 9999
+auto-sync = no
+EOF
             
-            # 5. Accept ~amd64 keywords for overlay
+            # 5. Accept ~amd64 keywords for overlay packages
             mkdir -p /etc/portage/package.accept_keywords
             echo '*/*::gentoo-nexus **' > /etc/portage/package.accept_keywords/nexus
             
-            # 6. Build the target package
-            echo \">>> Building: $TARGET\"
-            emerge --autounmask=y --autounmask-write --autounmask-continue=y \"$TARGET\"
-            "
+            # 6. Build the target
+            echo ">>> Building: $TARGET"
+            emerge --autounmask=y --autounmask-write --autounmask-continue=y "$TARGET"
+            DOCKER_SCRIPT
 
-      - name: Generate Packages Index (Correct Syntax)
+      - name: Generate Packages Index
         run: |
           if ls binpkgs/*.gpkg.tar >/dev/null 2>&1; then
             echo ">>> Regenerating Packages index..."
             docker run --rm \
-              -v "${{ github.workspace }}/binpkgs:/var/cache/binpkgs:ro" \
-              gentoo/stage3:amd64-desktop-openrc bash -c "
-              printf '%s\n' 'PKGDIR=\"/var/cache/binpkgs\"' 'BINPKG_FORMAT=\"gpkg\"' > /etc/portage/make.conf
-              emaint binhost --fix
-              "
+              -v "${{ github.workspace }}/binpkgs:/var/cache/binpkgs:rw" \
+              gentoo/stage3:amd64-desktop-openrc bash << 'EOF'
+cat > /etc/portage/make.conf << 'INNER'
+PKGDIR="/var/cache/binpkgs"
+BINPKG_FORMAT="gpkg"
+INNER
+emaint binhost --fix
+EOF
           fi
 
-      - name: Upload to GitHub Release (Infinite Storage)
+      - name: Upload to GitHub Release (Infinite Storage Pattern)
         env:
           GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
         run: |
-          # Create release if missing
+          # Ensure release exists
           gh release view rolling --repo ${{ github.repository }} 2>/dev/null || \
             gh release create rolling \
               --repo ${{ github.repository }} \
@@ -169,7 +171,8 @@ jobs:
               --notes "Automated Gentoo Binhost - GPKG format" \
               --prerelease
           
-          # Upload files one-by-one (avoids aggregate 2GB limit)
+          # Upload files individually (avoids 2GB aggregate limit concerns)
+          shopt -s nullglob
           for file in binpkgs/*.gpkg.tar binpkgs/Packages*; do
             [ -f "$file" ] || continue
             echo "📦 Uploading $(basename "$file")..."
