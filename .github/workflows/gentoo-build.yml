@@ -102,7 +102,7 @@ EOF
           emerge --autounmask=y --autounmask-write {{TARGET}}
           SCRIPT
 
-          # Replace placeholder with actual target (so we don't nest Actions vars inside the heredoc)
+          # Replace placeholder with actual target
           sed -i "s/{{TARGET}}/${{ steps.queue.outputs.TARGET_PKG }}/" /tmp/docker-build.sh
           chmod +x /tmp/docker-build.sh
 
