@@ -95,24 +95,11 @@ jobs:
             eselect profile list 2>/dev/null | grep -m1 desktop | awk '{print $1}' | tr -d '[]' | xargs -r eselect profile set || \
             eselect profile set 1
 
-          # Disable GPG signature verification for the official Gentoo binhost
-          # The stage3 image ships with verify-signature=true (default since portage-3.0.77)
-          # but the container has no trusted GPG keys, so we must override it
-          mkdir -p /etc/portage/binrepos.conf
-          cat > /etc/portage/binrepos.conf/gentoobinhost.conf << 'BINHOST'
-          [DEFAULT]
-          verify-signature = false
-
-          [gentoo]
-          priority = 9999
-          sync-uri = https://distfiles.gentoo.org/releases/amd64/binpackages/23.0/x86-64/
-          BINHOST
-
           cat > /etc/portage/make.conf << 'MAKECONF'
           COMMON_FLAGS="-O2 -march=x86-64 -pipe"
           CFLAGS="${COMMON_FLAGS}"
           CXXFLAGS="${COMMON_FLAGS}"
-          FEATURES="buildpkg parallel-install getbinpkg -sandbox -usersandbox -ipc-sandbox -network-sandbox -pid-sandbox -binpkg-request-signature -binpkg-sigverify"
+          FEATURES="buildpkg parallel-install getbinpkg binpkg-ignore-signature -sandbox -usersandbox -ipc-sandbox -network-sandbox -pid-sandbox -binpkg-request-signature -binpkg-sigverify"
           BINPKG_FORMAT="gpkg"
           PKGDIR="/var/cache/binpkgs"
           DISTDIR="/var/cache/distfiles"
