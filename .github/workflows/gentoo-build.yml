@@ -41,8 +41,10 @@ jobs:
           GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
         run: |
           echo ">>> Downloading existing .gpkg.tar from rolling release..."
-          gh release download rolling -p "*.gpkg.tar" -p "Packages" \
-            --repo ${{ github.repository }} --dir binpkgs --clobber || true
+          gh release download rolling \
+            -p "*.gpkg.tar" -p "Packages" \
+            --repo ${{ github.repository }} \
+            --dir binpkgs --clobber || true
 
       - name: Parse & Check Queue
         id: queue
@@ -72,40 +74,44 @@ jobs:
       - name: Minimal Portage Setup & Build
         if: steps.check_bin.outputs.skip_compile != 'true'
         run: |
+          # Write a clean build script to a file (no YAML heredoc conflict)
+          cat > /tmp/docker-build.sh << 'SCRIPT'
+          #!/bin/bash
+          set -euo pipefail
+
+          mkdir -p /var/db/repos/gentoo
+          emerge-webrsync -q
+
+          eselect profile set default/linux/amd64/23.0/desktop 2>/dev/null || eselect profile set 1
+
+          cat > /etc/portage/make.conf << EOF
+          EMERGE_DEFAULT_OPTS="--getbinpkg --usepkg --buildpkg --quiet-build=y --jobs=4 --keep-going"
+          PKGDIR=/var/cache/binpkgs
+          PORTAGE_BINPKG_SIGVERIFY=0
+          ACCEPT_LICENSE="*"
+          ACCEPT_KEYWORDS="~amd64"
+EOF
+
+          mkdir -p /var/db/repos/gentoo-nexus/metadata
+          echo "masters = gentoo" > /var/db/repos/gentoo-nexus/metadata/layout.conf
+          echo "gentoo-nexus" > /var/db/repos/gentoo-nexus/profiles/repo_name
+
+          mkdir -p /etc/portage/package.accept_keywords
+          echo "*/*::gentoo-nexus **" > /etc/portage/package.accept_keywords/nexus
+
+          emerge --autounmask=y --autounmask-write {{TARGET}}
+          SCRIPT
+
+          # Replace placeholder with actual target (so we don't nest Actions vars inside the heredoc)
+          sed -i "s/{{TARGET}}/${{ steps.queue.outputs.TARGET_PKG }}/" /tmp/docker-build.sh
+          chmod +x /tmp/docker-build.sh
+
+          # Run the build inside Docker
           docker run --rm --privileged \
             -v ${{ github.workspace }}/binpkgs:/var/cache/binpkgs \
             -v ${{ github.workspace }}/overlay:/var/db/repos/gentoo-nexus \
-            gentoo/stage3:amd64-desktop-openrc /bin/bash << 'DOCKERSCRIPT'
-              set -euo pipefail
-
-              # 1. Create missing repo dir BEFORE syncing
-              mkdir -p /var/db/repos/gentoo
-              emerge-webrsync -q
-
-              # 2. Profile
-              eselect profile set default/linux/amd64/23.0/desktop 2>/dev/null || eselect profile set 1
-
-              # 3. make.conf (no YAML quoting issues)
-              cat > /etc/portage/make.conf << EOF
-              EMERGE_DEFAULT_OPTS="--getbinpkg --usepkg --buildpkg --quiet-build=y --jobs=4 --keep-going"
-              PKGDIR=/var/cache/binpkgs
-              PORTAGE_BINPKG_SIGVERIFY=0
-              ACCEPT_LICENSE="*"
-              ACCEPT_KEYWORDS="~amd64"
-EOF
-
-              # 4. Nexus repo metadata
-              mkdir -p /var/db/repos/gentoo-nexus/metadata
-              echo "masters = gentoo" > /var/db/repos/gentoo-nexus/metadata/layout.conf
-              echo "gentoo-nexus" > /var/db/repos/gentoo-nexus/profiles/repo_name
-
-              # 5. Accept keywords for overlays
-              mkdir -p /etc/portage/package.accept_keywords
-              echo "*/*::gentoo-nexus **" > /etc/portage/package.accept_keywords/nexus
-
-              # 6. Build target
-              emerge --autounmask=y --autounmask-write ${{ steps.queue.outputs.TARGET_PKG }}
-            DOCKERSCRIPT
+            -v /tmp/docker-build.sh:/build.sh:ro \
+            gentoo/stage3:amd64-desktop-openrc /build.sh
 
       - name: Generate Packages Index
         run: |
@@ -120,10 +126,10 @@ EOF
         env:
           GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
         run: |
-          gh release view rolling --repo ${{ github.repository }} 2>/dev/null || \
-            gh release create rolling --title "Nexus Rolling Binaries" \
-              --notes "Automated Gentoo Binhost" --prerelease \
-              --repo ${{ github.repository }}
+          gh release view rolling --repo ${{ github.repository }} 2>/dev/null \
+            || gh release create rolling --title "Nexus Rolling Binaries" \
+               --notes "Automated Gentoo Binhost" --prerelease \
+               --repo ${{ github.repository }}
           for file in binpkgs/*; do
             [ -f "$file" ] || continue
             echo "Uploading $file..."
