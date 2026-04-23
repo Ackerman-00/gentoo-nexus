@@ -32,12 +32,11 @@ jobs:
 
       - name: Checkout Custom Ebuilds
         run: |
-          # Copy your custom ebuilds to overlay/
           find . -maxdepth 2 -name "*.ebuild" -exec dirname {} \; | sort -u | while read dir; do
             [ -d "$dir" ] && cp -r "$dir" overlay/
           done
 
-      - name: Download Release Binaries (Primary Repo)
+      - name: Download Release Binaries
         env:
           GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
         run: |
@@ -54,7 +53,7 @@ jobs:
           echo "TARGET_PKG=$TARGET_PKG" >> $GITHUB_OUTPUT
           echo "REMAINING_PKGS=$REMAINING" >> $GITHUB_OUTPUT
 
-      - name: Check if Binary Exists (Void-Style Skip)
+      - name: Check if Binary Exists
         id: check_bin
         run: |
           TARGET="${{ steps.queue.outputs.TARGET_PKG }}"
@@ -76,35 +75,37 @@ jobs:
           docker run --rm --privileged \
             -v ${{ github.workspace }}/binpkgs:/var/cache/binpkgs \
             -v ${{ github.workspace }}/overlay:/var/db/repos/gentoo-nexus \
-            gentoo/stage3:amd64-desktop-openrc bash -c "
-            set -euo pipefail
-            # 1. Populate Gentoo repo FIRST (stage3 is empty)
-            emerge-webrsync -q
-            
-            # 2. Profile
-            eselect profile set default/linux/amd64/23.0/desktop 2>/dev/null || eselect profile set 1
-            
-            # 3. make.conf (single-quoted EOF prevents any expansion)
-            cat > /etc/portage/make.conf << 'EOF'
-            EMERGE_DEFAULT_OPTS='--getbinpkg --usepkg --buildpkg --quiet-build=y --jobs=4 --keep-going'
-            PKGDIR=/var/cache/binpkgs
-            PORTAGE_BINPKG_SIGVERIFY=0
-            ACCEPT_LICENSE='*'
-            ACCEPT_KEYWORDS='~amd64'
-            EOF
-            
-            # 4. Nexus repo metadata
-            mkdir -p /var/db/repos/gentoo-nexus/metadata
-            echo 'masters = gentoo' > /var/db/repos/gentoo-nexus/metadata/layout.conf
-            echo 'gentoo-nexus' > /var/db/repos/gentoo-nexus/profiles/repo_name
-            
-            # 5. Accept keywords for overlays
-            mkdir -p /etc/portage/package.accept_keywords
-            echo '*/*::gentoo-nexus **' > /etc/portage/package.accept_keywords/nexus
-            
-            # 6. Build target
-            emerge --autounmask=y --autounmask-write ${{ steps.queue.outputs.TARGET_PKG }}
-            "
+            gentoo/stage3:amd64-desktop-openrc /bin/bash << 'DOCKERSCRIPT'
+              set -euo pipefail
+
+              # 1. Create missing repo dir BEFORE syncing
+              mkdir -p /var/db/repos/gentoo
+              emerge-webrsync -q
+
+              # 2. Profile
+              eselect profile set default/linux/amd64/23.0/desktop 2>/dev/null || eselect profile set 1
+
+              # 3. make.conf (no YAML quoting issues)
+              cat > /etc/portage/make.conf << EOF
+              EMERGE_DEFAULT_OPTS="--getbinpkg --usepkg --buildpkg --quiet-build=y --jobs=4 --keep-going"
+              PKGDIR=/var/cache/binpkgs
+              PORTAGE_BINPKG_SIGVERIFY=0
+              ACCEPT_LICENSE="*"
+              ACCEPT_KEYWORDS="~amd64"
+EOF
+
+              # 4. Nexus repo metadata
+              mkdir -p /var/db/repos/gentoo-nexus/metadata
+              echo "masters = gentoo" > /var/db/repos/gentoo-nexus/metadata/layout.conf
+              echo "gentoo-nexus" > /var/db/repos/gentoo-nexus/profiles/repo_name
+
+              # 5. Accept keywords for overlays
+              mkdir -p /etc/portage/package.accept_keywords
+              echo "*/*::gentoo-nexus **" > /etc/portage/package.accept_keywords/nexus
+
+              # 6. Build target
+              emerge --autounmask=y --autounmask-write ${{ steps.queue.outputs.TARGET_PKG }}
+            DOCKERSCRIPT
 
       - name: Generate Packages Index
         run: |
@@ -115,7 +116,7 @@ jobs:
               emaint binhost --fix /mnt
           fi
 
-      - name: Upload to GitHub Release (Infinite Storage!)
+      - name: Upload to GitHub Release
         env:
           GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
         run: |
