@@ -64,8 +64,10 @@ jobs:
           mkdir -p "${{ github.workspace }}/.docker-cache"
           IMAGE_CACHE="${{ github.workspace }}/.docker-cache/gentoo-stage3.tar"
           if [ -f "$IMAGE_CACHE" ]; then
+            echo ">>> Loading gentoo/stage3 from cache..."
             docker load -i "$IMAGE_CACHE"
           else
+            echo ">>> Cache miss — pulling gentoo/stage3 from Docker Hub..."
             docker pull gentoo/stage3:amd64-desktop-openrc
             docker save gentoo/stage3:amd64-desktop-openrc -o "$IMAGE_CACHE"
           fi
@@ -74,6 +76,7 @@ jobs:
         env:
           GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
         run: |
+          echo ">>> Downloading existing packages from rolling release..."
           gh release download rolling -p "*.gpkg.tar" -p "Packages" --repo ${{ github.repository }} --dir "${{ github.workspace }}/binpkgs" --clobber || echo "First run or no packages found."
 
       - name: Check Existing Binaries & Pop Queue
@@ -89,7 +92,7 @@ jobs:
               MISSING+=("$pkg")
               rm -f "${{ github.workspace }}/binpkgs/${PN}-"[0-9]*.gpkg.tar 2>/dev/null || true
             elif ls "${{ github.workspace }}/binpkgs/${PN}-"[0-9]*.gpkg.tar 1> /dev/null 2>&1; then
-              echo "Found existing binary for $pkg"
+              echo "✓ Found existing binary for $pkg"
             else
               MISSING+=("$pkg")
             fi
@@ -118,10 +121,9 @@ jobs:
             REPO="${GITHUB_REPOSITORY:-}"
             REPO_NAME="${REPO#*/}"
             mkdir -p /var/db/repos/{gentoo,steam-overlay}
-            mkdir -p /etc/portage/{repos.conf,binrepos.conf,env,package.{accept_keywords,license,use,env},gnupg}
+            mkdir -p /etc/portage/{repos.conf,binrepos.conf,env,package.{accept_keywords,license,use,env}}
             
-            rm -rf /etc/portage/binrepos.conf/*
-            
+            # ✅ Disable signatures ONLY for your custom repo
             cat > /etc/portage/binrepos.conf/nexus-releases.conf << EOF
             [gentoo-nexus-releases]
             priority = 99999
@@ -129,12 +131,7 @@ jobs:
             verify-signature = false
             EOF
             
-            cat > /etc/portage/binrepos.conf/gentoobinhost.conf << 'EOF'
-            [gentoobinhost]
-            priority = 1
-            sync-uri = https://distfiles.gentoo.org/releases/amd64/binpackages/23.0/x86-64/
-            EOF
-            
+            # ✅ Added -userpriv and -userfetch to ensure Portage stays as Root to write to the GPG TrustDB
             cat > /etc/portage/make.conf << 'EOF'
             COMMON_FLAGS="-O2 -march=x86-64-v3 -pipe"
             CFLAGS="${COMMON_FLAGS}"
@@ -158,7 +155,11 @@ jobs:
             echo "MAKEOPTS=\"-j${NPROC}\"" >> /etc/portage/make.conf
             
             emerge-webrsync -q || true
-            getuto
+            
+            # ✅ Initialize the GPG Keyring correctly as Root
+            mkdir -p /etc/portage/gnupg
+            chmod 0700 /etc/portage/gnupg
+            getuto || true
             
             eselect profile set default/linux/amd64/23.0/desktop
             
@@ -232,6 +233,7 @@ jobs:
               emerge --getbinpkg --usepkg --buildpkg "$1"
             fi
         run: |
+          echo ">>> Building: $TARGET"
           echo "$BUILD_SCRIPT" > build_script.sh
           chmod +x build_script.sh
           docker run --rm --privileged \
@@ -273,6 +275,7 @@ jobs:
         env:
           GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
         run: |
+          echo ">>> Passing the baton to: ${{ steps.queue.outputs.remaining_pkgs }}"
           gh workflow run "Gentoo Build Relay" \
             --ref "${GITHUB_REF_NAME}" \
             -f package_list="${{ steps.queue.outputs.remaining_pkgs }}" \
