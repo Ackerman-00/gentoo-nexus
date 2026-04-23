@@ -90,7 +90,7 @@ jobs:
           PORTAGE_BINPKG_SIGVERIFY=0
           ACCEPT_LICENSE="*"
           ACCEPT_KEYWORDS="~amd64"
-EOF
+          EOF
 
           mkdir -p /var/db/repos/gentoo-nexus/metadata
           echo "masters = gentoo" > /var/db/repos/gentoo-nexus/metadata/layout.conf
