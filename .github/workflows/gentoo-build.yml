@@ -7,14 +7,10 @@ on:
         description: 'Space-separated list of package atoms to build'
         required: true
       force_rebuild:
-        description: 'Force compile from source (ignores existing binary in Release)'
+        description: 'Force compile from source (ignores Release binaries)'
         type: boolean
         required: false
         default: false
-
-concurrency:
-  group: gentoo-build-${{ github.run_id }}
-  cancel-in-progress: false
 
 permissions:
   contents: write
@@ -24,305 +20,168 @@ jobs:
   build:
     name: Build and Deploy
     runs-on: ubuntu-latest
-    timeout-minutes: 360
+    timeout-minutes: 180
     steps:
       - name: Checkout Repository
         uses: actions/checkout@v4
         with:
           token: ${{ secrets.GITHUB_TOKEN }}
-          fetch-depth: 0
 
-      - name: Prepare Persistent Directories
+      - name: Prepare Directories
         run: |
-          mkdir -p "${{ github.workspace }}/binpkgs"
-          mkdir -p "${{ github.workspace }}/distfiles"
-          mkdir -p "${{ github.workspace }}/ccache"
+          mkdir -p binpkgs overlay distfiles ccache
+          # Ensure proper permissions for Docker mounts
+          chmod -R 777 binpkgs overlay distfiles ccache
 
-      - name: Cache ccache & distfiles ONLY
-        uses: actions/cache@v4
-        with:
-          path: |
-            ${{ github.workspace }}/ccache
-            ${{ github.workspace }}/distfiles
-          key: gentoo-cache-${{ hashFiles('**/*.ebuild', 'metadata/**') }}
-          restore-keys: gentoo-cache-
-
-      - name: Get week stamp for Docker cache key
-        id: week
-        run: echo "stamp=$(date +%Y-W%V)" >> "$GITHUB_OUTPUT"
-
-      - name: Cache gentoo/stage3 Docker image
-        id: docker-cache
-        uses: actions/cache@v4
-        with:
-          path: ${{ github.workspace }}/.docker-cache/gentoo-stage3.tar
-          key: docker-gentoo-stage3-${{ steps.week.outputs.stamp }}
-          restore-keys: docker-gentoo-stage3-
-
-      - name: Pull or restore gentoo/stage3 image
-        run: |
-          mkdir -p "${{ github.workspace }}/.docker-cache"
-          IMAGE_CACHE="${{ github.workspace }}/.docker-cache/gentoo-stage3.tar"
-          if [ -f "$IMAGE_CACHE" ]; then
-            echo ">>> Loading gentoo/stage3 from cache..."
-            docker load -i "$IMAGE_CACHE"
-          else
-            echo ">>> Cache miss — pulling gentoo/stage3 from Docker Hub..."
-            docker pull gentoo/stage3:amd64-desktop-openrc
-            docker save gentoo/stage3:amd64-desktop-openrc -o "$IMAGE_CACHE"
-          fi
-
-      - name: Download Existing Binhost
+      - name: Download Release Binaries (Primary Source)
         env:
           GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
         run: |
-          echo ">>> Downloading existing packages from rolling release..."
-          gh release download rolling -p "*.gpkg.tar" -p "Packages" --repo ${{ github.repository }} --dir "${{ github.workspace }}/binpkgs" --clobber || echo "First run or no packages found."
+          echo ">>> Downloading existing .gpkg.tar from rolling release..."
+          gh release download rolling \
+            -p "*.gpkg.tar" -p "Packages*" \
+            --repo ${{ github.repository }} \
+            --dir binpkgs --clobber 2>/dev/null || true
 
-      - name: Check Existing Binaries & Pop Queue
+      - name: Parse & Check Queue
         id: queue
         run: |
           read -r -a PKGS <<< "${{ github.event.inputs.package_list }}"
-          FORCE_REBUILD="${{ github.event.inputs.force_rebuild }}"
-          MISSING=()
+          echo "TARGET_PKG=${PKGS[0]:-}" >> "$GITHUB_OUTPUT"
+          echo "REMAINING_PKGS=${PKGS[*]:1}" >> "$GITHUB_OUTPUT"
+
+      - name: Check if Binary Exists (Void-Style Skip)
+        id: check_bin
+        run: |
+          TARGET="${{ steps.queue.outputs.TARGET_PKG }}"
+          [ -z "$TARGET" ] && { echo "skip_compile=true" >> "$GITHUB_OUTPUT"; exit 0; }
           
-          for pkg in "${PKGS[@]}"; do
-            PN=$(echo "$pkg" | sed 's/^=//' | awk -F/ '{print $NF}' | sed -E 's/-[0-9]+(\.[0-9]+)*(_[a-z0-9]+)?(-r[0-9]+)?$//')
-            if [ "$FORCE_REBUILD" == "true" ]; then
-              MISSING+=("$pkg")
-              rm -f "${{ github.workspace }}/binpkgs/${PN}-"[0-9]*.gpkg.tar 2>/dev/null || true
-            elif ls "${{ github.workspace }}/binpkgs/${PN}-"[0-9]*.gpkg.tar 1> /dev/null 2>&1; then
-              echo "✓ Found existing binary for $pkg"
-            else
-              MISSING+=("$pkg")
-            fi
-          done
+          PN=$(echo "$TARGET" | sed 's/^=//' | awk -F/ '{print $NF}' | \
+               sed -E 's/-[0-9]+(\.[0-9]+)*(_[a-z0-9]+)?(-r[0-9]+)?$//')
           
-          if [ ${#MISSING[@]} -gt 0 ]; then
-            echo "target_pkg=${MISSING}" >> "$GITHUB_OUTPUT"
-            echo "remaining_pkgs=${MISSING[@]:1}" >> "$GITHUB_OUTPUT"
+          if [ "${{ github.event.inputs.force_rebuild }}" == "true" ]; then
+            echo "⚡ Force rebuild: Will compile $TARGET"
+            echo "skip_compile=false" >> "$GITHUB_OUTPUT"
+          elif ls binpkgs/${PN}-*.gpkg.tar >/dev/null 2>&1; then
+            echo "✓ Binary ${PN}-*.gpkg.tar exists. Skipping compile."
+            echo "skip_compile=true" >> "$GITHUB_OUTPUT"
           else
-            echo "target_pkg=" >> "$GITHUB_OUTPUT"
-            echo "remaining_pkgs=" >> "$GITHUB_OUTPUT"
+            echo "❌ No binary for $PN. Will compile from source."
+            echo "skip_compile=false" >> "$GITHUB_OUTPUT"
           fi
 
-      - name: Fetch Overlays on Host Runner
-        if: steps.queue.outputs.target_pkg != ''
+      - name: Build Package (Minimal Docker Setup)
+        if: steps.check_bin.outputs.skip_compile != 'true'
         run: |
-          git clone --depth 1 https://github.com/anyc/steam-overlay.git steam-overlay 2>/dev/null || true
-
-      - name: Prepare Portage DNA Script
-        if: steps.queue.outputs.target_pkg != ''
-        env:
-          PORTAGE_DNA: |
-            #!/bin/bash
+          TARGET="${{ steps.queue.outputs.TARGET_PKG }}"
+          docker run --rm --privileged \
+            -v "${{ github.workspace }}/binpkgs:/var/cache/binpkgs:rw" \
+            -v "${{ github.workspace }}/overlay:/var/db/repos/gentoo-nexus:ro" \
+            -v "${{ github.workspace }}/distfiles:/var/cache/distfiles:rw" \
+            -v "${{ github.workspace }}/ccache:/var/cache/ccache:rw" \
+            gentoo/stage3:amd64-desktop-openrc bash -c '
             set -euo pipefail
-            OWNER="${GITHUB_REPOSITORY_OWNER:-}"
-            REPO="${GITHUB_REPOSITORY:-}"
-            REPO_NAME="${REPO#*/}"
-            mkdir -p /var/db/repos/{gentoo,steam-overlay}
-            mkdir -p /etc/portage/{repos.conf,binrepos.conf,env,package.{accept_keywords,license,use,env}}
             
-            # Nuke default binrepos so they can't secretly re-enable GPG
-            rm -rf /etc/portage/binrepos.conf/*
-            rm -f /usr/share/portage/config/binrepos.conf || true
+            # === 1. Setup Gentoo repo FIRST ===
+            mkdir -p /var/db/repos/gentoo
+            emerge-webrsync -q
             
-            # Binrepos config: disable signatures everywhere
-            cat > /etc/portage/binrepos.conf/00-nexus.conf << EOF
-            [DEFAULT]
-            verify-signature = false
+            # === 2. Set profile properly ===
+            eselect profile set default/linux/amd64/23.0/desktop 2>/dev/null || \
+            eselect profile list | grep desktop | head -1 | awk "{print \$1}" | xargs -r eselect profile set || \
+            eselect profile set 1
             
-            [gentoo-nexus-releases]
-            priority = 99999
-            sync-uri = https://github.com/${OWNER}/${REPO_NAME}/releases/download/rolling/
-            verify-signature = false
-            
-            [gentoobinhost]
-            priority = 1
-            sync-uri = https://distfiles.gentoo.org/releases/amd64/binpackages/23.0/x86-64/
-            verify-signature = false
-            EOF
-            
-            # Main Gentoo repo config (no GPG; no rsync)
-            mkdir -p /etc/portage/repos.conf
-            cat > /etc/portage/repos.conf/gentoo.conf << 'EOF'
-            [gentoo]
-            location = /var/db/repos/gentoo
-            sync-type = webrsync
-            sync-uri = https://snapshots.gentoo.org/portage
-            auto-sync = yes
-            sync-webrsync-verify-signature = no
-            EOF
-            
-            # Standard Gentoo profile directory (minimal)
-            mkdir -p /var/db/repos/gentoo/profiles
-            mkdir -p /var/db/repos/gentoo/profiles/default/linux/amd64
-            mkdir -p /var/db/repos/gentoo/profiles/default/linux/amd64/23.0
-            mkdir -p /var/db/repos/gentoo/profiles/default/linux/amd64/23.0/desktop
-            echo "default/linux/amd64/23.0/desktop" > /etc/portage/make.profile || true
-            
-            # Make.conf (no GPG, always prefer binpkgs)
-            cat > /etc/portage/make.conf << 'EOF'
-            COMMON_FLAGS="-O2 -march=x86-64-v3 -pipe"
+            # === 3. Configure make.conf (critical: PKGDIR for emaint) ===
+            cat > /etc/portage/make.conf << '\''EOF'\''
+            COMMON_FLAGS="-O2 -march=x86-64 -pipe"
             CFLAGS="${COMMON_FLAGS}"
             CXXFLAGS="${COMMON_FLAGS}"
-            RUSTFLAGS="-C target-cpu=x86-64-v3 -C opt-level=2"
             USE="wayland X vulkan pipewire dbus udev opengl dri gbm vaapi vdpau ffmpeg minizip -daemon -aqua -cups -gpm"
             VIDEO_CARDS="amdgpu radeon radeonsi intel iris nouveau virgl"
             FEATURES="buildpkg parallel-install getbinpkg ccache -sandbox -usersandbox -ipc-sandbox -network-sandbox -pid-sandbox -binpkg-request-signature -binpkg-sigverify"
-            PORTAGE_BINPKG_SIGVERIFY="0"
-            PORTAGE_TRUST_HELPER="true"
             BINPKG_FORMAT="gpkg"
             PKGDIR="/var/cache/binpkgs"
             CCACHE_DIR="/var/cache/ccache"
-            CCACHE_UMASK="002"
             DISTDIR="/var/cache/distfiles"
             ACCEPT_LICENSE="*"
             ACCEPT_KEYWORDS="~amd64"
             CONFIG_PROTECT_MASK="/etc/portage"
+            EMERGE_DEFAULT_OPTS="--getbinpkg --usepkg --buildpkg --quiet-build=y --jobs=4 --load-average=4 --keep-going"
+            MAKEOPTS="-j4"
+            PORTAGE_BINPKG_SIGVERIFY="0"
             EOF
             
-            NPROC=$(nproc)
-            echo "EMERGE_DEFAULT_OPTS=\"--getbinpkg --usepkg --autounmask=y --autounmask-write --autounmask-continue=y --keep-going --quiet-build=y --jobs=${NPROC} --load-average=${NPROC}\"" >> /etc/portage/make.conf
-            echo "MAKEOPTS=\"-j${NPROC}\"" >> /etc/portage/make.conf
+            # === 4. Setup custom overlay repo ===
+            mkdir -p /var/db/repos/gentoo-nexus/metadata
+            echo "masters = gentoo" > /var/db/repos/gentoo-nexus/metadata/layout.conf
+            echo "gentoo-nexus" > /var/db/repos/gentoo-nexus/profiles/repo_name
             
-            # Sync without GPG (no --no-gpg-verify; controlled by config)
-            emerge-webrsync -q || true
-            
-            # Resilient profile setting
-            if eselect profile list 2>/dev/null | grep -q "default/linux/amd64/23.0/desktop"; then
-              eselect profile set default/linux/amd64/23.0/desktop
-            else
-              echo ">>> default/linux/amd64/23.0/desktop not found; choosing first profile." >&2
-              eselect profile set 1
-            fi
-            
-            # Install helper tools (ccache, git)
-            emerge --noreplace --quiet --getbinpkg --usepkg dev-util/ccache dev-vcs/git 2>/dev/null || true
-            
-            # Steam overlay
-            mkdir -p /var/db/repos/steam-overlay/profiles
-            echo "steam-overlay" > /var/db/repos/steam-overlay/profiles/repo_name
-            echo "8" > /var/db/repos/steam-overlay/profiles/eapi
-            printf "[repo]\nrepo-name = steam-overlay\nmasters = gentoo\n" > /var/db/repos/steam-overlay/metadata/layout.conf
-            
-            cat > /etc/portage/repos.conf/steam-overlay.conf << 'EOF'
-            [steam-overlay]
-            location = /var/db/repos/steam-overlay
-            masters = gentoo
-            priority = 50
-            EOF
-            
-            cat > /etc/portage/repos.conf/gentoo-nexus.conf << 'EOF'
+            cat > /etc/portage/repos.conf/gentoo-nexus.conf << '\''EOF'\''
             [gentoo-nexus]
-            location = /overlay
+            location = /var/db/repos/gentoo-nexus
             masters = gentoo
             priority = 9999
+            auto-sync = no
             EOF
             
-            echo "*/*::steam-overlay **" > /etc/portage/package.accept_keywords/steam
+            # === 5. Accept keywords for ~amd64 overlays ===
+            mkdir -p /etc/portage/package.accept_keywords
             echo "*/*::gentoo-nexus **" > /etc/portage/package.accept_keywords/nexus
             
-            cat >> /etc/portage/package.accept_keywords/nexus << 'EOF'
-            media-libs/mesa ~amd64
-            media-libs/vulkan-loader ~amd64
-            dev-util/mesa_clc ~amd64
-            dev-util/spirv-tools ~amd64
-            dev-util/spirv-headers ~amd64
-            dev-util/vulkan-headers ~amd64
-            dev-util/glslang ~amd64
-            dev-util/vulkan-utility-libraries ~amd64
-            sys-kernel/gentoo-kernel ~amd64
-            sys-kernel/linux-firmware ~amd64
-            virtual/dist-kernel ~amd64
-            EOF
-            
-            cat > /etc/portage/package.use/global << 'EOF'
-            sys-libs/zlib minizip
-            media-video/pipewire extra
-            media-video/ffmpeg -sdl
-            sys-libs/ncurses -gpm
-            dev-libs/openssl -bindist
-            games-util/steam-launcher steamruntime
-            EOF
-            
-            cat > /etc/portage/env/no-lto << 'EOF'
-            CFLAGS="-O1 -pipe -fno-lto -fno-tree-loop-vectorize -fno-tree-slp-vectorize"
-            CXXFLAGS="-O1 -pipe -fno-lto -fno-tree-loop-vectorize -fno-tree-slp-vectorize"
-            EOF
-            echo "MAKEOPTS=\"-j${NPROC}\"" >> /etc/portage/env/no-lto
-            
-            cat > /etc/portage/package.env/no-lto-packages << 'EOF'
-            dev-util/spirv-tools no-lto
-            media-libs/mesa no-lto
-            gui-libs/gtk no-lto
-            dev-qt/qtbase no-lto
-            dev-qt/qtwayland no-lto
-            EOF
+            # === 6. Build the target ===
+            echo ">>> Building: '"'"'$TARGET'"'"'"
+            emerge --autounmask=y --autounmask-write --autounmask-continue=y "$TARGET"
+            '
+
+      - name: Generate Packages Index (Correct Syntax)
         run: |
-          echo "$PORTAGE_DNA" > portage_dna.sh
-          chmod +x portage_dna.sh
+          if ls binpkgs/*.gpkg.tar >/dev/null 2>&1; then
+            echo ">>> Regenerating Packages index..."
+            docker run --rm \
+              -v "${{ github.workspace }}/binpkgs:/var/cache/binpkgs:ro" \
+              gentoo/stage3:amd64-desktop-openrc bash -c '
+              # PKGDIR in make.conf tells emaint where to look
+              cat > /etc/portage/make.conf << '\''EOF'\''
+              PKGDIR="/var/cache/binpkgs"
+              BINPKG_FORMAT="gpkg"
+              EOF
+              emaint binhost --fix
+              '
+          fi
 
-      - name: Build Target Package
-        if: steps.queue.outputs.target_pkg != ''
-        env:
-          TARGET: ${{ steps.queue.outputs.target_pkg }}
-          FORCE_REBUILD: ${{ github.event.inputs.force_rebuild }}
-          BUILD_SCRIPT: |
-            #!/bin/bash
-            set -euo pipefail
-            source /overlay/portage_dna.sh
-            emaint binhost --fix 2>/dev/null || true
-            if [ "${FORCE_REBUILD}" == "true" ]; then
-              emerge --getbinpkg --usepkg --buildpkg --usepkg-exclude "$1" "$1"
-            else
-              emerge --getbinpkg --usepkg --buildpkg "$1"
-            fi
-        run: |
-          echo ">>> Building: $TARGET"
-          echo "$BUILD_SCRIPT" > build_script.sh
-          chmod +x build_script.sh
-          docker run --rm --privileged \
-            -e GITHUB_REPOSITORY_OWNER -e GITHUB_REPOSITORY -e FORCE_REBUILD \
-            -v "${{ github.workspace }}:/overlay" \
-            -v "${{ github.workspace }}/steam-overlay:/var/db/repos/steam-overlay" \
-            -v "${{ github.workspace }}/binpkgs:/var/cache/binpkgs" \
-            -v "${{ github.workspace }}/distfiles:/var/cache/distfiles" \
-            -v "${{ github.workspace }}/ccache:/var/cache/ccache" \
-            gentoo/stage3:amd64-desktop-openrc \
-            bash /overlay/build_script.sh "$TARGET"
-
-      - name: Generate Unified Portage Index
-        if: steps.queue.outputs.target_pkg != ''
-        run: |
-          if [ -z "$(find ${{ github.workspace }}/binpkgs -name '*.gpkg.tar' 2>/dev/null)" ]; then exit 0; fi
-          docker run --rm \
-            -v "${{ github.workspace }}/binpkgs:/var/cache/binpkgs" \
-            gentoo/stage3:amd64-desktop-openrc \
-            bash -c 'mkdir -p /var/db/repos/gentoo/metadata && echo "masters = gentoo" > /var/db/repos/gentoo/metadata/layout.conf && PKGDIR="/var/cache/binpkgs" emaint binhost --fix'
-
-      - name: Deploy to GitHub Releases
-        if: steps.queue.outputs.target_pkg != ''
-        env:
-          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
-          REPO: ${{ github.repository }}
-        run: |
-          if [ -z "$(find ${{ github.workspace }}/binpkgs -name '*.gpkg.tar' 2>/dev/null)" ]; then exit 0; fi
-          gh release view rolling -R "$REPO" 2>/dev/null || \
-            gh release create rolling -R "$REPO" --title "Nexus Rolling Binaries" --notes "Automated Gentoo Binhost" --prerelease
-          find ${{ github.workspace }}/binpkgs -type f \( -name "*.gpkg.tar" -o -name "Packages" \) -exec gh release upload rolling -R "$REPO" {} --clobber \;
-
-      - name: Fix Workspace Permissions for Cache
-        if: always()
-        run: sudo chown -R $USER:$USER ${{ github.workspace }}
-
-      - name: Trigger Relay Race
-        if: steps.queue.outputs.remaining_pkgs != ''
+      - name: Upload to GitHub Release (Infinite Storage Pattern)
         env:
           GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
         run: |
-          echo ">>> Passing the baton to: ${{ steps.queue.outputs.remaining_pkgs }}"
-          gh workflow run "Gentoo Build Relay" \
+          # Create release if missing
+          gh release view rolling --repo ${{ github.repository }} 2>/dev/null || \
+            gh release create rolling \
+              --repo ${{ github.repository }} \
+              --title "Nexus Rolling Binaries" \
+              --notes "Automated Gentoo Binhost - GPKG format" \
+              --prerelease
+          
+          # Upload files one-by-one (avoids 2GB limit issues)
+          for file in binpkgs/*.gpkg.tar binpkgs/Packages*; do
+            [ -f "$file" ] || continue
+            echo "📦 Uploading $(basename "$file")..."
+            gh release upload rolling "$file" \
+              --repo ${{ github.repository }} \
+              --clobber 2>/dev/null || true
+          done
+
+      - name: Fix Workspace Permissions
+        if: always()
+        run: sudo chown -R "$(id -u):$(id -g)" "${{ github.workspace }}"
+
+      - name: Trigger Relay for Next Package
+        if: steps.queue.outputs.REMAINING_PKGS != ''
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+        run: |
+          echo "⚡ Relaying to next package: ${{ steps.queue.outputs.REMAINING_PKGS }}"
+          gh workflow run "${{ github.workflow }}" \
             --ref "${GITHUB_REF_NAME}" \
-            -f package_list="${{ steps.queue.outputs.remaining_pkgs }}" \
+            --repo ${{ github.repository }} \
+            -f package_list="${{ steps.queue.outputs.REMAINING_PKGS }}" \
             -f force_rebuild="${{ github.event.inputs.force_rebuild }}"
