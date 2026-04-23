@@ -92,8 +92,12 @@ jobs:
           ACCEPT_KEYWORDS="~amd64"
           EOF
 
+          # Create metadata directory
           mkdir -p /var/db/repos/gentoo-nexus/metadata
           echo "masters = gentoo" > /var/db/repos/gentoo-nexus/metadata/layout.conf
+
+          # Create profiles directory and repo_name file
+          mkdir -p /var/db/repos/gentoo-nexus/profiles
           echo "gentoo-nexus" > /var/db/repos/gentoo-nexus/profiles/repo_name
 
           mkdir -p /etc/portage/package.accept_keywords
@@ -102,7 +106,7 @@ jobs:
           emerge --autounmask=y --autounmask-write {{TARGET}}
           SCRIPT
 
-          # Replace placeholder with actual target (use | delimiter to avoid / conflict)
+          # Replace placeholder with actual target (using | to avoid / conflict)
           sed -i "s|{{TARGET}}|${{ steps.queue.outputs.TARGET_PKG }}|" /tmp/docker-build.sh
           chmod +x /tmp/docker-build.sh
 
