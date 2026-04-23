@@ -20,7 +20,7 @@ jobs:
   build:
     name: Build and Deploy
     runs-on: ubuntu-latest
-    timeout-minutes: 120  # Reduced: binaries = fast!
+    timeout-minutes: 120
     steps:
       - name: Checkout Repository
         uses: actions/checkout@v4
@@ -51,7 +51,6 @@ jobs:
           read -r -a PKGS <<< "${{ github.event.inputs.package_list }}"
           TARGET_PKG="${PKGS[0]}"
           REMAINING="${PKGS[@]:1}"
-          
           echo "TARGET_PKG=$TARGET_PKG" >> $GITHUB_OUTPUT
           echo "REMAINING_PKGS=$REMAINING" >> $GITHUB_OUTPUT
 
@@ -60,7 +59,6 @@ jobs:
         run: |
           TARGET="${{ steps.queue.outputs.TARGET_PKG }}"
           PN=$(echo "$TARGET" | sed 's/^=//' | awk -F/ '{print $NF}' | sed -E 's/-[0-9]+(\.[0-9]+)*(_[a-z0-9]+)?(-r[0-9]+)?$//')
-          
           if [ "${{ github.event.inputs.force_rebuild }}" == "true" ]; then
             echo "Force rebuild: Always compile $TARGET"
             echo "skip_compile=false" >> $GITHUB_OUTPUT
@@ -78,28 +76,35 @@ jobs:
           docker run --rm --privileged \
             -v ${{ github.workspace }}/binpkgs:/var/cache/binpkgs \
             -v ${{ github.workspace }}/overlay:/var/db/repos/gentoo-nexus \
-            gentoo/stage3:amd64-desktop-openrc bash -c '
+            gentoo/stage3:amd64-desktop-openrc bash -c "
             set -euo pipefail
-            # Ultra-minimal: Just sync + emerge
+            # 1. Populate Gentoo repo FIRST (stage3 is empty)
             emerge-webrsync -q
+            
+            # 2. Profile
             eselect profile set default/linux/amd64/23.0/desktop 2>/dev/null || eselect profile set 1
             
-            # Config: Prefer binpkgs, no GPG, build if missing
-            cat > /etc/portage/make.conf << EOF
-            EMERGE_DEFAULT_OPTS="--getbinpkg --usepkg --buildpkg --quiet-build=y --jobs=4"
+            # 3. make.conf (single-quoted EOF prevents any expansion)
+            cat > /etc/portage/make.conf << 'EOF'
+            EMERGE_DEFAULT_OPTS='--getbinpkg --usepkg --buildpkg --quiet-build=y --jobs=4 --keep-going'
             PKGDIR=/var/cache/binpkgs
             PORTAGE_BINPKG_SIGVERIFY=0
-            ACCEPT_LICENSE="*"
-            ACCEPT_KEYWORDS="~amd64"
+            ACCEPT_LICENSE='*'
+            ACCEPT_KEYWORDS='~amd64'
             EOF
             
-            # Nexus repo
+            # 4. Nexus repo metadata
             mkdir -p /var/db/repos/gentoo-nexus/metadata
-            echo "masters = gentoo" > /var/db/repos/gentoo-nexus/metadata/layout.conf
-            echo "gentoo-nexus" > /var/db/repos/gentoo-nexus/profiles/repo_name
+            echo 'masters = gentoo' > /var/db/repos/gentoo-nexus/metadata/layout.conf
+            echo 'gentoo-nexus' > /var/db/repos/gentoo-nexus/profiles/repo_name
             
+            # 5. Accept keywords for overlays
+            mkdir -p /etc/portage/package.accept_keywords
+            echo '*/*::gentoo-nexus **' > /etc/portage/package.accept_keywords/nexus
+            
+            # 6. Build target
             emerge --autounmask=y --autounmask-write ${{ steps.queue.outputs.TARGET_PKG }}
-          '
+            "
 
       - name: Generate Packages Index
         run: |
@@ -107,20 +112,17 @@ jobs:
             docker run --rm \
               -v ${{ github.workspace }}/binpkgs:/mnt \
               gentoo/stage3:amd64-desktop-openrc \
-              emaint --quiet binhost -f /mnt
+              emaint binhost --fix /mnt
           fi
 
       - name: Upload to GitHub Release (Infinite Storage!)
         env:
           GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
         run: |
-          # Create/update release
           gh release view rolling --repo ${{ github.repository }} 2>/dev/null || \
             gh release create rolling --title "Nexus Rolling Binaries" \
               --notes "Automated Gentoo Binhost" --prerelease \
               --repo ${{ github.repository }}
-          
-          # Upload EVERYTHING one-by-one (no 2GB limit issues)
           for file in binpkgs/*; do
             [ -f "$file" ] || continue
             echo "Uploading $file..."
