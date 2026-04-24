@@ -20,7 +20,7 @@ jobs:
   build:
     name: Build and Deploy
     runs-on: ubuntu-latest
-    timeout-minutes: 180
+    timeout-minutes: 360
     steps:
       - name: Checkout Repository
         uses: actions/checkout@v4
@@ -95,16 +95,13 @@ jobs:
             eselect profile list 2>/dev/null | grep -m1 desktop | awk '{print $1}' | tr -d '[]' | xargs -r eselect profile set || \
             eselect profile set 1
 
-          # Enable official Gentoo binhost (stable binaries) for speed
           rm -rf /etc/portage/binrepos.conf/
           mkdir -p /etc/portage/binrepos.conf
           cat > /etc/portage/binrepos.conf/gentoobinhost.conf << 'BINHOST'
-          [DEFAULT]
-          verify-signature = false
-
           [gentoo]
           priority = 9999
           sync-uri = https://distfiles.gentoo.org/releases/amd64/binpackages/23.0/x86-64/
+          verify-signature = false
           BINHOST
 
           cat > /etc/portage/make.conf << 'MAKECONF'
@@ -134,17 +131,8 @@ jobs:
           mkdir -p /etc/portage/package.accept_keywords
           echo '*/*::gentoo-nexus **' > /etc/portage/package.accept_keywords/nexus
 
-          # Pin heavy packages to stable (amd64) so they come pre-compiled from the official binhost.
-          # Everything else remains ~amd64 per make.conf above.
-          cat > /etc/portage/package.accept_keywords/stable << 'STABLEKEYWORDS'
-          net-libs/webkit-gtk amd64
-          gui-libs/gtk amd64
-          sys-devel/llvm amd64
-          sys-devel/clang amd64
-          sys-devel/gcc amd64
-          dev-lang/rust amd64
-          www-client/firefox amd64
-          STABLEKEYWORDS
+          # Force webkit-gtk to use stable binary from official binhost
+          echo 'net-libs/webkit-gtk -~amd64' > /etc/portage/package.accept_keywords/stable-binary
 
           echo ">>> Building: $1"
           emerge --autounmask=y --autounmask-write --autounmask-continue=y "$1"
