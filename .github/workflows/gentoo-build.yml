@@ -78,7 +78,7 @@ jobs:
             echo "skip_compile=false" >> "$GITHUB_OUTPUT"
             echo ">>> Removing stale binaries to force fresh compilation..."
             rm -f binpkgs/${PN}-*.gpkg.tar
-            # Delete ALL previously known bad packages
+            # Delete ALL known bad packages (ABI-incompatible with fresh stage3)
             rm -f binpkgs/opus-*.gpkg.tar
             rm -f binpkgs/ell-*.gpkg.tar
             rm -f binpkgs/mpg123-base-*.gpkg.tar
@@ -140,7 +140,9 @@ jobs:
           DISTDIR="/var/cache/distfiles"
           ACCEPT_LICENSE="*"
           ACCEPT_KEYWORDS="~amd64"
-          EMERGE_DEFAULT_OPTS="--getbinpkg --usepkg --buildpkg --binpkg-respect-use=y --quiet-build=y --jobs=4 --load-average=4 --keep-going"
+          # --changed-use rebuilds packages when USE flags change (e.g. abi_x86_32)
+          # --binpkg-respect-use=n (default) ignores stale binaries with wrong USE
+          EMERGE_DEFAULT_OPTS="--getbinpkg --usepkg --buildpkg --changed-use --quiet-build=y --jobs=4 --load-average=4 --keep-going"
           MAKEOPTS="-j4"
           PORTAGE_BINPKG_SIGVERIFY="0"
           MAKECONF
@@ -177,8 +179,11 @@ jobs:
           # steam-launcher specific use flags
           echo 'games-util/steam-launcher steamruntime' > /etc/portage/package.use/steam-launcher
           echo 'sys-libs/zlib minizip' >> /etc/portage/package.use/steam-launcher
+          # zlib-ng compat required for 32-bit Steam deps via virtual/zlib
+          echo 'sys-libs/zlib-ng compat' > /etc/portage/package.use/zlib-ng
+          echo 'sys-libs/minizip-ng compat' > /etc/portage/package.use/minizip-ng
 
-          # ----- Purge known stale binaries -----
+          # ----- Purge known stale binaries (pre-ABI_X86="32 64") -----
           echo ">>> Purging known stale binaries..."
           rm -f /var/cache/binpkgs/Crypt-URandom-*.gpkg.tar
           rm -f /var/cache/binpkgs/ell-*.gpkg.tar
