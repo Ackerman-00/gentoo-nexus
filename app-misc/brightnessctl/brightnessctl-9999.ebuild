@@ -16,6 +16,23 @@ RDEPEND="sys-apps/systemd-utils[udev]"
 DEPEND="${RDEPEND}"
 BDEPEND="virtual/pkgconfig"
 
+# brightnessctl uses a custom configure script, NOT autotools.
+# We must NOT call econf; instead we call ./configure directly.
+src_configure() {
+	local myconf=(
+		--prefix="${EPREFIX}"/usr
+		--enable-udev
+		--disable-logind
+	)
+	# Use bash's built-in ./configure, not econf
+	bash ./configure "${myconf[@]}" || die "configure failed"
+}
+
+src_compile() {
+	emake
+}
+
 src_install() {
-	emake install DESTDIR="${D}" PREFIX=/usr
+	emake install DESTDIR="${D}" PREFIX="${EPREFIX}"/usr
+	dodoc README.md
 }
