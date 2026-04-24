@@ -140,9 +140,13 @@ jobs:
           DISTDIR="/var/cache/distfiles"
           ACCEPT_LICENSE="*"
           ACCEPT_KEYWORDS="~amd64"
-          # --changed-use rebuilds packages when USE flags change (e.g. abi_x86_32)
-          # --binpkg-respect-use=n (default) ignores stale binaries with wrong USE
-          EMERGE_DEFAULT_OPTS="--getbinpkg --usepkg --buildpkg --changed-use --quiet-build=y --jobs=4 --load-average=4 --keep-going"
+          # --newuse (-N) always rebuilds packages with changed USE flags,
+          # ensuring the binary stays in sync with the source ebuild.
+          # The Gentoo Binary Package Guide explicitly says to use --newuse,
+          # NOT --changed-use, on a binary package host.
+          # Default --binpkg-respect-use=n means Portage will try to use
+          # available binary packages, falling back to source if they fail.
+          EMERGE_DEFAULT_OPTS="--getbinpkg --usepkg --buildpkg --newuse --quiet-build=y --jobs=4 --load-average=4 --keep-going"
           MAKEOPTS="-j4"
           PORTAGE_BINPKG_SIGVERIFY="0"
           MAKECONF
