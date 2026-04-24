@@ -72,9 +72,9 @@ jobs:
           if [ "${{ github.event.inputs.force_rebuild }}" == "true" ]; then
             echo "Force rebuild: Will compile $TARGET"
             echo "skip_compile=false" >> "$GITHUB_OUTPUT"
-            # Remove stale binaries for the target AND its known-broken dependencies
             echo ">>> Removing stale binaries to force fresh compilation..."
             rm -f binpkgs/${PN}-*.gpkg.tar
+            # Delete ALL previously known bad packages
             rm -f binpkgs/opus-*.gpkg.tar
             rm -f binpkgs/ell-*.gpkg.tar
             rm -f binpkgs/mpg123-base-*.gpkg.tar
@@ -82,6 +82,12 @@ jobs:
             rm -f binpkgs/seatd-*.gpkg.tar
             rm -f binpkgs/gtk-*.gpkg.tar
             rm -f binpkgs/Crypt-URandom-*.gpkg.tar
+            rm -f binpkgs/wireless-regdb-*.gpkg.tar
+            rm -f binpkgs/mobile-broadband-provider-info-*.gpkg.tar
+            rm -f binpkgs/jemalloc-*.gpkg.tar
+            rm -f binpkgs/nss-*.gpkg.tar
+            rm -f binpkgs/libmbim-*.gpkg.tar
+            rm -f binpkgs/libqrtr-glib-*.gpkg.tar
           elif ls binpkgs/${PN}-*.gpkg.tar >/dev/null 2>&1; then
             echo "Binary ${PN}-*.gpkg.tar exists. Skipping compile."
             echo "skip_compile=true" >> "$GITHUB_OUTPUT"
@@ -105,10 +111,8 @@ jobs:
             eselect profile list 2>/dev/null | grep -m1 desktop | awk '{print $1}' | tr -d '[]' | xargs -r eselect profile set || \
             eselect profile set 1
 
-          # Import Gentoo GPG keys so that signature verification succeeds
           getuto 2>/dev/null || emerge -q --oneshot app-crypt/gentoo-keys 2>/dev/null || true
 
-          # Enable official Gentoo binhost (stable binaries)
           rm -rf /etc/portage/binrepos.conf/
           mkdir -p /etc/portage/binrepos.conf
           cat > /etc/portage/binrepos.conf/gentoobinhost.conf << 'BINHOST'
@@ -148,33 +152,19 @@ jobs:
           echo '*/*::gentoo-nexus **' > /etc/portage/package.accept_keywords/nexus
           echo 'net-libs/webkit-gtk -~amd64 amd64' > /etc/portage/package.accept_keywords/stable-binary
 
-          # ----- USE flag fixes for problematic binary packages -----
+          # ----- USE flag fixes -----
           mkdir -p /etc/portage/package.use
-          # opus needs abi_x86_64 to satisfy libsndfile dependency
           echo 'media-libs/opus abi_x86_64' > /etc/portage/package.use/opus
-          # gtk binary from official binhost was built with introspection enabled
           echo 'gui-libs/gtk introspection' > /etc/portage/package.use/gtk
-          # seatd needs builtin and server for OpenRC init script
           echo 'sys-auth/seatd builtin server' > /etc/portage/package.use/seatd
-          # webkit-gtk adjustments for binary compatibility
           echo 'net-libs/webkit-gtk -avif -jpegxl -lcms -pdf -spell -wayland -jumbo-build' > /etc/portage/package.use/webkit-gtk
-          # kernel needs installkernel with dracut for initramfs generation
           echo 'sys-kernel/installkernel dracut' > /etc/portage/package.use/installkernel
 
-          # ----- Force source rebuild for known-broken binhost packages -----
-          mkdir -p /etc/portage/env
-          cat > /etc/portage/env/force-rebuild << 'ENVFORCE'
-          FEATURES="-getbinpkg"
-          EMERGE_DEFAULT_OPTS="--usepkg=n"
-          ENVFORCE
-
-          mkdir -p /etc/portage/package.env
-          cat > /etc/portage/package.env/force-rebuild << 'ENVREBUILD'
-          dev-perl/Crypt-URandom force-rebuild
-          dev-libs/libxmlb force-rebuild
-          dev-libs/ell force-rebuild
-          media-sound/mpg123-base force-rebuild
-          ENVREBUILD
+          # ----- Regenerate Manifests for all overlay ebuilds (ensures checksums) -----
+          echo ">>> Generating Manifests for overlay..."
+          for ebuild_file in $(find /var/db/repos/gentoo-nexus -mindepth 2 -maxdepth 3 -name "*.ebuild"); do
+             ebuild "$ebuild_file" manifest >/dev/null 2>&1 || true
+          done
 
           echo ">>> Building: $1"
           emerge --autounmask=y --autounmask-write --autounmask-continue=y "$1" || {
