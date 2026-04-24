@@ -158,6 +158,8 @@ jobs:
           echo 'sys-auth/seatd builtin server' > /etc/portage/package.use/seatd
           # webkit-gtk adjustments for binary compatibility
           echo 'net-libs/webkit-gtk -avif -jpegxl -lcms -pdf -spell -wayland -jumbo-build' > /etc/portage/package.use/webkit-gtk
+          # kernel needs installkernel with dracut for initramfs generation
+          echo 'sys-kernel/installkernel dracut' > /etc/portage/package.use/installkernel
 
           # ----- Force source rebuild for known-broken binhost packages -----
           mkdir -p /etc/portage/env
