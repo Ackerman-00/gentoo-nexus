@@ -17,7 +17,6 @@ DEPEND="${RDEPEND}"
 BDEPEND="virtual/pkgconfig"
 
 # brightnessctl uses a custom configure script, NOT autotools.
-# We must NOT call econf; instead we call ./configure directly.
 src_configure() {
 	local myconf=(
 		--prefix="${EPREFIX}"/usr
