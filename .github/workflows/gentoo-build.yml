@@ -33,10 +33,6 @@ jobs:
           mkdir -p binpkgs overlay distfiles ccache
           chmod -R 777 binpkgs overlay distfiles ccache
 
-      - name: Fetch Steam Overlay
-        run: |
-          git clone --depth 1 https://github.com/anyc/steam-overlay.git steam-overlay 2>/dev/null || true
-
       - name: Prepare Overlay with Full Repo Structure
         run: |
           rsync -a --exclude='.git' --exclude='binpkgs' --exclude='overlay' ./ overlay/
@@ -78,7 +74,7 @@ jobs:
             echo "skip_compile=false" >> "$GITHUB_OUTPUT"
             echo ">>> Removing stale binaries to force fresh compilation..."
             rm -f binpkgs/${PN}-*.gpkg.tar
-            # Delete ALL known bad packages (ABI-incompatible with fresh stage3)
+            # Delete ONLY known broken packages (from old stage3)
             rm -f binpkgs/opus-*.gpkg.tar
             rm -f binpkgs/ell-*.gpkg.tar
             rm -f binpkgs/mpg123-base-*.gpkg.tar
@@ -132,19 +128,14 @@ jobs:
           COMMON_FLAGS="-O2 -march=x86-64 -pipe"
           CFLAGS="${COMMON_FLAGS}"
           CXXFLAGS="${COMMON_FLAGS}"
-          # Build both 32‑bit and 64‑bit libraries so that every binary
-          # package works for both Steam and non‑Steam consumers.
-          # Recommended by github.com/anyc/steam-overlay README.
-          ABI_X86="32 64"
+          # 64‑bit only – no Steam 32‑bit ABI.
           FEATURES="buildpkg parallel-install getbinpkg -binpkg-verify-signature -sandbox -usersandbox -ipc-sandbox -network-sandbox -pid-sandbox"
           BINPKG_FORMAT="gpkg"
           PKGDIR="/var/cache/binpkgs"
           DISTDIR="/var/cache/distfiles"
           ACCEPT_LICENSE="*"
           ACCEPT_KEYWORDS="~amd64"
-          # No --newuse, no --changed-use – just reuse what we have.
-          # The Gentoo Binary Package Guide explicitly warns against
-          # --changed-use on a binary package host.
+          # Just reuse what we have – no cascading rebuilds.
           EMERGE_DEFAULT_OPTS="--getbinpkg --usepkg --buildpkg --quiet-build=y --jobs=4 --load-average=4 --keep-going"
           MAKEOPTS="-j4"
           PORTAGE_BINPKG_SIGVERIFY="0"
@@ -159,35 +150,17 @@ jobs:
           auto-sync = no
           REPOCONF
 
-          cat > /etc/portage/repos.conf/steam-overlay.conf << 'REPOCONF'
-          [steam-overlay]
-          location = /var/db/repos/steam-overlay
-          masters = gentoo
-          priority = 50
-          auto-sync = no
-          REPOCONF
-
           mkdir -p /etc/portage/package.accept_keywords
           echo '*/*::gentoo-nexus **' > /etc/portage/package.accept_keywords/nexus
-          echo '*/*::steam-overlay **' >> /etc/portage/package.accept_keywords/nexus
           echo 'net-libs/webkit-gtk -~amd64 amd64' > /etc/portage/package.accept_keywords/stable-binary
 
-          # ----- USE flag fixes (all packages) -----
+          # ----- USE flag fixes (64‑bit only) -----
           mkdir -p /etc/portage/package.use
           echo 'media-libs/opus abi_x86_64' > /etc/portage/package.use/opus
           echo 'gui-libs/gtk introspection' > /etc/portage/package.use/gtk
           echo 'sys-auth/seatd builtin server' > /etc/portage/package.use/seatd
           echo 'net-libs/webkit-gtk -avif -jpegxl -lcms -pdf -spell -wayland -jumbo-build' > /etc/portage/package.use/webkit-gtk
           echo 'sys-kernel/installkernel dracut' > /etc/portage/package.use/installkernel
-
-          # ----- Steam‑specific USE flags (runtime only) -----
-          echo 'games-util/steam-launcher steamruntime' > /etc/portage/package.use/steam-launcher
-          echo 'sys-libs/zlib minizip' >> /etc/portage/package.use/steam-launcher
-          echo 'sys-libs/zlib-ng compat' >> /etc/portage/package.use/steam-launcher
-          echo 'sys-libs/minizip-ng compat' >> /etc/portage/package.use/steam-launcher
-
-          # ----- ncurses circular dep fix (Gentoo Wiki Steam page) -----
-          echo 'sys-libs/ncurses -gpm' > /etc/portage/package.use/ncurses-gpm
 
           # ----- Purge known stale binaries (ONLY during force_rebuild) -----
           if [ "${FORCE_REBUILD:-false}" = "true" ]; then
@@ -237,7 +210,6 @@ jobs:
             -e FORCE_REBUILD="${FORCE_REBUILD:-false}" \
             -v "${{ github.workspace }}/binpkgs:/var/cache/binpkgs:rw" \
             -v "${{ github.workspace }}/overlay:/var/db/repos/gentoo-nexus:rw" \
-            -v "${{ github.workspace }}/steam-overlay:/var/db/repos/steam-overlay:rw" \
             -v "${{ github.workspace }}/distfiles:/var/cache/distfiles:rw" \
             -v "${{ github.workspace }}/ccache:/var/cache/ccache:rw" \
             -v "${{ github.workspace }}/build_inside_docker.sh:/build.sh:ro" \
