@@ -72,6 +72,16 @@ jobs:
           if [ "${{ github.event.inputs.force_rebuild }}" == "true" ]; then
             echo "Force rebuild: Will compile $TARGET"
             echo "skip_compile=false" >> "$GITHUB_OUTPUT"
+            # Remove stale binaries for the target AND its known-broken dependencies
+            echo ">>> Removing stale binaries to force fresh compilation..."
+            rm -f binpkgs/${PN}-*.gpkg.tar
+            rm -f binpkgs/opus-*.gpkg.tar
+            rm -f binpkgs/ell-*.gpkg.tar
+            rm -f binpkgs/mpg123-base-*.gpkg.tar
+            rm -f binpkgs/libxmlb-*.gpkg.tar
+            rm -f binpkgs/seatd-*.gpkg.tar
+            rm -f binpkgs/gtk-*.gpkg.tar
+            rm -f binpkgs/Crypt-URandom-*.gpkg.tar
           elif ls binpkgs/${PN}-*.gpkg.tar >/dev/null 2>&1; then
             echo "Binary ${PN}-*.gpkg.tar exists. Skipping compile."
             echo "skip_compile=true" >> "$GITHUB_OUTPUT"
@@ -120,7 +130,7 @@ jobs:
           DISTDIR="/var/cache/distfiles"
           ACCEPT_LICENSE="*"
           ACCEPT_KEYWORDS="~amd64"
-          EMERGE_DEFAULT_OPTS="--getbinpkg --usepkg --buildpkg --quiet-build=y --jobs=4 --load-average=4 --keep-going"
+          EMERGE_DEFAULT_OPTS="--getbinpkg --usepkg --buildpkg --binpkg-respect-use=y --quiet-build=y --jobs=4 --load-average=4 --keep-going"
           MAKEOPTS="-j4"
           PORTAGE_BINPKG_SIGVERIFY="0"
           MAKECONF
@@ -138,16 +148,18 @@ jobs:
           echo '*/*::gentoo-nexus **' > /etc/portage/package.accept_keywords/nexus
           echo 'net-libs/webkit-gtk -~amd64 amd64' > /etc/portage/package.accept_keywords/stable-binary
 
-          # ----- USE fixes for problematic binary packages -----
+          # ----- USE flag fixes for problematic binary packages -----
           mkdir -p /etc/portage/package.use
-          # opus needs abi_x86_64 to match gst-plugins-opus binary
-          echo 'media-libs/opus abi_x86_64' >> /etc/portage/package.use/opus
-          # gtk binary was built with introspection enabled
-          echo 'gui-libs/gtk introspection' >> /etc/portage/package.use/gtk
-          # standard webkit-gtk adjustments
+          # opus needs abi_x86_64 to satisfy libsndfile dependency
+          echo 'media-libs/opus abi_x86_64' > /etc/portage/package.use/opus
+          # gtk binary from official binhost was built with introspection enabled
+          echo 'gui-libs/gtk introspection' > /etc/portage/package.use/gtk
+          # seatd needs builtin and server for OpenRC init script
+          echo 'sys-auth/seatd builtin server' > /etc/portage/package.use/seatd
+          # webkit-gtk adjustments for binary compatibility
           echo 'net-libs/webkit-gtk -avif -jpegxl -lcms -pdf -spell -wayland -jumbo-build' > /etc/portage/package.use/webkit-gtk
 
-          # ----- Force source rebuild for broken binhost packages -----
+          # ----- Force source rebuild for known-broken binhost packages -----
           mkdir -p /etc/portage/env
           cat > /etc/portage/env/force-rebuild << 'ENVFORCE'
           FEATURES="-getbinpkg"
@@ -158,10 +170,14 @@ jobs:
           cat > /etc/portage/package.env/force-rebuild << 'ENVREBUILD'
           dev-perl/Crypt-URandom force-rebuild
           dev-libs/libxmlb force-rebuild
+          dev-libs/ell force-rebuild
+          media-sound/mpg123-base force-rebuild
           ENVREBUILD
 
           echo ">>> Building: $1"
-          emerge --autounmask=y --autounmask-write --autounmask-continue=y "$1" || true
+          emerge --autounmask=y --autounmask-write --autounmask-continue=y "$1" || {
+            echo ">>> WARNING: emerge exited with non-zero code, but continuing to save partial binaries..."
+          }
 
           echo ">>> Regenerating Packages index..."
           emaint binhost --fix
