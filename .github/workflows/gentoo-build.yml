@@ -95,6 +95,10 @@ jobs:
             eselect profile list 2>/dev/null | grep -m1 desktop | awk '{print $1}' | tr -d '[]' | xargs -r eselect profile set || \
             eselect profile set 1
 
+          # Import Gentoo GPG keys so that signature verification succeeds
+          getuto 2>/dev/null || emerge -q --oneshot app-crypt/gentoo-keys 2>/dev/null || true
+
+          # Enable official Gentoo binhost (stable binaries)
           rm -rf /etc/portage/binrepos.conf/
           mkdir -p /etc/portage/binrepos.conf
           cat > /etc/portage/binrepos.conf/gentoobinhost.conf << 'BINHOST'
