@@ -132,6 +132,8 @@ jobs:
           COMMON_FLAGS="-O2 -march=x86-64 -pipe"
           CFLAGS="${COMMON_FLAGS}"
           CXXFLAGS="${COMMON_FLAGS}"
+          # Enable 32-bit ABI globally for Steam (steam-overlay recommendation)
+          ABI_X86="32 64"
           FEATURES="buildpkg parallel-install getbinpkg -binpkg-verify-signature -sandbox -usersandbox -ipc-sandbox -network-sandbox -pid-sandbox"
           BINPKG_FORMAT="gpkg"
           PKGDIR="/var/cache/binpkgs"
