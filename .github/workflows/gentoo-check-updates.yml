@@ -173,20 +173,42 @@ jobs:
       - name: Phase 2 - Generate Manifests for All Ebuilds
         run: |
           echo ">>> Generating Manifests for the overlay..."
-          # We need a minimal Portage environment. Use a quick Docker run or install portage.
-          # Since we already have the ebuild tool available on the runner? No, but we can use
-          # the same Docker image as in the build workflow to generate manifests.
           cat > gen_manifests.sh << 'EOF'
           #!/bin/bash
           set -euo pipefail
-          mkdir -p /var/db/repos/gentoo
+          # Set up base portage tree and repository configuration
+          mkdir -p /var/db/repos/gentoo /etc/portage/repos.conf
+
+          # Sync the base tree (needed for masters resolution)
           emerge-webrsync -q || true
+
+          # Configure main gentoo repo explicitly (Portage needs this)
+          cat > /etc/portage/repos.conf/gentoo.conf << 'REPOEOF'
+          [gentoo]
+          location = /var/db/repos/gentoo
+          auto-sync = yes
+          priority = -1000
+          REPOEOF
+
+          # Configure the overlay as a proper Portage repository
           mkdir -p /overlay/metadata
           echo "masters = gentoo" > /overlay/metadata/layout.conf
+          cat > /etc/portage/repos.conf/gentoo-nexus.conf << 'REPOEOF'
+          [gentoo-nexus]
+          location = /overlay
+          masters = gentoo
+          priority = 9999
+          auto-sync = no
+          REPOEOF
+
+          # Now generate manifests
           echo ">>> Generating Manifests..."
           for e in $(find /overlay -mindepth 2 -maxdepth 3 -name "*.ebuild"); do
-              ebuild "$e" manifest >/dev/null 2>&1 || true
+              ebuild "$e" manifest >/dev/null 2>&1 || {
+                  echo "WARNING: Failed to generate manifest for $(basename "$e")"
+              }
           done
+          echo ">>> Manifests generated successfully."
           EOF
           chmod +x gen_manifests.sh
           docker run --rm -v "${{ github.workspace }}:/overlay" gentoo/stage3:amd64-desktop-openrc bash /overlay/gen_manifests.sh

@@ -160,10 +160,28 @@ jobs:
           echo 'net-libs/webkit-gtk -avif -jpegxl -lcms -pdf -spell -wayland -jumbo-build' > /etc/portage/package.use/webkit-gtk
           echo 'sys-kernel/installkernel dracut' > /etc/portage/package.use/installkernel
 
-          # ----- Regenerate Manifests for all overlay ebuilds (ensures checksums) -----
+          # ----- Purge known stale binaries (prevents dependency poisoning) -----
+          echo ">>> Purging known stale binaries..."
+          rm -f /var/cache/binpkgs/Crypt-URandom-*.gpkg.tar
+          rm -f /var/cache/binpkgs/ell-*.gpkg.tar
+          rm -f /var/cache/binpkgs/mpg123-base-*.gpkg.tar
+          rm -f /var/cache/binpkgs/opus-*.gpkg.tar
+          rm -f /var/cache/binpkgs/libxmlb-*.gpkg.tar
+          rm -f /var/cache/binpkgs/seatd-*.gpkg.tar
+          rm -f /var/cache/binpkgs/gtk-*.gpkg.tar
+          rm -f /var/cache/binpkgs/wireless-regdb-*.gpkg.tar
+          rm -f /var/cache/binpkgs/mobile-broadband-provider-info-*.gpkg.tar
+          rm -f /var/cache/binpkgs/jemalloc-*.gpkg.tar
+          rm -f /var/cache/binpkgs/nss-*.gpkg.tar
+          rm -f /var/cache/binpkgs/libmbim-*.gpkg.tar
+          rm -f /var/cache/binpkgs/libqrtr-glib-*.gpkg.tar
+
+          # ----- Regenerate Manifests for all overlay ebuilds -----
           echo ">>> Generating Manifests for overlay..."
           for ebuild_file in $(find /var/db/repos/gentoo-nexus -mindepth 2 -maxdepth 3 -name "*.ebuild"); do
-             ebuild "$ebuild_file" manifest >/dev/null 2>&1 || true
+             ebuild "$ebuild_file" manifest >/dev/null 2>&1 || {
+               echo "WARNING: Manifest generation failed for $(basename "$ebuild_file")"
+             }
           done
 
           echo ">>> Building: $1"
