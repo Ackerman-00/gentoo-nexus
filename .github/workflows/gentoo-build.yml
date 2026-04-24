@@ -108,13 +108,13 @@ jobs:
           COMMON_FLAGS="-O2 -march=x86-64 -pipe"
           CFLAGS="${COMMON_FLAGS}"
           CXXFLAGS="${COMMON_FLAGS}"
-          FEATURES="buildpkg parallel-install binpkg-ignore-signature -sandbox -usersandbox -ipc-sandbox -network-sandbox -pid-sandbox"
+          FEATURES="buildpkg parallel-install getbinpkg binpkg-ignore-signature -sandbox -usersandbox -ipc-sandbox -network-sandbox -pid-sandbox"
           BINPKG_FORMAT="gpkg"
           PKGDIR="/var/cache/binpkgs"
           DISTDIR="/var/cache/distfiles"
           ACCEPT_LICENSE="*"
           ACCEPT_KEYWORDS="~amd64"
-          EMERGE_DEFAULT_OPTS="--usepkg --buildpkg --quiet-build=y --jobs=4 --load-average=4 --keep-going"
+          EMERGE_DEFAULT_OPTS="--getbinpkg --usepkg --buildpkg --quiet-build=y --jobs=4 --load-average=4 --keep-going"
           MAKEOPTS="-j4"
           PORTAGE_BINPKG_SIGVERIFY="0"
           MAKECONF
@@ -130,9 +130,10 @@ jobs:
 
           mkdir -p /etc/portage/package.accept_keywords
           echo '*/*::gentoo-nexus **' > /etc/portage/package.accept_keywords/nexus
+          echo 'net-libs/webkit-gtk -~amd64 amd64' > /etc/portage/package.accept_keywords/stable-binary
 
-          # Force webkit-gtk to use stable binary from official binhost
-          echo 'net-libs/webkit-gtk -~amd64' > /etc/portage/package.accept_keywords/stable-binary
+          mkdir -p /etc/portage/package.use
+          echo 'net-libs/webkit-gtk -avif -jpegxl -lcms -pdf -spell -wayland -jumbo-build' > /etc/portage/package.use/webkit-gtk
 
           echo ">>> Building: $1"
           emerge --autounmask=y --autounmask-write --autounmask-continue=y "$1"
