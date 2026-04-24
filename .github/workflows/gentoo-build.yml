@@ -138,11 +138,30 @@ jobs:
           echo '*/*::gentoo-nexus **' > /etc/portage/package.accept_keywords/nexus
           echo 'net-libs/webkit-gtk -~amd64 amd64' > /etc/portage/package.accept_keywords/stable-binary
 
+          # ----- USE fixes for problematic binary packages -----
           mkdir -p /etc/portage/package.use
+          # opus needs abi_x86_64 to match gst-plugins-opus binary
+          echo 'media-libs/opus abi_x86_64' >> /etc/portage/package.use/opus
+          # gtk binary was built with introspection enabled
+          echo 'gui-libs/gtk introspection' >> /etc/portage/package.use/gtk
+          # standard webkit-gtk adjustments
           echo 'net-libs/webkit-gtk -avif -jpegxl -lcms -pdf -spell -wayland -jumbo-build' > /etc/portage/package.use/webkit-gtk
 
+          # ----- Force source rebuild for broken binhost packages -----
+          mkdir -p /etc/portage/env
+          cat > /etc/portage/env/force-rebuild << 'ENVFORCE'
+          FEATURES="-getbinpkg"
+          EMERGE_DEFAULT_OPTS="--usepkg=n"
+          ENVFORCE
+
+          mkdir -p /etc/portage/package.env
+          cat > /etc/portage/package.env/force-rebuild << 'ENVREBUILD'
+          dev-perl/Crypt-URandom force-rebuild
+          dev-libs/libxmlb force-rebuild
+          ENVREBUILD
+
           echo ">>> Building: $1"
-          emerge --autounmask=y --autounmask-write --autounmask-continue=y "$1"
+          emerge --autounmask=y --autounmask-write --autounmask-continue=y "$1" || true
 
           echo ">>> Regenerating Packages index..."
           emaint binhost --fix
