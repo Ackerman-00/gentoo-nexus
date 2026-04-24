@@ -98,10 +98,12 @@ jobs:
           rm -rf /etc/portage/binrepos.conf/
           mkdir -p /etc/portage/binrepos.conf
           cat > /etc/portage/binrepos.conf/gentoobinhost.conf << 'BINHOST'
+          [DEFAULT]
+          verify-signature = false
+
           [gentoo]
           priority = 9999
           sync-uri = https://distfiles.gentoo.org/releases/amd64/binpackages/23.0/x86-64/
-          verify-signature = false
           BINHOST
 
           cat > /etc/portage/make.conf << 'MAKECONF'
