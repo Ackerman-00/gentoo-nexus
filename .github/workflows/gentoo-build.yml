@@ -33,6 +33,10 @@ jobs:
           mkdir -p binpkgs overlay distfiles ccache
           chmod -R 777 binpkgs overlay distfiles ccache
 
+      - name: Fetch Steam Overlay
+        run: |
+          git clone --depth 1 https://github.com/anyc/steam-overlay.git steam-overlay 2>/dev/null || true
+
       - name: Prepare Overlay with Full Repo Structure
         run: |
           rsync -a --exclude='.git' --exclude='binpkgs' --exclude='overlay' ./ overlay/
@@ -148,8 +152,17 @@ jobs:
           auto-sync = no
           REPOCONF
 
+          cat > /etc/portage/repos.conf/steam-overlay.conf << 'REPOCONF'
+          [steam-overlay]
+          location = /var/db/repos/steam-overlay
+          masters = gentoo
+          priority = 50
+          auto-sync = no
+          REPOCONF
+
           mkdir -p /etc/portage/package.accept_keywords
           echo '*/*::gentoo-nexus **' > /etc/portage/package.accept_keywords/nexus
+          echo '*/*::steam-overlay **' >> /etc/portage/package.accept_keywords/nexus
           echo 'net-libs/webkit-gtk -~amd64 amd64' > /etc/portage/package.accept_keywords/stable-binary
 
           # ----- USE flag fixes -----
@@ -159,8 +172,11 @@ jobs:
           echo 'sys-auth/seatd builtin server' > /etc/portage/package.use/seatd
           echo 'net-libs/webkit-gtk -avif -jpegxl -lcms -pdf -spell -wayland -jumbo-build' > /etc/portage/package.use/webkit-gtk
           echo 'sys-kernel/installkernel dracut' > /etc/portage/package.use/installkernel
+          # steam-launcher specific use flags
+          echo 'games-util/steam-launcher steamruntime' > /etc/portage/package.use/steam-launcher
+          echo 'sys-libs/zlib minizip' >> /etc/portage/package.use/steam-launcher
 
-          # ----- Purge known stale binaries (prevents dependency poisoning) -----
+          # ----- Purge known stale binaries -----
           echo ">>> Purging known stale binaries..."
           rm -f /var/cache/binpkgs/Crypt-URandom-*.gpkg.tar
           rm -f /var/cache/binpkgs/ell-*.gpkg.tar
@@ -176,7 +192,7 @@ jobs:
           rm -f /var/cache/binpkgs/libmbim-*.gpkg.tar
           rm -f /var/cache/binpkgs/libqrtr-glib-*.gpkg.tar
 
-          # ----- Regenerate Manifests for all overlay ebuilds -----
+          # ----- Regenerate Manifests -----
           echo ">>> Generating Manifests for overlay..."
           for ebuild_file in $(find /var/db/repos/gentoo-nexus -mindepth 2 -maxdepth 3 -name "*.ebuild"); do
              ebuild "$ebuild_file" manifest >/dev/null 2>&1 || {
@@ -202,6 +218,7 @@ jobs:
           docker run --rm --privileged \
             -v "${{ github.workspace }}/binpkgs:/var/cache/binpkgs:rw" \
             -v "${{ github.workspace }}/overlay:/var/db/repos/gentoo-nexus:rw" \
+            -v "${{ github.workspace }}/steam-overlay:/var/db/repos/steam-overlay:rw" \
             -v "${{ github.workspace }}/distfiles:/var/cache/distfiles:rw" \
             -v "${{ github.workspace }}/ccache:/var/cache/ccache:rw" \
             -v "${{ github.workspace }}/build_inside_docker.sh:/build.sh:ro" \
