@@ -95,14 +95,23 @@ jobs:
             eselect profile list 2>/dev/null | grep -m1 desktop | awk '{print $1}' | tr -d '[]' | xargs -r eselect profile set || \
             eselect profile set 1
 
-          # No official binhost; use only locally stored binary packages from our own cache
+          # Enable official Gentoo binhost (stable binaries) for speed
           rm -rf /etc/portage/binrepos.conf/
+          mkdir -p /etc/portage/binrepos.conf
+          cat > /etc/portage/binrepos.conf/gentoobinhost.conf << 'BINHOST'
+          [DEFAULT]
+          verify-signature = false
+
+          [gentoo]
+          priority = 9999
+          sync-uri = https://distfiles.gentoo.org/releases/amd64/binpackages/23.0/x86-64/
+          BINHOST
 
           cat > /etc/portage/make.conf << 'MAKECONF'
           COMMON_FLAGS="-O2 -march=x86-64 -pipe"
           CFLAGS="${COMMON_FLAGS}"
           CXXFLAGS="${COMMON_FLAGS}"
-          FEATURES="buildpkg parallel-install -sandbox -usersandbox -ipc-sandbox -network-sandbox -pid-sandbox"
+          FEATURES="buildpkg parallel-install binpkg-ignore-signature -sandbox -usersandbox -ipc-sandbox -network-sandbox -pid-sandbox"
           BINPKG_FORMAT="gpkg"
           PKGDIR="/var/cache/binpkgs"
           DISTDIR="/var/cache/distfiles"
@@ -124,6 +133,18 @@ jobs:
 
           mkdir -p /etc/portage/package.accept_keywords
           echo '*/*::gentoo-nexus **' > /etc/portage/package.accept_keywords/nexus
+
+          # Pin heavy packages to stable (amd64) so they come pre-compiled from the official binhost.
+          # Everything else remains ~amd64 per make.conf above.
+          cat > /etc/portage/package.accept_keywords/stable << 'STABLEKEYWORDS'
+          net-libs/webkit-gtk amd64
+          gui-libs/gtk amd64
+          sys-devel/llvm amd64
+          sys-devel/clang amd64
+          sys-devel/gcc amd64
+          dev-lang/rust amd64
+          www-client/firefox amd64
+          STABLEKEYWORDS
 
           echo ">>> Building: $1"
           emerge --autounmask=y --autounmask-write --autounmask-continue=y "$1"
@@ -176,8 +197,8 @@ jobs:
           for file in binpkgs/Packages*; do
             [ -f "$file" ] && retry_upload "$file"
           done
-          for file in binpkgs/*.gpkg.tar; do
-            [ -f "$file" ] && retry_upload "$file"
+          find binpkgs -name '*.gpkg.tar' | while read -r file; do
+            retry_upload "$file"
           done
 
       - name: Fix Workspace Permissions
