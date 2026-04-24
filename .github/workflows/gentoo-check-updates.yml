@@ -103,7 +103,6 @@ jobs:
                   curr_ver_m = re.search(rf'{re.escape(pkg_name)}-(\d+(?:\.\d+)*(?:_(?:alpha|beta|pre|rc|p)\d*)?(?:-r\d+)?)\.ebuild$', ebuild_path.name)
                   if not curr_ver_m: continue
                   curr_ver = curr_ver_m.group(1)
-                  
                   appimage_url = "https://installer.rootapp.com/installer/Linux/X64/Root.AppImage"
                   with tempfile.NamedTemporaryFile(delete=False, suffix=".AppImage") as tmp: tmp_path = tmp.name
                   try:
@@ -111,11 +110,9 @@ jobs:
                       new_ver = extract_appimage_version(tmp_path)
                   finally:
                       if os.path.exists(tmp_path): os.unlink(tmp_path)
-                  
                   if new_ver:
                       try: is_newer = parse_version(new_ver) > parse_version(curr_ver)
                       except: is_newer = (new_ver != curr_ver)
-                      print(f"  [*] Current: {curr_ver} | Upstream Latest: {new_ver}")
                       if is_newer:
                           new_path = pkg_dir / f"{pkg_name}-{new_ver}.ebuild"
                           ebuild_path.rename(new_path)
@@ -151,15 +148,11 @@ jobs:
                       print("  [!] Could not extract current version from filename.")
                       continue
                   curr_ver = curr_ver_m.group(1)
-
                   latest_ver = get_latest_github_release(repo)
                   if latest_ver:
                       if pkg_name == "mangowc" and latest_ver.startswith("12."): latest_ver = "0." + latest_ver
                       try: is_newer = parse_version(latest_ver) > parse_version(curr_ver)
                       except: is_newer = (latest_ver != curr_ver)
-                      
-                      print(f"  [*] Current: {curr_ver} | Upstream Latest: {latest_ver}")
-
                       if is_newer:
                           new_path = pkg_dir / f"{pkg_name}-{latest_ver}.ebuild"
                           ebuild_path.rename(new_path)
@@ -177,37 +170,56 @@ jobs:
               f.write(f"changed_packages={'true' if changed_list else 'false'}\n")
           EOF
 
-      - name: Phase 2 - Commit and Push Updates
+      - name: Phase 2 - Generate Manifests for All Ebuilds
         run: |
-          if [ -f changed_packages.txt ]; then
-            git config user.name "github-actions[bot]"
-            git config user.email "github-actions[bot]@users.noreply.github.com"
-            git add -A
-            if ! git diff --cached --quiet; then
-              git commit -m "auto-update: ebuild refresh $(date -u '+%Y-%m-%d')"
-              git pull --rebase origin ${{ github.ref_name }}
-              git push origin HEAD:${{ github.ref_name }}
+          echo ">>> Generating Manifests for the overlay..."
+          # We need a minimal Portage environment. Use a quick Docker run or install portage.
+          # Since we already have the ebuild tool available on the runner? No, but we can use
+          # the same Docker image as in the build workflow to generate manifests.
+          cat > gen_manifests.sh << 'EOF'
+          #!/bin/bash
+          set -euo pipefail
+          mkdir -p /var/db/repos/gentoo
+          emerge-webrsync -q || true
+          mkdir -p /overlay/metadata
+          echo "masters = gentoo" > /overlay/metadata/layout.conf
+          echo ">>> Generating Manifests..."
+          for e in $(find /overlay -mindepth 2 -maxdepth 3 -name "*.ebuild"); do
+              ebuild "$e" manifest >/dev/null 2>&1 || true
+          done
+          EOF
+          chmod +x gen_manifests.sh
+          docker run --rm -v "${{ github.workspace }}:/overlay" gentoo/stage3:amd64-desktop-openrc bash /overlay/gen_manifests.sh
+
+      - name: Phase 3 - Commit All Changes (Ebuilds + Manifests)
+        run: |
+          git config user.name "github-actions[bot]"
+          git config user.email "github-actions[bot]@users.noreply.github.com"
+          git add -A
+          if ! git diff --cached --quiet; then
+            MSG="auto-update: ebuild refresh and manifests $(date -u '+%Y-%m-%d')"
+            if [ -f changed_packages.txt ]; then
+              MSG="auto-update: ebuild bumps ($(tr '\n' ' ' < changed_packages.txt)) and manifests $(date -u '+%Y-%m-%d')"
             fi
+            git commit -m "$MSG"
+            git pull --rebase origin ${{ github.ref_name }}
+            git push origin HEAD:${{ github.ref_name }}
           fi
 
-      # ✅ FIX: Using the Host Runner to clone the overlay completely avoids Docker/GPG Git traps!
       - name: Fetch Overlays on Runner
         run: |
           git clone --depth 1 https://github.com/anyc/steam-overlay.git steam-overlay 2>/dev/null || true
 
-      - name: Phase 3 - Resolve Latest State via Portage
+      - name: Phase 4 - Resolve Latest State via Portage
         run: |
           cat > resolve_state.sh << 'EOF'
           #!/bin/bash
           set -euo pipefail
-          
           mkdir -p /etc/portage/repos.conf /etc/portage/binrepos.conf /var/db/repos/{gentoo,steam-overlay} /etc/portage/package.{accept_keywords,use}
-          
           cat > /etc/portage/make.conf << 'MAKECONF'
           ACCEPT_KEYWORDS="~amd64"
           ACCEPT_LICENSE="*"
           MAKECONF
-          
           cat > /etc/portage/package.use/global << 'USECONF'
           sys-libs/zlib minizip
           media-video/pipewire extra
@@ -216,27 +228,21 @@ jobs:
           dev-libs/openssl -bindist
           games-util/steam-launcher steamruntime
           USECONF
-          
-          echo ">>> Syncing base Gentoo tree..."
           emerge-webrsync -q || true
-          
           mkdir -p /overlay/metadata
           echo "masters = gentoo" > /overlay/metadata/layout.conf
-          
           cat > /etc/portage/repos.conf/gentoo-nexus.conf << 'REPOEOF'
           [gentoo-nexus]
           location = /overlay
           masters = gentoo
           priority = 9999
           REPOEOF
-          
           cat > /etc/portage/repos.conf/steam-overlay.conf << 'REPOEOF'
           [steam-overlay]
           location = /var/db/repos/steam-overlay
           masters = gentoo
           priority = 50
           REPOEOF
-          
           cat > /etc/portage/package.accept_keywords/nexus << 'KEYW'
           */*::steam-overlay **
           */*::gentoo-nexus **
@@ -245,17 +251,9 @@ jobs:
           sys-kernel/gentoo-kernel ~amd64
           virtual/dist-kernel ~amd64
           KEYW
-          
-          echo ">>> Generating Manifests for local overlay..."
-          for ebuild_file in $(find /overlay -mindepth 2 -maxdepth 3 -name "*.ebuild"); do
-             ebuild "$ebuild_file" manifest >/dev/null 2>&1 || true
-          done
-          
           LOCAL_PKGS=$(find /overlay -mindepth 2 -maxdepth 3 -name "*.ebuild" | awk -F/ '{print $(NF-2)"/"$(NF-1)}' | sort -u || true)
           UPSTREAM_PKGS="media-libs/mesa media-libs/vulkan-loader sys-kernel/gentoo-kernel virtual/dist-kernel games-util/steam-launcher"
-          
           > /overlay/desired_state.txt
-          echo ">>> Querying emerge for exact target versions..."
           for pkg in $LOCAL_PKGS $UPSTREAM_PKGS; do
              RES=$(emerge -pqO --color=n "$pkg" 2>/dev/null | awk '/^\[ebuild/ {for(i=1;i<=NF;i++) if($i ~ /\//) {print $i; break}}' || true)
              if [ -n "$RES" ]; then 
@@ -265,27 +263,22 @@ jobs:
           done
           EOF
           chmod +x resolve_state.sh
-          # ✅ Mounted directly into Docker
-          docker run --rm -v "${{ github.workspace }}:/overlay" -v "${{ github.workspace }}/steam-overlay:/var/db/repos/steam-overlay" gentoo/stage3:amd64-desktop-openrc /bin/bash /overlay/resolve_state.sh
+          docker run --rm -v "${{ github.workspace }}:/overlay" -v "${{ github.workspace }}/steam-overlay:/var/db/repos/steam-overlay" gentoo/stage3:amd64-desktop-openrc bash /overlay/resolve_state.sh
 
-      - name: Phase 4 - Binhost Audit
+      - name: Phase 5 - Binhost Audit
         id: audit
         env:
           GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
           REPO: ${{ github.repository }}
         run: |
-          echo ">>> Fetching Existing Assets (including Pre-Releases)..."
           EXISTING_ASSETS=$(gh release view rolling --json assets --jq '.assets[].name' 2>/dev/null || echo "")
-          
           CHANGED=$(cat changed_packages.txt 2>/dev/null || echo "")
           > packages_to_build.txt
           FORCE_REQUIRED="false"
-          
           while IFS= read -r CPV; do
              [ -z "$CPV" ] && continue
              PN_PV="${CPV#*/}"
              ATOM=$(echo "$CPV" | sed -E 's/-[0-9]+(\.[0-9]+)*(_[a-z0-9]+)?(-r[0-9]+)?$//')
-             
              if echo "$CHANGED" | grep -q "^${ATOM}$"; then
                 echo "⚠️ $ATOM bumped via script. Forcing build: =$CPV"
                 echo "=$CPV" >> packages_to_build.txt
@@ -297,11 +290,10 @@ jobs:
                 echo "✓ Binary already deployed: =$CPV"
              fi
           done < desired_state.txt
-          
           echo "build_list=$(tr '\n' ' ' < packages_to_build.txt | xargs)" >> "$GITHUB_OUTPUT"
           echo "force_required=$FORCE_REQUIRED" >> "$GITHUB_OUTPUT"
 
-      - name: Phase 5 - Trigger Relay
+      - name: Phase 6 - Trigger Relay
         if: steps.audit.outputs.build_list != ''
         env:
           GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
@@ -323,10 +315,8 @@ jobs:
             "sys-apps/danksearch"
             "x11-base/xwayland-satellite"
           )
-          
           RAW_LIST="${{ steps.audit.outputs.build_list }}"
           ORDERED=()
-          
           for priority_pkg in "${PRIORITY_ORDER[@]}"; do
             for exact_pkg in $RAW_LIST; do
               if echo "$exact_pkg" | grep -q "$priority_pkg"; then
@@ -334,7 +324,6 @@ jobs:
               fi
             done
           done
-          
           for exact_pkg in $RAW_LIST; do
             already=false
             for p in "${ORDERED[@]}"; do
@@ -342,10 +331,8 @@ jobs:
             done
             if [ "$already" = false ]; then ORDERED+=("$exact_pkg"); fi
           done
-          
           FINAL_LIST="${ORDERED[*]}"
           echo ">>> Queueing the following for compilation: $FINAL_LIST"
-          
           gh workflow run "Gentoo Build Relay" \
             --ref "${GITHUB_REF_NAME}" \
             -f package_list="$FINAL_LIST" \
