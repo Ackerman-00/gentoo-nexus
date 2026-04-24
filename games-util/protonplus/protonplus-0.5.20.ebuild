@@ -1,3 +1,6 @@
+# Copyright 2023 Gentoo Authors
+# Distributed under the terms of the GNU General Public License v2
+
 EAPI=8
 
 inherit meson vala xdg
@@ -8,7 +11,7 @@ SRC_URI="https://github.com/Vysp3r/ProtonPlus/archive/refs/tags/v${PV}.tar.gz ->
 
 LICENSE="GPL-3.0-or-later"
 SLOT="0"
-KEYWORDS="~amd64"
+KEYWORDS="amd64 ~amd64"
 
 S="${WORKDIR}/ProtonPlus-${PV}"
 
