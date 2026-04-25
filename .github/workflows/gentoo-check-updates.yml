@@ -33,14 +33,11 @@ jobs:
       - name: Install Dependencies
         run: pip install requests packaging
 
-      # (Phase 1 unchanged)
       - name: Phase 1 - Scan Local Ebuilds & Bump Versions
         id: scan
         env:
           GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
         run: |
-          # ... (identical to your provided Phase 1) ...
-          # (I'm omitting the full copy here for brevity; it is identical to what you have)
           python3 << 'EOF'
           import os, re, requests, subprocess, stat, shutil, tempfile
           from pathlib import Path
@@ -50,19 +47,186 @@ jobs:
           gh_token = os.environ.get('GITHUB_TOKEN')
           hdrs = {"Authorization": f"Bearer {gh_token}"} if gh_token else {}
 
-          # ... rest of Phase 1 code ...
-          # (unchanged)
+          def get_latest_github_release(repo):
+              try:
+                  r = requests.get(f"https://api.github.com/repos/{repo}/releases/latest", headers=hdrs, timeout=15)
+                  if r.status_code == 200:
+                      tag = r.json().get("tag_name", "").lstrip("v")
+                      if tag and re.match(r'^[0-9]', tag): return tag
+                  r2 = requests.get(f"https://api.github.com/repos/{repo}/tags", headers=hdrs, timeout=15)
+                  if r2.status_code == 200 and r2.json():
+                      for tag in r2.json():
+                          name = tag.get("name", "").lstrip("v")
+                          if re.match(r'^[0-9]', name): return name
+              except Exception as e:
+                  print(f"API Error for {repo}: {e}")
+              return None
+
+          def get_latest_commit(repo_url):
+              try:
+                  out = subprocess.check_output(["git", "ls-remote", repo_url, "HEAD"], timeout=30, stderr=subprocess.DEVNULL).decode()
+                  m = re.search(r"([a-f0-9]{40})", out)
+                  if m: return m.group(1)[:12]
+              except Exception: pass
+              return None
+
+          def extract_appimage_version(appimage_path):
+              try:
+                  subprocess.run(['chmod', '+x', appimage_path], check=True)
+                  res = subprocess.run([appimage_path, '--appimage-version'], capture_output=True, text=True, timeout=30)
+                  if res.returncode == 0 and res.stdout.strip(): return res.stdout.strip()
+              except Exception: pass
+              try:
+                  with tempfile.TemporaryDirectory() as tmpdir:
+                      subprocess.run([appimage_path, '--appimage-extract'], cwd=tmpdir, capture_output=True, timeout=120)
+                      extracted_dir = Path(tmpdir) / 'squashfs-root'
+                      if extracted_dir.is_dir():
+                          for d_file in extracted_dir.glob('*.desktop'):
+                              content = d_file.read_text(encoding='utf-8', errors='ignore')
+                              match = re.search(r'^X-AppImage-Version=(.+)', content, re.MULTILINE)
+                              if match: return match.group(1).strip()
+                              match = re.search(r'^Version=(.+)', content, re.MULTILINE)
+                              if match: return match.group(1).strip()
+              except Exception: pass
+              return None
+
+          for ebuild_path in Path('.').rglob('*.ebuild'):
+              if any(x in ebuild_path.parts for x in ['cache', 'job_out', 'binpkgs', 'distfiles', 'ccache', '.github', '.git']): continue
+              pkg_dir = ebuild_path.parent
+              if len(pkg_dir.parts) < 2: continue
+              cat_name, pkg_name = pkg_dir.parts[-2], pkg_dir.parts[-1]
+              pkg_cat_name = f"{cat_name}/{pkg_name}"
+              content = ebuild_path.read_text(encoding="utf-8")
+
+              if pkg_name == "rootapp-bin":
+                  print(f"--- Scanning {pkg_cat_name} (AppImage) ---")
+                  curr_ver_m = re.search(rf'{re.escape(pkg_name)}-(\d+(?:\.\d+)*(?:_(?:alpha|beta|pre|rc|p)\d*)?(?:-r\d+)?)\.ebuild$', ebuild_path.name)
+                  if not curr_ver_m: continue
+                  curr_ver = curr_ver_m.group(1)
+                  appimage_url = "https://installer.rootapp.com/installer/Linux/X64/Root.AppImage"
+                  with tempfile.NamedTemporaryFile(delete=False, suffix=".AppImage") as tmp: tmp_path = tmp.name
+                  try:
+                      subprocess.run(['curl', '-sSL', '-o', tmp_path, appimage_url], timeout=120)
+                      new_ver = extract_appimage_version(tmp_path)
+                  finally:
+                      if os.path.exists(tmp_path): os.unlink(tmp_path)
+                  if new_ver:
+                      try: is_newer = parse_version(new_ver) > parse_version(curr_ver)
+                      except: is_newer = (new_ver != curr_ver)
+                      if is_newer:
+                          new_path = pkg_dir / f"{pkg_name}-{new_ver}.ebuild"
+                          ebuild_path.rename(new_path)
+                          updated_atoms.add(pkg_cat_name)
+                          print(f"  [+] Renamed to: {new_path.name}")
+                      else: print("  [-] Already up to date.")
+                  else: print("  [!] Failed to extract version from AppImage.")
+                  continue
+
+              is_live = ebuild_path.name.endswith('9999.ebuild')
+              repo_m = re.search(r'github\.com/([A-Za-z0-9_.-]+/[A-Za-z0-9_.-]+?)(?:\.git|/archive|/releases|/tarball|["\s\'])', content)
+              if not repo_m: continue
+              repo = repo_m.group(1).rstrip('.')
+
+              print(f"--- Scanning {pkg_cat_name} ({repo}) ---")
+
+              if is_live:
+                  repo_url = f"https://github.com/{repo}.git"
+                  new_commit = get_latest_commit(repo_url)
+                  if new_commit:
+                      new_content = content
+                      if re.search(r'^EGIT_COMMIT=', new_content, re.MULTILINE):
+                          new_content = re.sub(r'(EGIT_COMMIT=["\']?)[a-fA-F0-9]{7,40}(["\']?)', r"\g<1>" + new_commit + r"\2", new_content)
+                      if new_content != content:
+                          ebuild_path.write_text(new_content, encoding="utf-8")
+                          updated_atoms.add(pkg_cat_name)
+                          print(f"  [+] Bumped live commit to: {new_commit}")
+                      else:
+                          print("  [-] Commit hash already up to date.")
+              else:
+                  curr_ver_m = re.search(rf'{re.escape(pkg_name)}-(\d+(?:\.\d+)*(?:_(?:alpha|beta|pre|rc|p)\d*)?(?:-r\d+)?)\.ebuild$', ebuild_path.name)
+                  if not curr_ver_m: 
+                      print("  [!] Could not extract current version from filename.")
+                      continue
+                  curr_ver = curr_ver_m.group(1)
+                  latest_ver = get_latest_github_release(repo)
+                  if latest_ver:
+                      if pkg_name == "mangowc" and latest_ver.startswith("12."): latest_ver = "0." + latest_ver
+                      try: is_newer = parse_version(latest_ver) > parse_version(curr_ver)
+                      except: is_newer = (latest_ver != curr_ver)
+                      if is_newer:
+                          new_path = pkg_dir / f"{pkg_name}-{latest_ver}.ebuild"
+                          ebuild_path.rename(new_path)
+                          updated_atoms.add(pkg_cat_name)
+                          print(f"  [+] Renamed to: {new_path.name}")
+                      else:
+                          print("  [-] Already up to date.")
+                  else:
+                      print("  [!] Failed to find latest version on GitHub API.")
+
+          changed_list = sorted(updated_atoms)
+          if changed_list:
+              Path('changed_packages.txt').write_text('\n'.join(changed_list) + '\n', encoding="utf-8")
+          with open(os.environ['GITHUB_OUTPUT'], 'a') as f:
+              f.write(f"changed_packages={'true' if changed_list else 'false'}\n")
           EOF
 
       - name: Phase 2 - Generate Manifests for All Ebuilds
         run: |
-          # (identical to your version)
-          # ...
+          echo ">>> Generating Manifests for the overlay..."
+          cat > gen_manifests.sh << 'EOF'
+          #!/bin/bash
+          set -euo pipefail
+          # Set up base portage tree and repository configuration
+          mkdir -p /var/db/repos/gentoo /etc/portage/repos.conf
+
+          # Sync the base tree (needed for masters resolution)
+          emerge-webrsync -q || true
+
+          # Configure main gentoo repo explicitly (Portage needs this)
+          cat > /etc/portage/repos.conf/gentoo.conf << 'REPOEOF'
+          [gentoo]
+          location = /var/db/repos/gentoo
+          auto-sync = yes
+          priority = -1000
+          REPOEOF
+
+          # Configure the overlay as a proper Portage repository
+          mkdir -p /overlay/metadata
+          echo "masters = gentoo" > /overlay/metadata/layout.conf
+          cat > /etc/portage/repos.conf/gentoo-nexus.conf << 'REPOEOF'
+          [gentoo-nexus]
+          location = /overlay
+          masters = gentoo
+          priority = 9999
+          auto-sync = no
+          REPOEOF
+
+          # Now generate manifests
+          echo ">>> Generating Manifests..."
+          for e in $(find /overlay -mindepth 2 -maxdepth 3 -name "*.ebuild"); do
+              ebuild "$e" manifest >/dev/null 2>&1 || {
+                  echo "WARNING: Failed to generate manifest for $(basename "$e")"
+              }
+          done
+          echo ">>> Manifests generated successfully."
+          EOF
+          chmod +x gen_manifests.sh
+          docker run --rm -v "${{ github.workspace }}:/overlay" gentoo/stage3:amd64-desktop-openrc bash /overlay/gen_manifests.sh
 
       - name: Phase 3 - Commit All Changes (Ebuilds + Manifests)
         run: |
-          # (identical to your version)
-          # ...
+          git config user.name "github-actions[bot]"
+          git config user.email "github-actions[bot]@users.noreply.github.com"
+          git add -A
+          if ! git diff --cached --quiet; then
+            MSG="auto-update: ebuild refresh and manifests $(date -u '+%Y-%m-%d')"
+            if [ -f changed_packages.txt ]; then
+              MSG="auto-update: ebuild bumps ($(tr '\n' ' ' < changed_packages.txt)) and manifests $(date -u '+%Y-%m-%d')"
+            fi
+            git commit -m "$MSG"
+            git pull --rebase origin ${{ github.ref_name }}
+            git push origin HEAD:${{ github.ref_name }}
+          fi
 
       - name: Phase 4 - Resolve Latest State via Portage
         run: |
@@ -80,7 +244,6 @@ jobs:
           media-video/ffmpeg -sdl
           sys-libs/ncurses -gpm
           dev-libs/openssl -bindist
-          # NO Steam‑related flags
           USECONF
           emerge-webrsync -q || true
           mkdir -p /overlay/metadata
@@ -99,7 +262,6 @@ jobs:
           virtual/dist-kernel ~amd64
           KEYW
           LOCAL_PKGS=$(find /overlay -mindepth 2 -maxdepth 3 -name "*.ebuild" | awk -F/ '{print $(NF-2)"/"$(NF-1)}' | sort -u || true)
-          # Removed games-util/steam-launcher
           UPSTREAM_PKGS="media-libs/mesa media-libs/vulkan-loader sys-kernel/gentoo-kernel virtual/dist-kernel"
           > /overlay/desired_state.txt
           for pkg in $LOCAL_PKGS $UPSTREAM_PKGS; do
@@ -119,8 +281,27 @@ jobs:
           GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
           REPO: ${{ github.repository }}
         run: |
-          # (unchanged)
-          # ...
+          EXISTING_ASSETS=$(gh release view rolling --json assets --jq '.assets[].name' 2>/dev/null || echo "")
+          CHANGED=$(cat changed_packages.txt 2>/dev/null || echo "")
+          > packages_to_build.txt
+          FORCE_REQUIRED="false"
+          while IFS= read -r CPV; do
+             [ -z "$CPV" ] && continue
+             PN_PV="${CPV#*/}"
+             ATOM=$(echo "$CPV" | sed -E 's/-[0-9]+(\.[0-9]+)*(_[a-z0-9]+)?(-r[0-9]+)?$//')
+             if echo "$CHANGED" | grep -q "^${ATOM}$"; then
+                echo "⚠️ $ATOM bumped via script. Forcing build: =$CPV"
+                echo "=$CPV" >> packages_to_build.txt
+                FORCE_REQUIRED="true"
+             elif ! echo "$EXISTING_ASSETS" | grep -q "^${PN_PV}-.*\.gpkg\.tar$"; then
+                echo "✗ Missing binary: =$CPV"
+                echo "=$CPV" >> packages_to_build.txt
+             else
+                echo "✓ Binary already deployed: =$CPV"
+             fi
+          done < desired_state.txt
+          echo "build_list=$(tr '\n' ' ' < packages_to_build.txt | xargs)" >> "$GITHUB_OUTPUT"
+          echo "force_required=$FORCE_REQUIRED" >> "$GITHUB_OUTPUT"
 
       - name: Phase 6 - Trigger Relay
         if: steps.audit.outputs.build_list != ''
@@ -132,7 +313,6 @@ jobs:
             "media-libs/vulkan-loader"
             "sys-kernel/gentoo-kernel"
             "virtual/dist-kernel"
-            # Removed "games-util/steam-launcher"
             "gui-libs/scenefx"
             "gui-apps/quickshell"
             "gui-apps/noctalia-qs"
@@ -147,4 +327,25 @@ jobs:
             "sys-apps/danksearch"
             "x11-base/xwayland-satellite"
           )
-          # ... (rest unchanged)
+          RAW_LIST="${{ steps.audit.outputs.build_list }}"
+          ORDERED=()
+          for priority_pkg in "${PRIORITY_ORDER[@]}"; do
+            for exact_pkg in $RAW_LIST; do
+              if echo "$exact_pkg" | grep -q "$priority_pkg"; then
+                ORDERED+=("$exact_pkg")
+              fi
+            done
+          done
+          for exact_pkg in $RAW_LIST; do
+            already=false
+            for p in "${ORDERED[@]}"; do
+              if [ "$p" == "$exact_pkg" ]; then already=true; break; fi
+            done
+            if [ "$already" = false ]; then ORDERED+=("$exact_pkg"); fi
+          done
+          FINAL_LIST="${ORDERED[*]}"
+          echo ">>> Queueing the following for compilation: $FINAL_LIST"
+          gh workflow run "Gentoo Build Relay" \
+            --ref "${GITHUB_REF_NAME}" \
+            -f package_list="$FINAL_LIST" \
+            -f force_rebuild="${{ steps.audit.outputs.force_required }}"
