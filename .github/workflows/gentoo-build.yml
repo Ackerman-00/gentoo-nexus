@@ -74,7 +74,7 @@ jobs:
             echo "skip_compile=false" >> "$GITHUB_OUTPUT"
             echo ">>> Removing stale binaries to force fresh compilation..."
             rm -f binpkgs/${PN}-*.gpkg.tar
-            # Delete ONLY known broken packages (from old stage3)
+            # Delete ALL known bad packages (ABI-incompatible with fresh stage3)
             rm -f binpkgs/opus-*.gpkg.tar
             rm -f binpkgs/ell-*.gpkg.tar
             rm -f binpkgs/mpg123-base-*.gpkg.tar
@@ -136,6 +136,8 @@ jobs:
           ACCEPT_LICENSE="*"
           ACCEPT_KEYWORDS="~amd64"
           # Just reuse what we have – no cascading rebuilds.
+          # No --changed-use, no --newuse – the Gentoo Binary Package Guide
+          # warns against --changed-use on a binary package host.
           EMERGE_DEFAULT_OPTS="--getbinpkg --usepkg --buildpkg --quiet-build=y --jobs=4 --load-average=4 --keep-going"
           MAKEOPTS="-j4"
           PORTAGE_BINPKG_SIGVERIFY="0"
@@ -152,6 +154,7 @@ jobs:
 
           mkdir -p /etc/portage/package.accept_keywords
           echo '*/*::gentoo-nexus **' > /etc/portage/package.accept_keywords/nexus
+          # Force stable webkit-gtk so the Gentoo binhost binary is used
           echo 'net-libs/webkit-gtk -~amd64 amd64' > /etc/portage/package.accept_keywords/stable-binary
 
           # ----- USE flag fixes (64‑bit only) -----
@@ -159,28 +162,30 @@ jobs:
           echo 'media-libs/opus abi_x86_64' > /etc/portage/package.use/opus
           echo 'gui-libs/gtk introspection' > /etc/portage/package.use/gtk
           echo 'sys-auth/seatd builtin server' > /etc/portage/package.use/seatd
-          echo 'net-libs/webkit-gtk -avif -jpegxl -lcms -pdf -spell -wayland -jumbo-build' > /etc/portage/package.use/webkit-gtk
+          # webkit-gtk: REMOVED the restrictive USE flags so the Gentoo binhost
+          # binary (which has avif, jpegxl, etc.) will match and be used.
+          # This avoids the 6‑hour compile timeout.
           echo 'sys-kernel/installkernel dracut' > /etc/portage/package.use/installkernel
+          # minizip-ng compat needed for assimp → qtquick3d → qtmultimedia
+          echo 'sys-libs/minizip-ng compat' > /etc/portage/package.use/minizip-ng
 
-          # ----- Purge known stale binaries (ONLY during force_rebuild) -----
-          if [ "${FORCE_REBUILD:-false}" = "true" ]; then
-              echo ">>> Force rebuild – purging known stale binaries..."
-              rm -f /var/cache/binpkgs/Crypt-URandom-*.gpkg.tar
-              rm -f /var/cache/binpkgs/ell-*.gpkg.tar
-              rm -f /var/cache/binpkgs/mpg123-base-*.gpkg.tar
-              rm -f /var/cache/binpkgs/opus-*.gpkg.tar
-              rm -f /var/cache/binpkgs/libxmlb-*.gpkg.tar
-              rm -f /var/cache/binpkgs/seatd-*.gpkg.tar
-              rm -f /var/cache/binpkgs/gtk-*.gpkg.tar
-              rm -f /var/cache/binpkgs/wireless-regdb-*.gpkg.tar
-              rm -f /var/cache/binpkgs/mobile-broadband-provider-info-*.gpkg.tar
-              rm -f /var/cache/binpkgs/jemalloc-*.gpkg.tar
-              rm -f /var/cache/binpkgs/nss-*.gpkg.tar
-              rm -f /var/cache/binpkgs/libmbim-*.gpkg.tar
-              rm -f /var/cache/binpkgs/libqrtr-glib-*.gpkg.tar
-          else
-              echo ">>> Normal run – preserving all release binaries for reuse."
-          fi
+          # ----- Purge known stale binaries (ON EVERY RUN) -----
+          # These were built against an old stage3 image and are ABI‑incompatible.
+          # They must be deleted so Portage fetches fresh ones or rebuilds.
+          echo ">>> Purging known stale binaries..."
+          rm -f /var/cache/binpkgs/Crypt-URandom-*.gpkg.tar
+          rm -f /var/cache/binpkgs/ell-*.gpkg.tar
+          rm -f /var/cache/binpkgs/mpg123-base-*.gpkg.tar
+          rm -f /var/cache/binpkgs/opus-*.gpkg.tar
+          rm -f /var/cache/binpkgs/libxmlb-*.gpkg.tar
+          rm -f /var/cache/binpkgs/seatd-*.gpkg.tar
+          rm -f /var/cache/binpkgs/gtk-*.gpkg.tar
+          rm -f /var/cache/binpkgs/wireless-regdb-*.gpkg.tar
+          rm -f /var/cache/binpkgs/mobile-broadband-provider-info-*.gpkg.tar
+          rm -f /var/cache/binpkgs/jemalloc-*.gpkg.tar
+          rm -f /var/cache/binpkgs/nss-*.gpkg.tar
+          rm -f /var/cache/binpkgs/libmbim-*.gpkg.tar
+          rm -f /var/cache/binpkgs/libqrtr-glib-*.gpkg.tar
 
           # ----- Regenerate Manifests -----
           echo ">>> Generating Manifests for overlay..."
@@ -201,13 +206,11 @@ jobs:
 
           chmod +x build_inside_docker.sh
           echo "TARGET=$TARGET" >> "$GITHUB_ENV"
-          echo "FORCE_REBUILD=${{ github.event.inputs.force_rebuild }}" >> "$GITHUB_ENV"
 
       - name: Build Package in Docker
         if: steps.check_bin.outputs.skip_compile != 'true'
         run: |
           docker run --rm --privileged \
-            -e FORCE_REBUILD="${FORCE_REBUILD:-false}" \
             -v "${{ github.workspace }}/binpkgs:/var/cache/binpkgs:rw" \
             -v "${{ github.workspace }}/overlay:/var/db/repos/gentoo-nexus:rw" \
             -v "${{ github.workspace }}/distfiles:/var/cache/distfiles:rw" \
