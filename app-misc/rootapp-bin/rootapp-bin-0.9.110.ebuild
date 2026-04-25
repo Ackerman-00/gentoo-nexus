@@ -1,3 +1,6 @@
+# Copyright 2026 Gentoo Authors
+# Distributed under the terms of the GNU General Public License v2
+
 EAPI=8
 
 inherit desktop
@@ -30,26 +33,54 @@ S="${WORKDIR}"
 src_unpack() {
     mkdir -p "${S}" || die
     cd "${S}" || die
-    cp "${DISTDIR}/${P}.AppImage" . || die
-    
-    unsquashfs -d squashfs-root "${P}.AppImage" || die "Failed to extract AppImage"
+    cp "${DISTDIR}/${P}.AppImage" . || die "Failed to copy AppImage from distfiles"
+    chmod +x "${P}.AppImage" || die
+
+    # Method 1: Use the AppImage's built-in extract (standard method from appimage.eclass)
+    if ./"${P}.AppImage" --appimage-extract >/dev/null 2>&1; then
+        einfo "Extracted via --appimage-extract"
+        [ -d squashfs-root ] && mv squashfs-root "${P}" 2>/dev/null || true
+    # Method 2: Compute offset with objdump and use unsquashfs
+    elif command -v objdump >/dev/null 2>&1; then
+        local offset
+        offset=$(objdump -p "${P}.AppImage" 2>/dev/null | grep -oP 'offset \K0x[0-9a-f]+' | head -1)
+        if [ -n "${offset}" ]; then
+            einfo "Extracting AppImage at offset ${offset}"
+            unsquashfs -o "${offset}" -d squashfs-root "${P}.AppImage" || die "Failed to extract AppImage via offset"
+        else
+            die "Could not determine AppImage offset"
+        fi
+    else
+        die "Could not extract AppImage — neither --appimage-extract nor objdump available"
+    fi
 }
 
 src_install() {
     local target_dir="/opt/rootapp"
     dodir "${target_dir}"
-    cp -a squashfs-root/* "${ED}${target_dir}/" || die "Failed to copy application files"
+
+    # Find the extracted content (either in ${P} or squashfs-root)
+    local src_dir
+    if [ -d "${P}" ]; then
+        src_dir="${P}"
+    elif [ -d squashfs-root ]; then
+        src_dir="squashfs-root"
+    else
+        die "Could not find extracted AppImage content"
+    fi
+
+    cp -a "${src_dir}"/* "${ED}${target_dir}/" || die "Failed to copy application files"
     dosym "../../opt/rootapp/AppRun" /usr/bin/rootapp
-    
+
     local icon_found=0
-    if [[ -f "squashfs-root/Root.png" ]]; then
-        doicon "squashfs-root/Root.png"
+    if [[ -f "${src_dir}/Root.png" ]]; then
+        doicon "${src_dir}/Root.png"
         icon_found=1
-    elif [[ -f "squashfs-root/.DirIcon" ]]; then
-        newicon "squashfs-root/.DirIcon" Root.png
+    elif [[ -f "${src_dir}/.DirIcon" ]]; then
+        newicon "${src_dir}/.DirIcon" Root.png
         icon_found=1
     fi
-    
+
     if [[ ${icon_found} -eq 1 ]]; then
         make_desktop_entry "rootapp" "RootApp" "Root" "Network;Chat;"
     fi
