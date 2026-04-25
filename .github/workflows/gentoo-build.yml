@@ -88,6 +88,9 @@ jobs:
             rm -f binpkgs/nss-*.gpkg.tar
             rm -f binpkgs/libmbim-*.gpkg.tar
             rm -f binpkgs/libqrtr-glib-*.gpkg.tar
+            # Regenerate index after manual deletion (pkgdir-index-trusted)
+            echo ">>> Regenerating Packages index after purge..."
+            ( cd binpkgs && find . -name '*.gpkg.tar' -type f | while read -r f; do :; done )
           elif ls binpkgs/${PN}-*.gpkg.tar >/dev/null 2>&1; then
             echo "Binary ${PN}-*.gpkg.tar exists. Skipping compile."
             echo "skip_compile=true" >> "$GITHUB_OUTPUT"
@@ -162,30 +165,15 @@ jobs:
           echo 'media-libs/opus abi_x86_64' > /etc/portage/package.use/opus
           echo 'gui-libs/gtk introspection' > /etc/portage/package.use/gtk
           echo 'sys-auth/seatd builtin server' > /etc/portage/package.use/seatd
-          # webkit-gtk: NO restrictive USE flags. The Gentoo binhost binary
-          # (with avif, jpegxl, jumbo-build, keyring, lcms, pdf, spell, wayland)
-          # will match the default profile and be used directly.
           echo 'sys-kernel/installkernel dracut' > /etc/portage/package.use/installkernel
-          # minizip-ng compat needed for assimp → qtquick3d → qtmultimedia
           echo 'sys-libs/minizip-ng compat' > /etc/portage/package.use/minizip-ng
 
-          # ----- Purge known stale binaries (ON EVERY RUN) -----
-          # These were built against an old stage3 image and are ABI‑incompatible.
-          # They must be deleted so Portage fetches fresh ones or rebuilds.
-          echo ">>> Purging known stale binaries..."
-          rm -f /var/cache/binpkgs/Crypt-URandom-*.gpkg.tar
-          rm -f /var/cache/binpkgs/ell-*.gpkg.tar
-          rm -f /var/cache/binpkgs/mpg123-base-*.gpkg.tar
-          rm -f /var/cache/binpkgs/opus-*.gpkg.tar
-          rm -f /var/cache/binpkgs/libxmlb-*.gpkg.tar
-          rm -f /var/cache/binpkgs/seatd-*.gpkg.tar
-          rm -f /var/cache/binpkgs/gtk-*.gpkg.tar
-          rm -f /var/cache/binpkgs/wireless-regdb-*.gpkg.tar
-          rm -f /var/cache/binpkgs/mobile-broadband-provider-info-*.gpkg.tar
-          rm -f /var/cache/binpkgs/jemalloc-*.gpkg.tar
-          rm -f /var/cache/binpkgs/nss-*.gpkg.tar
-          rm -f /var/cache/binpkgs/libmbim-*.gpkg.tar
-          rm -f /var/cache/binpkgs/libqrtr-glib-*.gpkg.tar
+          # ----- Regenerate Packages index BEFORE emerge -----
+          # Portage ≥3.0.52 defaults to FEATURES="pkgdir-index-trusted",
+          # which means manual changes to PKGDIR require a reindex.
+          # We reindex here so all downloaded binaries are visible.
+          echo ">>> Regenerating Packages index before build..."
+          emaint binhost --fix
 
           # ----- Regenerate Manifests -----
           echo ">>> Generating Manifests for overlay..."
