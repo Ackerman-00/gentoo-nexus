@@ -50,15 +50,40 @@ jobs:
         env:
           GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
         run: |
-          echo ">>> Downloading existing .gpkg.tar from rolling release..."
+          echo ">>> Downloading existing .gpkg.tar and Packages from rolling release..."
           gh release download rolling \
             -p "*.gpkg.tar" -p "Packages*" \
             --repo ${{ github.repository }} \
             --dir binpkgs --clobber 2>/dev/null || true
 
+          # --- Reconstruct the PKGDIR subdirectory layout ---
+          # The Packages index contains lines like "CPV: gui-libs/gtk-4.20.3-r2"
+          # The corresponding binary file is "gtk-4.20.3-r2-1.gpkg.tar"
+          # We use that information to move every .gpkg.tar into
+          # binpkgs/<CATEGORY>/<PACKAGE>/ so that Portage sees it.
+          echo ">>> Reorganising binaries into category subdirectories..."
+          if [ -f binpkgs/Packages ]; then
+            while IFS= read -r line; do
+              # Extract the CPV field (e.g., gui-libs/gtk-4.20.3-r2)
+              cpv=$(echo "$line" | awk -F': ' '/^CPV:/ {print $2}')
+              [ -z "$cpv" ] && continue
+              category="${cpv%/*}"
+              pn_pv="${cpv#*/}"                # e.g. gtk-4.20.3-r2
+              # The binary file name starts with $pn_pv
+              binfile=$(ls binpkgs/${pn_pv}-*.gpkg.tar 2>/dev/null | head -1)
+              if [ -n "$binfile" ]; then
+                mkdir -p "binpkgs/${category}/${pn_pv%-*}"
+                mv "$binfile" "binpkgs/${category}/${pn_pv%-*}/"
+              fi
+            done < binpkgs/Packages
+            # Also move the Packages* files to the root so they aren't lost
+            mv binpkgs/Packages* binpkgs/ 2>/dev/null || true
+          fi
+          echo ">>> Binary layout restored."
+
       - name: Pre‑fetch webkit‑gtk from official binhost if missing
         run: |
-          if ls binpkgs/webkit-gtk-*.gpkg.tar >/dev/null 2>&1; then
+          if ls binpkgs/*/webkit-gtk/*.gpkg.tar >/dev/null 2>&1; then
             echo "✓ webkit‑gtk binary already cached."
           else
             echo ">>> webkit‑gtk not in release – fetching from official Gentoo binhost..."
@@ -89,10 +114,7 @@ jobs:
             BINHOST
                 echo "net-libs/webkit-gtk -~amd64 amd64" > /etc/portage/package.accept_keywords/stable
                 emerge net-libs/webkit-gtk
-                cp /var/cache/binpkgs/webkit-gtk-*.gpkg.tar /var/cache/binpkgs/ || true
               '
-            # Regenerate the Packages index after adding the binary
-            ( cd binpkgs && find . -name '*.gpkg.tar' -type f | while read -r f; do :; done )
           fi
 
       - name: Parse Queue
@@ -112,21 +134,21 @@ jobs:
             echo "Force rebuild: Will compile $TARGET"
             echo "skip_compile=false" >> "$GITHUB_OUTPUT"
             echo ">>> Removing stale binaries to force fresh compilation..."
-            rm -f binpkgs/${PN}-*.gpkg.tar
-            rm -f binpkgs/opus-*.gpkg.tar
-            rm -f binpkgs/ell-*.gpkg.tar
-            rm -f binpkgs/mpg123-base-*.gpkg.tar
-            rm -f binpkgs/libxmlb-*.gpkg.tar
-            rm -f binpkgs/seatd-*.gpkg.tar
-            rm -f binpkgs/gtk-*.gpkg.tar
-            rm -f binpkgs/Crypt-URandom-*.gpkg.tar
-            rm -f binpkgs/wireless-regdb-*.gpkg.tar
-            rm -f binpkgs/mobile-broadband-provider-info-*.gpkg.tar
-            rm -f binpkgs/jemalloc-*.gpkg.tar
-            rm -f binpkgs/nss-*.gpkg.tar
-            rm -f binpkgs/libmbim-*.gpkg.tar
-            rm -f binpkgs/libqrtr-glib-*.gpkg.tar
-          elif ls binpkgs/${PN}-*.gpkg.tar >/dev/null 2>&1; then
+            rm -rf binpkgs/*/${PN}/*.gpkg.tar 2>/dev/null || true
+            rm -rf binpkgs/*/opus/*.gpkg.tar
+            rm -rf binpkgs/*/ell/*.gpkg.tar
+            rm -rf binpkgs/*/mpg123-base/*.gpkg.tar
+            rm -rf binpkgs/*/libxmlb/*.gpkg.tar
+            rm -rf binpkgs/*/seatd/*.gpkg.tar
+            rm -rf binpkgs/*/gtk/*.gpkg.tar
+            rm -rf binpkgs/*/Crypt-URandom/*.gpkg.tar
+            rm -rf binpkgs/*/wireless-regdb/*.gpkg.tar
+            rm -rf binpkgs/*/mobile-broadband-provider-info/*.gpkg.tar
+            rm -rf binpkgs/*/jemalloc/*.gpkg.tar
+            rm -rf binpkgs/*/nss/*.gpkg.tar
+            rm -rf binpkgs/*/libmbim/*.gpkg.tar
+            rm -rf binpkgs/*/libqrtr-glib/*.gpkg.tar
+          elif find binpkgs -path "*/${PN}/*.gpkg.tar" | grep -q .; then
             echo "Binary ${PN}-*.gpkg.tar exists. Skipping compile."
             echo "skip_compile=true" >> "$GITHUB_OUTPUT"
           else
