@@ -162,9 +162,9 @@ jobs:
           echo 'media-libs/opus abi_x86_64' > /etc/portage/package.use/opus
           echo 'gui-libs/gtk introspection' > /etc/portage/package.use/gtk
           echo 'sys-auth/seatd builtin server' > /etc/portage/package.use/seatd
-          # webkit-gtk: REMOVED the restrictive USE flags so the Gentoo binhost
-          # binary (which has avif, jpegxl, etc.) will match and be used.
-          # This avoids the 6‑hour compile timeout.
+          # webkit-gtk: NO restrictive USE flags. The Gentoo binhost binary
+          # (with avif, jpegxl, jumbo-build, keyring, lcms, pdf, spell, wayland)
+          # will match the default profile and be used directly.
           echo 'sys-kernel/installkernel dracut' > /etc/portage/package.use/installkernel
           # minizip-ng compat needed for assimp → qtquick3d → qtmultimedia
           echo 'sys-libs/minizip-ng compat' > /etc/portage/package.use/minizip-ng
