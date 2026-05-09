@@ -14,25 +14,27 @@ KEYWORDS="~amd64"
 IUSE=""
 
 DEPEND="
-	dev-cpp/sdbus-c++
-	dev-libs/glib:2
-	dev-libs/jemalloc
-	dev-libs/wayland
-	gnome-base/librsvg:2
-	media-libs/fontconfig
-	media-libs/freetype
-	media-libs/libwebp
-	media-libs/mesa[egl(+)]
-	media-video/pipewire
-	net-misc/curl
-	sys-auth/polkit
-	sys-libs/pam
-	x11-libs/cairo
-	x11-libs/libxkbcommon
-	x11-libs/pango
+    dev-cpp/sdbus-c++
+    dev-libs/glib:2
+    dev-libs/jemalloc
+    dev-libs/wayland
+    gnome-base/librsvg:2
+    media-libs/fontconfig
+    media-libs/freetype
+    media-libs/libwebp
+    media-libs/mesa[egl(+)]
+    media-video/pipewire
+    net-misc/curl
+    sys-auth/polkit
+    sys-libs/pam
+    x11-libs/cairo
+    x11-libs/libxkbcommon
+    x11-libs/pango
 "
 RDEPEND="${DEPEND}"
+
 BDEPEND="
-	dev-util/wayland-protocols
-	virtual/pkgconfig
+    dev-libs/wayland-protocols
+    dev-util/wayland-scanner
+    virtual/pkgconfig
 "
