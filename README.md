@@ -72,10 +72,10 @@ nano /etc/portage/make.conf
 # Required: gpkg format for Nexus binaries
 BINPKG_FORMAT="gpkg"
 FEATURES="getbinpkg"
-EMERGE_DEFAULT_OPTS="--getbinpkg --binpkg-respect-use=n --binpkg-changed-deps=n"
+EMERGE_DEFAULT_OPTS="--getbinpkg --binpkg-respect-use=y --binpkg-changed-deps=n"
 ```
 
-> **Why `--binpkg-respect-use=n`?**  
+> **Why `--binpkg-respect-use=y`?**  
 > Without it, Portage rejects pre-built packages whose USE flags differ from your local profile and falls back to compiling from source — defeating the point of a binhost.
 
 ---
