@@ -1,39 +1,48 @@
 EAPI=8
 
-inherit git-r3 meson
+PYTHON_COMPAT=( python3_{10..13} )
+inherit meson python-single-r1
 
-DESCRIPTION="A lightweight Wayland shell built directly on Wayland and OpenGL ES"
-HOMEPAGE="https://github.com/noctalia-dev/noctalia-shell"
-EGIT_REPO_URI="https://github.com/noctalia-dev/noctalia-shell.git"
-EGIT_BRANCH="v5"
-EGIT_COMMIT="88752c0a76a0"
+DESCRIPTION="A simple and lightweight app for running Windows games using UMU-Launcher"
+HOMEPAGE="https://github.com/Faugus/faugus-launcher"
+SRC_URI="https://github.com/Faugus/${PN}/archive/refs/tags/${PV}.tar.gz -> ${P}.tar.gz"
 
 LICENSE="MIT"
 SLOT="0"
 KEYWORDS="~amd64"
 IUSE=""
+REQUIRED_USE="${PYTHON_REQUIRED_USE}"
 
-# Fully mapped from Fedora/AUR to Gentoo atoms
-DEPEND="
-	dev-cpp/sdbus-c++
-	dev-libs/glib:2
-	dev-libs/jemalloc
-	dev-libs/wayland
-	gnome-base/librsvg:2
-	media-libs/fontconfig
-	media-libs/freetype
-	media-libs/libwebp
-	media-libs/mesa[egl(+)]
-	media-video/pipewire
-	net-misc/curl
-	sys-auth/polkit
-	sys-libs/pam
-	x11-libs/cairo
-	x11-libs/libxkbcommon
-	x11-libs/pango
+# Mapping all the Arch dependencies to Gentoo atoms
+DEPEND="${PYTHON_DEPS}
+	$(python_gen_cond_dep '
+		dev-python/pygobject:3[${PYTHON_USEDEP}]
+		dev-python/requests[${PYTHON_USEDEP}]
+		dev-python/pillow[${PYTHON_USEDEP}]
+		dev-python/vdf[${PYTHON_USEDEP}]
+		dev-python/psutil[${PYTHON_USEDEP}]
+		dev-python/pygame[${PYTHON_USEDEP}]
+		dev-python/icoextract[${PYTHON_USEDEP}]
+	')
+	media-libs/libcanberra
+	media-gfx/imagemagick
+	dev-libs/libayatana-appindicator
+	dev-util/vulkan-tools
 "
 RDEPEND="${DEPEND}"
 BDEPEND="
-	dev-util/wayland-protocols
-	virtual/pkgconfig
+	${PYTHON_DEPS}
 "
+
+pkg_setup() {
+	# Ensure the Python environment is set up before Meson runs
+	python-single-r1_pkg_setup
+}
+
+src_install() {
+	meson_src_install
+	
+	# Faugus installs a python executable to /usr/bin. 
+	# We must force it to use Gentoo's specific Python wrapper.
+	python_fix_shebang "${ED}/usr/bin"
+}
