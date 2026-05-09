@@ -114,6 +114,10 @@ distrobox enter gentoo-nexus-test
 Inside the container (as root):
 
 ```bash
+# Initialize Gentoo GPG trust keys — required in fresh stage3 containers
+# (without this, emerge will reject signed packages from the official binhost)
+getuto
+
 # Sync the Portage tree
 emerge-webrsync
 
@@ -187,6 +191,20 @@ If the repo was previously added manually, remove the existing entry first:
 eselect repository remove gentoo-nexus
 eselect repository add gentoo-nexus git https://github.com/Ackerman-00/gentoo-nexus.git
 ```
+
+</details>
+
+<details>
+<summary><strong>404 Not Found or packages missing after a CI update</strong></summary>
+
+Portage caches the `Packages` index locally and won't re-fetch it until the TTL expires. If CI just finished a build but you're still hitting 404s, bust the cache manually:
+
+```bash
+rm -rf /var/cache/binhost/*
+emaint sync -r gentoo-nexus
+```
+
+Then retry your emerge.
 
 </details>
 
