@@ -234,6 +234,7 @@ jobs:
           COMMON_FLAGS="-O2 -march=x86-64 -pipe"
           CFLAGS="${COMMON_FLAGS}"
           CXXFLAGS="${COMMON_FLAGS}"
+          USE="elogind -systemd"
           FEATURES="buildpkg parallel-install -binpkg-verify-signature -sandbox -usersandbox -ipc-sandbox -network-sandbox -pid-sandbox"
           BINPKG_FORMAT="gpkg"
           PKGDIR="/var/cache/binpkgs"
@@ -264,6 +265,8 @@ jobs:
           echo 'sys-auth/seatd builtin server' > /etc/portage/package.use/seatd
           echo 'sys-kernel/installkernel dracut' > /etc/portage/package.use/installkernel
           echo 'sys-libs/minizip-ng compat' > /etc/portage/package.use/minizip-ng
+          echo 'sys-apps/dbus -systemd elogind' > /etc/portage/package.use/dbus
+          echo 'media-video/pipewire -systemd elogind' > /etc/portage/package.use/pipewire
 
           echo ">>> Regenerating Packages index to map loaded binaries..."
           emaint binhost --fix
@@ -333,8 +336,25 @@ jobs:
             return 1
           }
 
-          echo ">>> Flattening URIs in Packages index for GitHub Releases..."
-          sed -i -E 's|URI: .*/([^/]+\.gpkg\.tar)|URI: \1|g' binpkgs/Packages
+          echo ">>> Flattening PATH and URI fields for flat GitHub Release..."
+          sed -i -E \
+            -e 's|^PATH: .*/([^/]+\.gpkg\.tar)$|PATH: \1|' \
+            -e 's|^URI: .*/([^/]+\.gpkg\.tar)$|URI: \1|' \
+            binpkgs/Packages
+
+          echo ">>> Removing acct-* entries to prevent 404 traps..."
+          python3 -c "
+          import re
+          with open('binpkgs/Packages', 'r') as f:
+              content = f.read()
+          blocks = content.split('\n\n')
+          filtered = [b for b in blocks if not re.search(r'^CPV: acct-(group|user)/', b, re.MULTILINE)]
+          with open('binpkgs/Packages', 'w') as f:
+              f.write('\n\n'.join(filtered))
+          print(f'Filtered {len(blocks) - len(filtered)} entries')
+          "
+
+          echo ">>> Compressing index..."
           rm -f binpkgs/Packages.gz
           gzip -c binpkgs/Packages > binpkgs/Packages.gz
 
