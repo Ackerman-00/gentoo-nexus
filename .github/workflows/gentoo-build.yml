@@ -56,35 +56,50 @@ jobs:
             --repo ${{ github.repository }} \
             --dir binpkgs --clobber 2>/dev/null || true
 
-          echo ">>> Reorganising binaries using definitive URI data..."
-          python3 << 'EOF'
+      - name: Restore GPKG Layout using Portage Engine
+        run: |
+          echo ">>> Restoring GPKG folder strict-layout via internal Portage API..."
+          docker run --rm \
+            -v "${{ github.workspace }}/binpkgs:/var/cache/binpkgs:rw" \
+            gentoo/stage3:amd64-desktop-openrc \
+            python3 -c "
           import os, shutil
+          import portage
+          from portage.versions import pkgsplit, catsplit
           
-          if not os.path.exists('binpkgs/Packages'):
-              print("No Packages file found, skipping organization.")
+          pkgdir = '/var/cache/binpkgs'
+          pkg_file = os.path.join(pkgdir, 'Packages')
+          if not os.path.exists(pkg_file):
+              print('No Packages file found. Skipping.')
               exit(0)
               
-          with open('binpkgs/Packages', 'r') as f:
+          with open(pkg_file, 'r') as f:
               blocks = f.read().split('\n\n')
               
           for block in blocks:
+              cpv = None
               uri = None
               for line in block.split('\n'):
-                  if line.startswith('URI:'):
+                  if line.startswith('CPV:'):
+                      cpv = line.split(':', 1)[1].strip()
+                  elif line.startswith('URI:'):
                       uri = line.split(':', 1)[1].strip()
-                      break
-              if uri:
-                  filename = os.path.basename(uri)
-                  source_path = os.path.join('binpkgs', filename)
-                  target_path = os.path.join('binpkgs', uri)
-                  target_dir = os.path.dirname(target_path)
-                  
-                  if os.path.exists(source_path):
-                      os.makedirs(target_dir, exist_ok=True)
-                      shutil.move(source_path, target_path)
-                      print(f"Restored to tree: {uri}")
-          EOF
-          echo ">>> Binary layout restored."
+                      
+              if cpv and uri:
+                  cat, pvr = catsplit(cpv)
+                  split_res = pkgsplit(cpv)
+                  if split_res:
+                      pn, ver, rev = split_res
+                      filename = os.path.basename(uri)
+                      source_path = os.path.join(pkgdir, filename)
+                      target_dir = os.path.join(pkgdir, cat, pn)
+                      target_path = os.path.join(target_dir, filename)
+                      
+                      if os.path.exists(source_path) and source_path != target_path:
+                          os.makedirs(target_dir, exist_ok=True)
+                          shutil.move(source_path, target_path)
+                          print(f'Restored GPKG layout: {cat}/{pn}/{filename}')
+          "
 
       - name: Pre-fetch webkit-gtk from official binhost if missing
         run: |
@@ -137,26 +152,13 @@ jobs:
           
           # Remove leading equal sign (e.g., =gui-libs/gtk-4.20.3-r2 -> gui-libs/gtk-4.20.3-r2)
           CPV="${TARGET#=}"
+          # Extract clean Package Name using awk/sed for target purging
+          PN=$(echo "$CPV" | awk -F/ '{print $2}' | sed -E 's/-[0-9]+.*//')
           
           if [ "${{ github.event.inputs.force_rebuild }}" == "true" ]; then
-            echo "Force rebuild requested for $CPV. Purging old binary."
+            echo "Force rebuild requested for $CPV. Purging local binaries."
             echo "skip_compile=false" >> "$GITHUB_OUTPUT"
-            # Purge the specific file using Python to parse the URI from the Packages index
-            python3 -c "
-          import os
-          if os.path.exists('binpkgs/Packages'):
-              with open('binpkgs/Packages', 'r') as f:
-                  blocks = f.read().split('\n\n')
-              for block in blocks:
-                  if 'CPV: $CPV' in block:
-                      for line in block.split('\n'):
-                          if line.startswith('URI:'):
-                              uri = line.split(':', 1)[1].strip()
-                              path = os.path.join('binpkgs', uri)
-                              if os.path.exists(path):
-                                  os.remove(path)
-                                  print(f'Deleted stale binary: {path}')
-          " || true
+            find binpkgs -type f -name "${PN}-*.gpkg.tar" -delete 2>/dev/null || true
           else
             # Exact regex match against the Packages file ensures zero false positives
             if grep -q "^CPV: $CPV$" binpkgs/Packages 2>/dev/null; then
@@ -165,6 +167,9 @@ jobs:
             else
                echo "Binary $CPV not found. Will compile from source."
                echo "skip_compile=false" >> "$GITHUB_OUTPUT"
+               # CRITICAL: Purge older versions of this package from the local workspace
+               # so `emaint` doesn't index ghost binaries alongside the new build.
+               find binpkgs -type f -name "${PN}-*.gpkg.tar" -delete 2>/dev/null || true
             fi
           fi
 
@@ -195,7 +200,7 @@ jobs:
           DISTDIR="/var/cache/distfiles"
           ACCEPT_LICENSE="*"
           ACCEPT_KEYWORDS="~amd64"
-          EMERGE_DEFAULT_OPTS="--usepkg --buildpkg --quiet-build=y --jobs=4 --load-average=4 --keep-going"
+          EMERGE_DEFAULT_OPTS="--usepkg --buildpkg --binpkg-respect-use=y --quiet-build=y --jobs=4 --load-average=4 --keep-going"
           MAKEOPTS="-j4"
           PORTAGE_BINPKG_SIGVERIFY="0"
           MAKECONF
@@ -231,7 +236,7 @@ jobs:
           done
 
           echo ">>> Building: $1"
-          emerge --autounmask=y --autounmask-write --autounmask-continue=y "$1" || {
+          emerge --usepkg --autounmask=y --autounmask-write --autounmask-continue=y "$1" || {
             echo ">>> WARNING: emerge exited with non-zero code, but continuing to save partial binaries..."
           }
 
@@ -287,12 +292,25 @@ jobs:
           done
 
           echo ">>> Uploading newly compiled binaries only to prevent API rate limits..."
-          # Clean the target string (e.g., "=sys-kernel/gentoo-kernel-7.0.5" -> "sys-kernel")
           TARGET_CLEAN="${{ env.TARGET }}"
           TARGET_CLEAN="${TARGET_CLEAN#=}"
           CATEGORY=$(echo "$TARGET_CLEAN" | cut -d'/' -f1)
+          PN=$(echo "$TARGET_CLEAN" | awk -F/ '{print $2}' | sed -E 's/-[0-9]+.*//')
+
+          # Delete older versions from the GitHub Release using the CLI
+          if [ -n "$PN" ]; then
+            echo ">>> Cleaning up older versions of $PN from the release..."
+            EXISTING=$(gh release view rolling --repo "$REPO" --json assets -q '.assets[].name' 2>/dev/null || echo "")
+            for asset in $EXISTING; do
+              # Strictly match the package name followed by a version number to avoid false positives (e.g. gentoo-kernel vs gentoo-kernel-bin)
+              if echo "$asset" | grep -Eq "^${PN}-[0-9].*\.gpkg\.tar$"; then
+                echo ">>> Deleting old asset: $asset"
+                gh release delete-asset rolling "$asset" --repo "$REPO" -y 2>/dev/null || true
+              fi
+            done
+          fi
           
-          # Only find and upload .gpkg.tar files inside the specific category folder modified in the last 60 minutes
+          # Only find and upload the newly built .gpkg.tar file
           if [ -n "$CATEGORY" ] && [ -d "binpkgs/$CATEGORY" ]; then
             find "binpkgs/$CATEGORY" -type f -name '*.gpkg.tar' -mmin -60 | while read -r file; do
               retry_upload "$file"
