@@ -72,7 +72,6 @@ jobs:
                   print(f"API Error for {repo}: {e}")
               return best_ver
 
-          # Modified to natively track specific git branches (e.g., v5)
           def get_latest_commit(repo_url, branch="HEAD"):
               try:
                   out = subprocess.check_output(["git", "ls-remote", repo_url, branch], timeout=30, stderr=subprocess.DEVNULL).decode()
@@ -142,11 +141,8 @@ jobs:
 
               if is_live:
                   repo_url = f"https://github.com/{repo}.git"
-                  
-                  # Extract EGIT_BRANCH if it exists, otherwise default to HEAD
                   branch_m = re.search(r'^EGIT_BRANCH=["\']?([^"\']+)["\']?', content, re.MULTILINE)
                   branch = branch_m.group(1) if branch_m else "HEAD"
-                  
                   new_commit = get_latest_commit(repo_url, branch)
                   if new_commit:
                       new_content = content
@@ -236,6 +232,11 @@ jobs:
         run: |
           git config user.name "github-actions[bot]"
           git config user.email "github-actions[bot]@users.noreply.github.com"
+          
+          # BUG FIX: Ensure temporary txt/sh files are ignored and NEVER committed to repo
+          echo -e "changed_packages.txt\npackages_to_build.txt\ngen_manifests.sh\nresolve_state.sh" > .gitignore
+          git rm --cached changed_packages.txt packages_to_build.txt 2>/dev/null || true
+          
           git add -A
           if ! git diff --cached --quiet; then
             MSG="auto-update: ebuild refresh, manifests, and cache $(date -u '+%Y-%m-%d')"
@@ -281,9 +282,10 @@ jobs:
           virtual/dist-kernel ~amd64
           games-util/heroic-bin ~amd64
           net-im/vesktop-bin ~amd64
+          dev-python/icoextract ~amd64
           KEYW
           LOCAL_PKGS=$(find /overlay -mindepth 2 -maxdepth 3 -name "*.ebuild" | awk -F/ '{print $(NF-2)"/"$(NF-1)}' | sort -u || true)
-          UPSTREAM_PKGS="media-libs/mesa media-libs/vulkan-loader sys-kernel/gentoo-kernel virtual/dist-kernel games-util/heroic-bin net-im/vesktop-bin"
+          UPSTREAM_PKGS="media-libs/mesa media-libs/vulkan-loader sys-kernel/gentoo-kernel virtual/dist-kernel games-util/heroic-bin net-im/vesktop-bin dev-python/icoextract"
           > /overlay/desired_state.txt
           for pkg in $LOCAL_PKGS $UPSTREAM_PKGS; do
              RES=$(emerge -pqO --color=n "$pkg" 2>/dev/null | awk '/^\[ebuild/ {for(i=1;i<=NF;i++) if($i ~ /\//) {print $i; break}}' || true)
@@ -305,15 +307,15 @@ jobs:
           EXISTING_ASSETS=$(gh release view rolling --json assets --jq '.assets[].name' 2>/dev/null || echo "")
           CHANGED=$(cat changed_packages.txt 2>/dev/null || echo "")
           > packages_to_build.txt
-          FORCE_REQUIRED="false"
+          CHANGED_ATOMS=""
           while IFS= read -r CPV; do
              [ -z "$CPV" ] && continue
              PN_PV="${CPV#*/}"
              ATOM=$(echo "$CPV" | sed -E 's/-[0-9]+(\.[0-9]+)*(_[a-z0-9]+)?(-r[0-9]+)?$//')
              if echo "$CHANGED" | grep -q "^${ATOM}$"; then
-                echo "⚠️ $ATOM bumped via script. Forcing build: =$CPV"
+                echo "⚠️ $ATOM bumped via script. Queueing build: =$CPV"
                 echo "=$CPV" >> packages_to_build.txt
-                FORCE_REQUIRED="true"
+                CHANGED_ATOMS="$CHANGED_ATOMS =$CPV"
              elif ! echo "$EXISTING_ASSETS" | grep -q "^${PN_PV}-.*\.gpkg\.tar$"; then
                 echo "✗ Missing binary: =$CPV"
                 echo "=$CPV" >> packages_to_build.txt
@@ -322,7 +324,9 @@ jobs:
              fi
           done < desired_state.txt
           echo "build_list=$(tr '\n' ' ' < packages_to_build.txt | xargs)" >> "$GITHUB_OUTPUT"
-          echo "force_required=$FORCE_REQUIRED" >> "$GITHUB_OUTPUT"
+          
+          # ONLY pass specific bumped packages to be force-rebuilt
+          echo "force_required=$CHANGED_ATOMS" >> "$GITHUB_OUTPUT"
 
       - name: Phase 6 - Trigger Relay
         if: steps.audit.outputs.build_list != ''
@@ -334,7 +338,9 @@ jobs:
             "media-libs/vulkan-loader"
             "sys-kernel/gentoo-kernel"
             "virtual/dist-kernel"
+            "dev-python/icoextract"
             "games-util/heroic-bin"
+            "games-util/faugus-launcher"
             "net-im/vesktop-bin"
             "gui-libs/scenefx"
             "gui-apps/quickshell"
