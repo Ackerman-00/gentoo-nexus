@@ -4,7 +4,7 @@ on:
   workflow_dispatch:
     inputs:
       package_list:
-        description: 'Space‑separated list of package atoms to build'
+        description: 'Space-separated list of package atoms to build'
         required: true
       force_rebuild:
         description: 'Force compile from source (ignores Release binaries)'
@@ -56,37 +56,42 @@ jobs:
             --repo ${{ github.repository }} \
             --dir binpkgs --clobber 2>/dev/null || true
 
-          # --- Reconstruct the PKGDIR subdirectory layout ---
-          # The Packages index contains lines like "CPV: gui-libs/gtk-4.20.3-r2"
-          # The corresponding binary file is "gtk-4.20.3-r2-1.gpkg.tar"
-          # We use that information to move every .gpkg.tar into
-          # binpkgs/<CATEGORY>/<PACKAGE>/ so that Portage sees it.
-          echo ">>> Reorganising binaries into category subdirectories..."
-          if [ -f binpkgs/Packages ]; then
-            while IFS= read -r line; do
-              # Extract the CPV field (e.g., gui-libs/gtk-4.20.3-r2)
-              cpv=$(echo "$line" | awk -F': ' '/^CPV:/ {print $2}')
-              [ -z "$cpv" ] && continue
-              category="${cpv%/*}"
-              pn_pv="${cpv#*/}"                # e.g. gtk-4.20.3-r2
-              # The binary file name starts with $pn_pv
-              binfile=$(ls binpkgs/${pn_pv}-*.gpkg.tar 2>/dev/null | head -1)
-              if [ -n "$binfile" ]; then
-                mkdir -p "binpkgs/${category}/${pn_pv%-*}"
-                mv "$binfile" "binpkgs/${category}/${pn_pv%-*}/"
-              fi
-            done < binpkgs/Packages
-            # Also move the Packages* files to the root so they aren't lost
-            mv binpkgs/Packages* binpkgs/ 2>/dev/null || true
-          fi
+          echo ">>> Reorganising binaries using definitive URI data..."
+          python3 << 'EOF'
+          import os, shutil
+          
+          if not os.path.exists('binpkgs/Packages'):
+              print("No Packages file found, skipping organization.")
+              exit(0)
+              
+          with open('binpkgs/Packages', 'r') as f:
+              blocks = f.read().split('\n\n')
+              
+          for block in blocks:
+              uri = None
+              for line in block.split('\n'):
+                  if line.startswith('URI:'):
+                      uri = line.split(':', 1)[1].strip()
+                      break
+              if uri:
+                  filename = os.path.basename(uri)
+                  source_path = os.path.join('binpkgs', filename)
+                  target_path = os.path.join('binpkgs', uri)
+                  target_dir = os.path.dirname(target_path)
+                  
+                  if os.path.exists(source_path):
+                      os.makedirs(target_dir, exist_ok=True)
+                      shutil.move(source_path, target_path)
+                      print(f"Restored to tree: {uri}")
+          EOF
           echo ">>> Binary layout restored."
 
-      - name: Pre‑fetch webkit‑gtk from official binhost if missing
+      - name: Pre-fetch webkit-gtk from official binhost if missing
         run: |
           if ls binpkgs/*/webkit-gtk/*.gpkg.tar >/dev/null 2>&1; then
-            echo "✓ webkit‑gtk binary already cached."
+            echo "✓ webkit-gtk binary already cached."
           else
-            echo ">>> webkit‑gtk not in release – fetching from official Gentoo binhost..."
+            echo ">>> webkit-gtk not in release – fetching from official Gentoo binhost..."
             docker run --rm \
               -v "${{ github.workspace }}/binpkgs:/var/cache/binpkgs:rw" \
               gentoo/stage3:amd64-desktop-openrc \
@@ -129,31 +134,38 @@ jobs:
         run: |
           TARGET="${{ steps.queue.outputs.TARGET_PKG }}"
           [ -z "$TARGET" ] && { echo "skip_compile=true" >> "$GITHUB_OUTPUT"; exit 0; }
-          PN=$(echo "$TARGET" | sed -E 's/^=//' | awk -F/ '{print $NF}' | sed -E 's/-[0-9].*//')
+          
+          # Remove leading equal sign (e.g., =gui-libs/gtk-4.20.3-r2 -> gui-libs/gtk-4.20.3-r2)
+          CPV="${TARGET#=}"
+          
           if [ "${{ github.event.inputs.force_rebuild }}" == "true" ]; then
-            echo "Force rebuild: Will compile $TARGET"
+            echo "Force rebuild requested for $CPV. Purging old binary."
             echo "skip_compile=false" >> "$GITHUB_OUTPUT"
-            echo ">>> Removing stale binaries to force fresh compilation..."
-            rm -rf binpkgs/*/${PN}/*.gpkg.tar 2>/dev/null || true
-            rm -rf binpkgs/*/opus/*.gpkg.tar
-            rm -rf binpkgs/*/ell/*.gpkg.tar
-            rm -rf binpkgs/*/mpg123-base/*.gpkg.tar
-            rm -rf binpkgs/*/libxmlb/*.gpkg.tar
-            rm -rf binpkgs/*/seatd/*.gpkg.tar
-            rm -rf binpkgs/*/gtk/*.gpkg.tar
-            rm -rf binpkgs/*/Crypt-URandom/*.gpkg.tar
-            rm -rf binpkgs/*/wireless-regdb/*.gpkg.tar
-            rm -rf binpkgs/*/mobile-broadband-provider-info/*.gpkg.tar
-            rm -rf binpkgs/*/jemalloc/*.gpkg.tar
-            rm -rf binpkgs/*/nss/*.gpkg.tar
-            rm -rf binpkgs/*/libmbim/*.gpkg.tar
-            rm -rf binpkgs/*/libqrtr-glib/*.gpkg.tar
-          elif find binpkgs -path "*/${PN}/*.gpkg.tar" | grep -q .; then
-            echo "Binary ${PN}-*.gpkg.tar exists. Skipping compile."
-            echo "skip_compile=true" >> "$GITHUB_OUTPUT"
+            # Purge the specific file using Python to parse the URI from the Packages index
+            python3 -c "
+          import os
+          if os.path.exists('binpkgs/Packages'):
+              with open('binpkgs/Packages', 'r') as f:
+                  blocks = f.read().split('\n\n')
+              for block in blocks:
+                  if 'CPV: $CPV' in block:
+                      for line in block.split('\n'):
+                          if line.startswith('URI:'):
+                              uri = line.split(':', 1)[1].strip()
+                              path = os.path.join('binpkgs', uri)
+                              if os.path.exists(path):
+                                  os.remove(path)
+                                  print(f'Deleted stale binary: {path}')
+          " || true
           else
-            echo "No binary for $PN. Will compile from source."
-            echo "skip_compile=false" >> "$GITHUB_OUTPUT"
+            # Exact regex match against the Packages file ensures zero false positives
+            if grep -q "^CPV: $CPV$" binpkgs/Packages 2>/dev/null; then
+               echo "Binary $CPV is already in the Packages index. Skipping compile."
+               echo "skip_compile=true" >> "$GITHUB_OUTPUT"
+            else
+               echo "Binary $CPV not found. Will compile from source."
+               echo "skip_compile=false" >> "$GITHUB_OUTPUT"
+            fi
           fi
 
       - name: Write Docker Build Script to File
@@ -208,10 +220,10 @@ jobs:
           echo 'sys-kernel/installkernel dracut' > /etc/portage/package.use/installkernel
           echo 'sys-libs/minizip-ng compat' > /etc/portage/package.use/minizip-ng
 
-          echo ">>> Regenerating Packages index..."
+          echo ">>> Regenerating Packages index to map loaded binaries..."
           emaint binhost --fix
 
-          echo ">>> Generating Manifests for overlay..."
+          echo ">>> Generating Manifests for local ebuilds..."
           for ebuild_file in $(find /var/db/repos/gentoo-nexus -mindepth 2 -maxdepth 3 -name "*.ebuild"); do
              ebuild "$ebuild_file" manifest >/dev/null 2>&1 || {
                echo "WARNING: Manifest generation failed for $(basename "$ebuild_file")"
@@ -223,7 +235,7 @@ jobs:
             echo ">>> WARNING: emerge exited with non-zero code, but continuing to save partial binaries..."
           }
 
-          echo ">>> Regenerating Packages index..."
+          echo ">>> Finalising Packages index..."
           emaint binhost --fix
           BUILDSCRIPT
 
@@ -271,6 +283,7 @@ jobs:
           for file in binpkgs/Packages*; do
             [ -f "$file" ] && retry_upload "$file"
           done
+          # The files are now in subdirectories, find naturally crawls them
           find binpkgs -name '*.gpkg.tar' | while read -r file; do
             retry_upload "$file"
           done

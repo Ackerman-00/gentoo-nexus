@@ -170,19 +170,16 @@ jobs:
               f.write(f"changed_packages={'true' if changed_list else 'false'}\n")
           EOF
 
-      - name: Phase 2 - Generate Manifests for All Ebuilds
+      - name: Phase 2 - Generate Manifests and Cache
         run: |
-          echo ">>> Generating Manifests for the overlay..."
+          echo ">>> Generating Manifests and metadata for the overlay..."
           cat > gen_manifests.sh << 'EOF'
           #!/bin/bash
           set -euo pipefail
-          # Set up base portage tree and repository configuration
+          
           mkdir -p /var/db/repos/gentoo /etc/portage/repos.conf
-
-          # Sync the base tree (needed for masters resolution)
           emerge-webrsync -q || true
 
-          # Configure main gentoo repo explicitly (Portage needs this)
           cat > /etc/portage/repos.conf/gentoo.conf << 'REPOEOF'
           [gentoo]
           location = /var/db/repos/gentoo
@@ -190,7 +187,6 @@ jobs:
           priority = -1000
           REPOEOF
 
-          # Configure the overlay as a proper Portage repository
           mkdir -p /overlay/metadata
           echo "masters = gentoo" > /overlay/metadata/layout.conf
           cat > /etc/portage/repos.conf/gentoo-nexus.conf << 'REPOEOF'
@@ -201,27 +197,30 @@ jobs:
           auto-sync = no
           REPOEOF
 
-          # Now generate manifests
           echo ">>> Generating Manifests..."
           for e in $(find /overlay -mindepth 2 -maxdepth 3 -name "*.ebuild"); do
               ebuild "$e" manifest >/dev/null 2>&1 || {
                   echo "WARNING: Failed to generate manifest for $(basename "$e")"
               }
           done
-          echo ">>> Manifests generated successfully."
+          
+          echo ">>> Generating md5-cache (repo_data)..."
+          egencache --update --repo gentoo-nexus --jobs 4
+          
+          echo ">>> Done."
           EOF
           chmod +x gen_manifests.sh
           docker run --rm -v "${{ github.workspace }}:/overlay" gentoo/stage3:amd64-desktop-openrc bash /overlay/gen_manifests.sh
 
-      - name: Phase 3 - Commit All Changes (Ebuilds + Manifests)
+      - name: Phase 3 - Commit All Changes (Ebuilds + Metadata)
         run: |
           git config user.name "github-actions[bot]"
           git config user.email "github-actions[bot]@users.noreply.github.com"
           git add -A
           if ! git diff --cached --quiet; then
-            MSG="auto-update: ebuild refresh and manifests $(date -u '+%Y-%m-%d')"
+            MSG="auto-update: ebuild refresh, manifests, and cache $(date -u '+%Y-%m-%d')"
             if [ -f changed_packages.txt ]; then
-              MSG="auto-update: ebuild bumps ($(tr '\n' ' ' < changed_packages.txt)) and manifests $(date -u '+%Y-%m-%d')"
+              MSG="auto-update: ebuild bumps ($(tr '\n' ' ' < changed_packages.txt)) $(date -u '+%Y-%m-%d')"
             fi
             git commit -m "$MSG"
             git pull --rebase origin ${{ github.ref_name }}
