@@ -55,50 +55,74 @@ jobs:
             -p "*.gpkg.tar" -p "Packages*" \
             --repo ${{ github.repository }} \
             --dir binpkgs --clobber 2>/dev/null || true
+            
+          echo ">>> Scanning for and removing corrupted/incomplete downloads..."
+          for f in binpkgs/*.gpkg.tar; do
+            [ -e "$f" ] || continue
+            if ! tar -tf "$f" >/dev/null 2>&1; then
+              echo "Removed corrupted file to protect indexer: $f"
+              rm -f "$f"
+            fi
+          done
 
-      - name: Restore GPKG Layout using Portage Engine
+      - name: Restore GPKG Layout using Overlay Mapping
         run: |
-          echo ">>> Restoring GPKG folder strict-layout via internal Portage API..."
+          echo ">>> Restoring GPKG folder strict-layout via Overlay Mapping..."
           docker run --rm \
             -v "${{ github.workspace }}/binpkgs:/var/cache/binpkgs:rw" \
+            -v "${{ github.workspace }}/overlay:/var/db/repos/gentoo-nexus:ro" \
             gentoo/stage3:amd64-desktop-openrc \
             python3 -c "
           import os, shutil
           import portage
-          from portage.versions import pkgsplit, catsplit
+          from portage.versions import pkgsplit
           
           pkgdir = '/var/cache/binpkgs'
-          pkg_file = os.path.join(pkgdir, 'Packages')
-          if not os.path.exists(pkg_file):
-              print('No Packages file found. Skipping.')
-              exit(0)
+          
+          # Sync portage tree so we can map upstream packages too
+          os.system('emerge-webrsync -q')
+          
+          repos = ['/var/db/repos/gentoo-nexus', '/var/db/repos/gentoo']
+          pn_to_cat = {}
+          
+          # Map every package name to its true category
+          for repo in repos:
+              if not os.path.exists(repo): continue
+              for cat in os.listdir(repo):
+                  if cat.startswith('.') or cat in ['metadata', 'profiles', 'eclass', 'scripts']: continue
+                  cat_path = os.path.join(repo, cat)
+                  if not os.path.isdir(cat_path): continue
+                  for pn in os.listdir(cat_path):
+                      if pn not in pn_to_cat:
+                          pn_to_cat[pn] = cat
+                          
+          for f in os.listdir(pkgdir):
+              if not f.endswith('.gpkg.tar'): continue
               
-          with open(pkg_file, 'r') as f:
-              blocks = f.read().split('\n\n')
+              path = os.path.join(pkgdir, f)
               
-          for block in blocks:
-              cpv = None
-              uri = None
-              for line in block.split('\n'):
-                  if line.startswith('CPV:'):
-                      cpv = line.split(':', 1)[1].strip()
-                  elif line.startswith('URI:'):
-                      uri = line.split(':', 1)[1].strip()
-                      
-              if cpv and uri:
-                  cat, pvr = catsplit(cpv)
-                  split_res = pkgsplit(cpv)
-                  if split_res:
-                      pn, ver, rev = split_res
-                      filename = os.path.basename(uri)
-                      source_path = os.path.join(pkgdir, filename)
+              # Strip .gpkg.tar and the trailing build ID (-1)
+              base = f[:-9]
+              if '-' in base:
+                  base = base.rsplit('-', 1)[0]
+                  
+              split_res = pkgsplit(base)
+              if not split_res:
+                  split_res = pkgsplit(f[:-9])
+                  
+              if split_res:
+                  pn = split_res[0]
+                  if pn in pn_to_cat:
+                      cat = pn_to_cat[pn]
                       target_dir = os.path.join(pkgdir, cat, pn)
-                      target_path = os.path.join(target_dir, filename)
+                      target_path = os.path.join(target_dir, f)
                       
-                      if os.path.exists(source_path) and source_path != target_path:
+                      if path != target_path:
                           os.makedirs(target_dir, exist_ok=True)
-                          shutil.move(source_path, target_path)
-                          print(f'Restored GPKG layout: {cat}/{pn}/{filename}')
+                          shutil.move(path, target_path)
+                          print(f'Restored: {cat}/{pn}/{f}')
+                  else:
+                      print(f'Warning: Could not resolve category for {pn}')
           "
 
       - name: Pre-fetch webkit-gtk from official binhost if missing
@@ -150,28 +174,41 @@ jobs:
           TARGET="${{ steps.queue.outputs.TARGET_PKG }}"
           [ -z "$TARGET" ] && { echo "skip_compile=true" >> "$GITHUB_OUTPUT"; exit 0; }
           
-          # Remove leading equal sign (e.g., =gui-libs/gtk-4.20.3-r2 -> gui-libs/gtk-4.20.3-r2)
           CPV="${TARGET#=}"
-          # Extract clean Package Name using awk/sed for target purging
-          PN=$(echo "$CPV" | awk -F/ '{print $2}' | sed -E 's/-[0-9]+.*//')
           
-          if [ "${{ github.event.inputs.force_rebuild }}" == "true" ]; then
-            echo "Force rebuild requested for $CPV. Purging local binaries."
-            echo "skip_compile=false" >> "$GITHUB_OUTPUT"
-            find binpkgs -type f -name "${PN}-*.gpkg.tar" -delete 2>/dev/null || true
-          else
-            # Exact regex match against the Packages file ensures zero false positives
-            if grep -q "^CPV: $CPV$" binpkgs/Packages 2>/dev/null; then
-               echo "Binary $CPV is already in the Packages index. Skipping compile."
-               echo "skip_compile=true" >> "$GITHUB_OUTPUT"
-            else
-               echo "Binary $CPV not found. Will compile from source."
-               echo "skip_compile=false" >> "$GITHUB_OUTPUT"
-               # CRITICAL: Purge older versions of this package from the local workspace
-               # so `emaint` doesn't index ghost binaries alongside the new build.
-               find binpkgs -type f -name "${PN}-*.gpkg.tar" -delete 2>/dev/null || true
-            fi
-          fi
+          # Delete the old local package directory to prevent ghost indexing
+          python3 -c "
+          import os, shutil, re
+          cpv = '${CPV}'
+          cat = cpv.split('/')[0]
+          pkg_ver = cpv.split('/')[1]
+          pn = re.split(r'-[0-9]', pkg_ver, 1)[0]
+          target_dir = os.path.join('binpkgs', cat, pn)
+          
+          if '${{ github.event.inputs.force_rebuild }}' == 'true':
+              print(f'Force rebuild: Purging {target_dir}')
+              if os.path.exists(target_dir): shutil.rmtree(target_dir)
+              with open(os.environ['GITHUB_OUTPUT'], 'a') as f:
+                  f.write('skip_compile=false\n')
+          else:
+              # Check if it is already in the Packages file
+              skip = False
+              if os.path.exists('binpkgs/Packages'):
+                  with open('binpkgs/Packages', 'r') as f:
+                      if f'CPV: {cpv}' in f.read(): skip = True
+              
+              if skip:
+                  print(f'Binary {cpv} is already in the Packages index. Skipping compile.')
+                  with open(os.environ['GITHUB_OUTPUT'], 'a') as f:
+                      f.write('skip_compile=true\n')
+              else:
+                  print(f'Binary {cpv} not found. Will compile from source.')
+                  if os.path.exists(target_dir):
+                      shutil.rmtree(target_dir)
+                      print(f'Purged older versions from {target_dir} before compile')
+                  with open(os.environ['GITHUB_OUTPUT'], 'a') as f:
+                      f.write('skip_compile=false\n')
+          "
 
       - name: Write Docker Build Script to File
         if: steps.check_bin.outputs.skip_compile != 'true'
@@ -295,21 +332,29 @@ jobs:
           TARGET_CLEAN="${{ env.TARGET }}"
           TARGET_CLEAN="${TARGET_CLEAN#=}"
           CATEGORY=$(echo "$TARGET_CLEAN" | cut -d'/' -f1)
-          PN=$(echo "$TARGET_CLEAN" | awk -F/ '{print $2}' | sed -E 's/-[0-9]+.*//')
-
-          # Delete older versions from the GitHub Release using the CLI
-          if [ -n "$PN" ]; then
-            echo ">>> Cleaning up older versions of $PN from the release..."
-            EXISTING=$(gh release view rolling --repo "$REPO" --json assets -q '.assets[].name' 2>/dev/null || echo "")
-            for asset in $EXISTING; do
-              # Strictly match the package name followed by a version number to avoid false positives (e.g. gentoo-kernel vs gentoo-kernel-bin)
-              if echo "$asset" | grep -Eq "^${PN}-[0-9].*\.gpkg\.tar$"; then
-                echo ">>> Deleting old asset: $asset"
-                gh release delete-asset rolling "$asset" --repo "$REPO" -y 2>/dev/null || true
-              fi
-            done
-          fi
           
+          # Delete older versions from the GitHub Release using Python for safe PN extraction
+          python3 -c "
+          import os, re, subprocess
+          cpv = '${TARGET_CLEAN}'
+          pkg_ver = cpv.split('/')[1]
+          pn = re.split(r'-[0-9]', pkg_ver, 1)[0]
+          repo = '${REPO}'
+          
+          print(f'>>> Cleaning up older versions of {pn} from the release...')
+          try:
+              out = subprocess.check_output(['gh', 'release', 'view', 'rolling', '--repo', repo, '--json', 'assets', '-q', '.assets[].name'])
+              assets = out.decode().strip().split('\n')
+              for asset in assets:
+                  if not asset: continue
+                  # Match exact package name prefix
+                  if re.match(rf'^{pn}-[0-9].*\.gpkg\.tar$', asset):
+                      print(f'>>> Deleting old asset: {asset}')
+                      subprocess.run(['gh', 'release', 'delete-asset', 'rolling', asset, '--repo', repo, '-y'], check=False)
+          except Exception as e:
+              print(f'Cleanup error: {e}')
+          "
+
           # Only find and upload the newly built .gpkg.tar file
           if [ -n "$CATEGORY" ] && [ -d "binpkgs/$CATEGORY" ]; then
             find "binpkgs/$CATEGORY" -type f -name '*.gpkg.tar' -mmin -60 | while read -r file; do
