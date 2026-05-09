@@ -1,38 +1,53 @@
 <div align="center">
-<img src="https://www.gentoo.org/assets/img/logo/gentoo-signet.svg" width="80" />
-<h1>gentoo-nexus</h1>
-<p>An autonomous, self-updating Gentoo overlay and binary host for a bleeding-edge Wayland desktop.</p>
 
-[![Forge](https://img.shields.io/github/actions/workflow/status/Ackerman-00/gentoo-nexus/build.yml?style=for-the-badge&label=FORGE&logo=githubactions&logoColor=white)](https://github.com/Ackerman-00/gentoo-nexus/actions)
+<img src="https://www.gentoo.org/assets/img/logo/gentoo-signet.svg" width="80px" />
+
+<br/>
+
+# gentoo-nexus
+
+*A bleeding-edge Gentoo overlay & binary host — built for the niri Wayland desktop.*
+
+<br/>
+
+[![Build](https://img.shields.io/github/actions/workflow/status/Ackerman-00/gentoo-nexus/gentoo-build.yml?style=for-the-badge&label=FORGE&logo=githubactions&logoColor=white&color=4f8a5a)](https://github.com/Ackerman-00/gentoo-nexus/actions)
 &nbsp;
-[![Binhost](https://img.shields.io/badge/BINHOST-LIVE-059669?style=for-the-badge&logo=linux&logoColor=white)](https://Ackerman-00.github.io/gentoo-nexus/)
+[![Binhost](https://img.shields.io/badge/BINHOST-LIVE-4f8a5a?style=for-the-badge&logo=linux&logoColor=white)](https://github.com/Ackerman-00/gentoo-nexus/releases/tag/rolling)
+&nbsp;
+[![License](https://img.shields.io/badge/LICENSE-MIT-4f8a5a?style=for-the-badge)](LICENSE)
 
-<p><sup>Packages built nightly · Pre-compiled binaries · Drop-in Portage overlay</sup></p>
+<sub>Pre-compiled binaries · Nightly CI · Drop-in Portage overlay</sub>
+
 </div>
 
 ---
 
-## ⚡ Quick Setup
+## Overview
 
-**① Add the overlay**
+**gentoo-nexus** is an autonomous Gentoo overlay and binary host targeting a fully configured [niri](https://github.com/niri-wm/niri) scrollable-tiling Wayland desktop. Packages are compiled nightly via GitHub Actions and served as ready-to-install `gpkg` binaries — no waiting for compilation on your end.
+
+```
+overlay  →  ebuilds tracked & auto-updated from upstream
+binhost  →  pre-built gpkg binaries via GitHub Releases (rolling tag)
+CI       →  GitHub Actions rebuilds on every version bump or commit
+```
+
+---
+
+## Quick Setup
+
+### ① Add the Overlay
+
+One command — adds and syncs the repository immediately:
 
 ```bash
-nano /etc/portage/repos.conf/gentoo-nexus.conf
+eselect repository add gentoo-nexus git https://github.com/Ackerman-00/gentoo-nexus.git \
+  && emaint sync -r gentoo-nexus
 ```
 
-```ini
-[gentoo-nexus]
-location  = /var/db/repos/gentoo-nexus
-sync-type = git
-sync-uri  = https://github.com/Ackerman-00/gentoo-nexus.git
-priority  = 9999
-```
+---
 
-```bash
-emaint sync -r gentoo-nexus
-```
-
-**② Add the binary host**
+### ② Configure the Binary Host
 
 ```bash
 nano /etc/portage/binrepos.conf/nexus.conf
@@ -41,108 +56,148 @@ nano /etc/portage/binrepos.conf/nexus.conf
 ```ini
 [gentoo-nexus-bin]
 priority         = 99999
-sync-uri         = https://Ackerman-00.github.io/gentoo-nexus/
+sync-uri         = https://github.com/Ackerman-00/gentoo-nexus/releases/download/rolling/
 verify-signature = false
 ```
 
-**③ Configure make.conf**
+---
+
+### ③ Update `make.conf`
 
 ```bash
 nano /etc/portage/make.conf
 ```
 
 ```bash
+# Required: gpkg format for Nexus binaries
+BINPKG_FORMAT="gpkg"
 FEATURES="getbinpkg"
 EMERGE_DEFAULT_OPTS="--getbinpkg --binpkg-respect-use=n --binpkg-changed-deps=n"
 ```
 
-> Without `--binpkg-respect-use=n`, Portage rejects pre-built packages whose USE set differs from your local profile and falls back to compiling from source.
+> **Why `--binpkg-respect-use=n`?**  
+> Without it, Portage rejects pre-built packages whose USE flags differ from your local profile and falls back to compiling from source — defeating the point of a binhost.
 
 ---
 
-## 📦 Packages
+## Packages
 
-| Package | Description | Type |
-|---------|-------------|:----:|
-| `gui-wm/niri` | Scrollable-tiling Wayland compositor | Git |
-| `gui-wm/mangowc` | Lightweight Wayland compositor layer | Stable |
-| `gui-apps/dank-material-shell` | Material Design shell for niri | Stable |
-| `gui-apps/quickshell` | Scriptable desktop widget engine | Stable |
-| `app-misc/matugen` | Material You color token generator | Stable |
-| `x11-misc/xwayland-satellite` | Rootless XWayland for any Wayland compositor | Git |
-| `gui-apps/dgop` | Fast application launcher | Stable |
-| `app-misc/danksearch` | System-wide fuzzy search | Stable |
+| Atom | Description | Track |
+|------|-------------|-------|
+| `gui-wm/niri` | Scrollable-tiling Wayland compositor | `9999` |
+| `gui-wm/mangowc` | Lightweight Wayland compositor layer | stable |
+| `gui-apps/dank-material-shell` | Material Design shell for niri | stable |
+| `gui-apps/quickshell` | Scriptable desktop widget engine | stable |
+| `app-misc/matugen` | Material You color token generator | stable |
+| `x11-misc/xwayland-satellite` | Rootless XWayland for any Wayland compositor | `9999` |
+| `gui-apps/dgop` | Fast application launcher | stable |
+| `app-misc/danksearch` | System-wide fuzzy search | stable |
 
-> `Git` packages track upstream HEAD and rebuild on every new commit.
+`9999` ebuilds track upstream HEAD and rebuild automatically on every new commit.
 
 ---
 
-## 🔄 Staying Updated
+## Testing with Distrobox
 
-No extra steps — packages update with your system:
+Try the overlay and binhost safely inside an isolated container — no risk to your host:
+
+```bash
+# 1. Create a Gentoo container
+distrobox create \
+  --image gentoo/stage3:amd64-desktop-openrc \
+  --name gentoo-nexus-test
+
+# 2. Enter it
+distrobox enter gentoo-nexus-test
+```
+
+Inside the container (as root):
+
+```bash
+# Sync the Portage tree
+emerge-webrsync
+
+# Install prerequisites
+emerge app-eselect/eselect-repository dev-vcs/git
+
+# Then follow the Quick Setup steps above ↑
+```
+
+---
+
+## Staying Updated
+
+No manual intervention needed. Packages update with your system:
 
 ```bash
 emerge -uDNaG @world
 ```
 
----
-
-## 🤝 Contributing
-
-Want a package added, or spotted something broken?
-
-- **[Open an issue](https://github.com/Ackerman-00/gentoo-nexus/issues/new)** — request a new package or report a build failure
-- **[Submit a PR](https://github.com/Ackerman-00/gentoo-nexus/pulls)** — add your own ebuild following the existing category structure
-- **Package updates** are handled automatically by the CI workflow — no need to bump versions manually
+The CI pipeline handles version bumps, binary rebuilds, and index updates automatically.
 
 ---
 
-## 🛠 Troubleshooting
+## Contributing
+
+Issues and PRs are welcome.
+
+- **Request a package** → open an issue with the package atom
+- **Fix or add an ebuild** → submit a PR following the existing category structure
+- **Report a build failure** → Actions → *Gentoo Build Relay* → *Run workflow* with the atom
+
+Version bumps are automated — no need to bump manually.
+
+---
+
+## Troubleshooting
 
 <details>
-<summary><b>No binary found for a package</b></summary>
-<br />
-The forge may still be building it, or a version bump occurred before the nightly run. Trigger a manual build:
+<summary><strong>Portage ignores the binhost and compiles from source</strong></summary>
 
-Go to **[Actions](https://github.com/Ackerman-00/gentoo-nexus/actions) → Nexus Genesis → Run workflow**, enter the package atom (e.g. `gui-wm/niri`) into the input field, then retry after a few minutes.
-</details>
-
-<details>
-<summary><b>Binary rejected — USE flag mismatch</b></summary>
-<br />
-Confirm both flags are present in <code>EMERGE_DEFAULT_OPTS</code> inside <code>/etc/portage/make.conf</code>:
+Ensure `make.conf` contains all three flags:
 
 ```bash
+BINPKG_FORMAT="gpkg"
+FEATURES="getbinpkg"
 EMERGE_DEFAULT_OPTS="--getbinpkg --binpkg-respect-use=n --binpkg-changed-deps=n"
 ```
+
 </details>
 
 <details>
-<summary><b>verify-signature warning in emerge output</b></summary>
-<br />
-Expected and harmless. The binary host does not use Portage GPG signing. The connection is encrypted over HTTPS.
+<summary><strong>Signature verification error</strong></summary>
+
+Set `verify-signature = false` in your `binrepos.conf`. The binhost does not currently ship signed package indexes.
+
 </details>
 
 <details>
-<summary><b>Sync fails with an auth error</b></summary>
-<br />
-The repository is public. Auth errors typically mean a skewed system clock. Fix with:
+<summary><strong>A package failed to build in CI</strong></summary>
+
+Go to **Actions → Gentoo Build Relay → Run workflow**, enter the package atom (e.g. `gui-wm/niri`), and retry after a few minutes.
+
+</details>
+
+<details>
+<summary><strong>eselect repository crashes on duplicate</strong></summary>
+
+If the repo was previously added manually, remove the existing entry first:
 
 ```bash
-ntpd -q
-# or
-chronyc makestep
+eselect repository remove gentoo-nexus
+eselect repository add gentoo-nexus git https://github.com/Ackerman-00/gentoo-nexus.git
 ```
-</details>
 
-<details>
-<summary><b>Binary host ignored entirely</b></summary>
-<br />
-Confirm <code>getbinpkg</code> is in <code>FEATURES</code> and that <code>sync-uri</code> in <code>binrepos.conf</code> ends with a trailing <code>/</code>. Without it, Portage cannot construct the package index URL correctly.
 </details>
 
 ---
 
 <div align="center">
-Made with 🖤 by <a href="https://github.com/Ackerman-00">Ackerman-00</a> &nbsp;·&nbsp; Powered by <a href="https://www.gentoo.org">Gentoo Linux</a>
+
+<sub>built on Gentoo · powered by Portage · automated with GitHub Actions</sub>
+
+<br/>
+
+[![GitHub](https://img.shields.io/badge/Ackerman--00-gentoo--nexus-4f8a5a?style=flat-square&logo=github)](https://github.com/Ackerman-00/gentoo-nexus)
+
 </div>
