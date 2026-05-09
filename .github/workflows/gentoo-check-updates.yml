@@ -264,6 +264,7 @@ jobs:
           media-video/ffmpeg -sdl
           sys-libs/ncurses -gpm
           dev-libs/openssl -bindist
+          dev-libs/libdbusmenu gtk3
           USECONF
           emerge-webrsync -q || true
           mkdir -p /overlay/metadata
@@ -283,9 +284,10 @@ jobs:
           games-util/heroic-bin ~amd64
           net-im/vesktop-bin ~amd64
           dev-python/icoextract ~amd64
+          games-util/faugus-launcher ~amd64
           KEYW
           LOCAL_PKGS=$(find /overlay -mindepth 2 -maxdepth 3 -name "*.ebuild" | awk -F/ '{print $(NF-2)"/"$(NF-1)}' | sort -u || true)
-          UPSTREAM_PKGS="media-libs/mesa media-libs/vulkan-loader sys-kernel/gentoo-kernel virtual/dist-kernel games-util/heroic-bin net-im/vesktop-bin dev-python/icoextract"
+          UPSTREAM_PKGS="media-libs/mesa media-libs/vulkan-loader sys-kernel/gentoo-kernel virtual/dist-kernel games-util/heroic-bin net-im/vesktop-bin dev-python/icoextract games-util/faugus-launcher"
           > /overlay/desired_state.txt
           for pkg in $LOCAL_PKGS $UPSTREAM_PKGS; do
              RES=$(emerge -pqO --color=n "$pkg" 2>/dev/null | awk '/^\[ebuild/ {for(i=1;i<=NF;i++) if($i ~ /\//) {print $i; break}}' || true)
