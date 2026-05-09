@@ -1,21 +1,4 @@
-# Portage / CI Directories
-distfiles/
-binpkgs/
-ccache/
-cache/
-job_out/
-
-# CI State & Temp Files
 changed_packages.txt
 packages_to_build.txt
-desired_state.txt
-all_packages.txt
-*.sh
-*.dl
-
-# Gentoo Cache Files
-.mirror-cache.json
-.layout.conf.distfiles.gentoo.org
-
-# Env Files
-.env
+gen_manifests.sh
+resolve_state.sh
