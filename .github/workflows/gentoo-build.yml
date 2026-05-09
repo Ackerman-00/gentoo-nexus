@@ -303,6 +303,10 @@ jobs:
             gentoo/stage3:amd64-desktop-openrc \
             bash /build.sh "${{ env.TARGET }}"
 
+      - name: Fix Workspace Permissions (Post-Build)
+        if: steps.check_bin.outputs.skip_compile != 'true'
+        run: sudo chown -R "$(id -u):$(id -g)" "${{ github.workspace }}"
+
       - name: Upload to GitHub Release
         if: steps.check_bin.outputs.skip_compile != 'true'
         env:
@@ -328,6 +332,11 @@ jobs:
             echo "::error::Failed to upload $file after $max_retries attempts"
             return 1
           }
+
+          echo ">>> Flattening URIs in Packages index for GitHub Releases..."
+          sed -i -E 's|URI: .*/([^/]+\.gpkg\.tar)|URI: \1|g' binpkgs/Packages
+          rm -f binpkgs/Packages.gz
+          gzip -c binpkgs/Packages > binpkgs/Packages.gz
 
           echo ">>> Uploading updated Packages indexes..."
           shopt -s nullglob
@@ -368,7 +377,7 @@ jobs:
             echo "No new binaries found to upload."
           fi
 
-      - name: Fix Workspace Permissions
+      - name: Fix Workspace Permissions (Final)
         if: always()
         run: sudo chown -R "$(id -u):$(id -g)" "${{ github.workspace }}"
 
