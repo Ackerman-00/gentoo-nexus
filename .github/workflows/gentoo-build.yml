@@ -161,6 +161,9 @@ jobs:
               '
           fi
 
+      - name: Fix Workspace Permissions (Pre-Build)
+        run: sudo chown -R "$(id -u):$(id -g)" "${{ github.workspace }}"
+
       - name: Parse Queue
         id: queue
         run: |
