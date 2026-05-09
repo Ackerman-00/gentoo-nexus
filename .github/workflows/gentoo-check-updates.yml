@@ -50,14 +50,12 @@ jobs:
           def get_latest_github_release(repo):
               best_ver = None
               try:
-                  # 1. Check /releases/latest first
                   r = requests.get(f"https://api.github.com/repos/{repo}/releases/latest", headers=hdrs, timeout=15)
                   if r.status_code == 200:
                       tag = r.json().get("tag_name", "").lstrip("v")
                       if tag and re.match(r'^[0-9]', tag): 
                           best_ver = tag
                   
-                  # 2. Fallback: Parse up to 100 tags and find the absolute maximum semantic version
                   r2 = requests.get(f"https://api.github.com/repos/{repo}/tags?per_page=100", headers=hdrs, timeout=15)
                   if r2.status_code == 200 and r2.json():
                       for tag_obj in r2.json():
@@ -74,9 +72,10 @@ jobs:
                   print(f"API Error for {repo}: {e}")
               return best_ver
 
-          def get_latest_commit(repo_url):
+          # Modified to natively track specific git branches (e.g., v5)
+          def get_latest_commit(repo_url, branch="HEAD"):
               try:
-                  out = subprocess.check_output(["git", "ls-remote", repo_url, "HEAD"], timeout=30, stderr=subprocess.DEVNULL).decode()
+                  out = subprocess.check_output(["git", "ls-remote", repo_url, branch], timeout=30, stderr=subprocess.DEVNULL).decode()
                   m = re.search(r"([a-f0-9]{40})", out)
                   if m: return m.group(1)[:12]
               except Exception: pass
@@ -143,7 +142,12 @@ jobs:
 
               if is_live:
                   repo_url = f"https://github.com/{repo}.git"
-                  new_commit = get_latest_commit(repo_url)
+                  
+                  # Extract EGIT_BRANCH if it exists, otherwise default to HEAD
+                  branch_m = re.search(r'^EGIT_BRANCH=["\']?([^"\']+)["\']?', content, re.MULTILINE)
+                  branch = branch_m.group(1) if branch_m else "HEAD"
+                  
+                  new_commit = get_latest_commit(repo_url, branch)
                   if new_commit:
                       new_content = content
                       if re.search(r'^EGIT_COMMIT=', new_content, re.MULTILINE):
@@ -151,9 +155,9 @@ jobs:
                       if new_content != content:
                           ebuild_path.write_text(new_content, encoding="utf-8")
                           updated_atoms.add(pkg_cat_name)
-                          print(f"  [+] Bumped live commit to: {new_commit}")
+                          print(f"  [+] Bumped live commit on branch {branch} to: {new_commit}")
                       else:
-                          print("  [-] Commit hash already up to date.")
+                          print(f"  [-] Commit hash for {branch} already up to date.")
               else:
                   curr_ver_m = re.search(rf'{re.escape(pkg_name)}-(\d+(?:\.\d+)*(?:_(?:alpha|beta|pre|rc|p)\d*)?(?:-r\d+)?)\.ebuild$', ebuild_path.name)
                   if not curr_ver_m: 
@@ -199,8 +203,12 @@ jobs:
           priority = -1000
           REPOEOF
 
-          mkdir -p /overlay/metadata
+          mkdir -p /overlay/metadata /overlay/profiles
           echo "masters = gentoo" > /overlay/metadata/layout.conf
+          
+          echo ">>> Mapping dynamic categories..."
+          find /overlay -mindepth 1 -maxdepth 1 -type d | grep -v -E '\.git|\.github|metadata|profiles|binpkgs|distfiles|ccache' | sed 's|/overlay/||' > /overlay/profiles/categories
+
           cat > /etc/portage/repos.conf/gentoo-nexus.conf << 'REPOEOF'
           [gentoo-nexus]
           location = /overlay
@@ -272,9 +280,10 @@ jobs:
           sys-kernel/gentoo-kernel ~amd64
           virtual/dist-kernel ~amd64
           games-util/heroic-bin ~amd64
+          net-im/vesktop-bin ~amd64
           KEYW
           LOCAL_PKGS=$(find /overlay -mindepth 2 -maxdepth 3 -name "*.ebuild" | awk -F/ '{print $(NF-2)"/"$(NF-1)}' | sort -u || true)
-          UPSTREAM_PKGS="media-libs/mesa media-libs/vulkan-loader sys-kernel/gentoo-kernel virtual/dist-kernel games-util/heroic-bin"
+          UPSTREAM_PKGS="media-libs/mesa media-libs/vulkan-loader sys-kernel/gentoo-kernel virtual/dist-kernel games-util/heroic-bin net-im/vesktop-bin"
           > /overlay/desired_state.txt
           for pkg in $LOCAL_PKGS $UPSTREAM_PKGS; do
              RES=$(emerge -pqO --color=n "$pkg" 2>/dev/null | awk '/^\[ebuild/ {for(i=1;i<=NF;i++) if($i ~ /\//) {print $i; break}}' || true)
@@ -326,16 +335,17 @@ jobs:
             "sys-kernel/gentoo-kernel"
             "virtual/dist-kernel"
             "games-util/heroic-bin"
+            "net-im/vesktop-bin"
             "gui-libs/scenefx"
             "gui-apps/quickshell"
             "gui-apps/noctalia-qs"
             "x11-misc/matugen"
             "gui-wm/niri"
+            "gui-wm/noctalia-v5"
             "gui-wm/mangowc"
             "app-misc/brightnessctl"
             "app-misc/cliphist"
             "app-misc/dgop"
-            "gui-wm/noctalia-shell"
             "gui-wm/dank-material-shell"
             "sys-apps/danksearch"
             "x11-base/xwayland-satellite"
