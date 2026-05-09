@@ -13,7 +13,6 @@ SLOT="0"
 KEYWORDS="~amd64"
 IUSE=""
 
-# Fully mapped from Fedora/AUR to Gentoo atoms
 DEPEND="
 	dev-cpp/sdbus-c++
 	dev-libs/glib:2
