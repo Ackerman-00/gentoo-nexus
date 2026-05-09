@@ -282,14 +282,16 @@ jobs:
           sys-kernel/gentoo-kernel ~amd64
           virtual/dist-kernel ~amd64
           games-util/heroic-bin ~amd64
-          net-im/vesktop-bin ~amd64
-          dev-python/icoextract ~amd64
-          games-util/faugus-launcher ~amd64
           KEYW
+          
           LOCAL_PKGS=$(find /overlay -mindepth 2 -maxdepth 3 -name "*.ebuild" | awk -F/ '{print $(NF-2)"/"$(NF-1)}' | sort -u || true)
-          UPSTREAM_PKGS="media-libs/mesa media-libs/vulkan-loader sys-kernel/gentoo-kernel virtual/dist-kernel games-util/heroic-bin net-im/vesktop-bin dev-python/icoextract games-util/faugus-launcher"
+          UPSTREAM_PKGS="media-libs/mesa media-libs/vulkan-loader sys-kernel/gentoo-kernel virtual/dist-kernel games-util/heroic-bin"
+          
+          # Combine lists and remove duplicates mathematically
+          ALL_PKGS=$(echo -e "${LOCAL_PKGS}\n${UPSTREAM_PKGS}" | tr ' ' '\n' | sort -u | grep -v '^$')
+          
           > /overlay/desired_state.txt
-          for pkg in $LOCAL_PKGS $UPSTREAM_PKGS; do
+          for pkg in $ALL_PKGS; do
              RES=$(emerge -pqO --color=n "$pkg" 2>/dev/null | awk '/^\[ebuild/ {for(i=1;i<=NF;i++) if($i ~ /\//) {print $i; break}}' || true)
              if [ -n "$RES" ]; then 
                echo "$RES" >> /overlay/desired_state.txt
@@ -325,10 +327,13 @@ jobs:
                 echo "✓ Binary already deployed: =$CPV"
              fi
           done < desired_state.txt
-          echo "build_list=$(tr '\n' ' ' < packages_to_build.txt | xargs)" >> "$GITHUB_OUTPUT"
           
-          # ONLY pass specific bumped packages to be force-rebuilt
-          echo "force_required=$CHANGED_ATOMS" >> "$GITHUB_OUTPUT"
+          # Remove any potential duplicates before passing to Phase 6
+          UNIQUE_BUILD_LIST=$(tr '\n' ' ' < packages_to_build.txt | tr ' ' '\n' | sort -u | xargs)
+          echo "build_list=$UNIQUE_BUILD_LIST" >> "$GITHUB_OUTPUT"
+          
+          UNIQUE_CHANGED_ATOMS=$(echo $CHANGED_ATOMS | tr ' ' '\n' | sort -u | xargs)
+          echo "force_required=$UNIQUE_CHANGED_ATOMS" >> "$GITHUB_OUTPUT"
 
       - name: Phase 6 - Trigger Relay
         if: steps.audit.outputs.build_list != ''
