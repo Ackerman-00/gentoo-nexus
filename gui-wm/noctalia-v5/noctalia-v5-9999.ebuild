@@ -13,7 +13,6 @@ SLOT="0"
 KEYWORDS="~amd64"
 IUSE=""
 
-# Fully mapped from Fedora/AUR to Gentoo atoms
 DEPEND="
 	dev-cpp/sdbus-c++
 	dev-libs/glib:2
@@ -23,7 +22,7 @@ DEPEND="
 	media-libs/fontconfig
 	media-libs/freetype
 	media-libs/libwebp
-	media-libs/mesa[egl(+),gles2]
+	media-libs/mesa[egl(+),gles]
 	media-video/pipewire
 	net-misc/curl
 	sys-auth/polkit
