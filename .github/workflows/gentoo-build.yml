@@ -255,6 +255,7 @@ jobs:
             bash /build.sh "${{ env.TARGET }}"
 
       - name: Upload to GitHub Release
+        if: steps.check_bin.outputs.skip_compile != 'true'
         env:
           GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
           REPO: ${{ github.repository }}
@@ -279,14 +280,24 @@ jobs:
             return 1
           }
 
+          echo ">>> Uploading updated Packages indexes..."
           shopt -s nullglob
           for file in binpkgs/Packages*; do
             [ -f "$file" ] && retry_upload "$file"
           done
-          # The files are now in subdirectories, find naturally crawls them
-          find binpkgs -name '*.gpkg.tar' | while read -r file; do
-            retry_upload "$file"
-          done
+
+          echo ">>> Uploading newly compiled binaries only to prevent API rate limits..."
+          # Clean the target string (e.g., "=sys-kernel/gentoo-kernel-7.0.5" -> "sys-kernel")
+          TARGET_CLEAN="${{ env.TARGET }}"
+          TARGET_CLEAN="${TARGET_CLEAN#=}"
+          CATEGORY=$(echo "$TARGET_CLEAN" | cut -d'/' -f1)
+          
+          # Only find and upload .gpkg.tar files inside the specific category folder modified in the last 60 minutes
+          if [ -n "$CATEGORY" ] && [ -d "binpkgs/$CATEGORY" ]; then
+            find "binpkgs/$CATEGORY" -type f -name '*.gpkg.tar' -mmin -60 | while read -r file; do
+              retry_upload "$file"
+            done
+          fi
 
       - name: Fix Workspace Permissions
         if: always()
