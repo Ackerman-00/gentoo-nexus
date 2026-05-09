@@ -287,6 +287,10 @@ jobs:
           chmod +x build_inside_docker.sh
           echo "TARGET=$TARGET" >> "$GITHUB_ENV"
 
+      - name: Mark Build Start Time
+        if: steps.check_bin.outputs.skip_compile != 'true'
+        run: touch build_start_marker
+
       - name: Build Package in Docker
         if: steps.check_bin.outputs.skip_compile != 'true'
         run: |
@@ -331,38 +335,37 @@ jobs:
             [ -f "$file" ] && retry_upload "$file"
           done
 
-          echo ">>> Uploading newly compiled binaries only to prevent API rate limits..."
-          TARGET_CLEAN="${{ env.TARGET }}"
-          TARGET_CLEAN="${TARGET_CLEAN#=}"
-          CATEGORY=$(echo "$TARGET_CLEAN" | cut -d'/' -f1)
+          echo ">>> Scanning for ALL newly compiled binaries to upload..."
+          # Find any .gpkg.tar file created or modified AFTER the build started. Unaffected by build duration!
+          NEW_BINARIES=$(find binpkgs -type f -name '*.gpkg.tar' -newer build_start_marker 2>/dev/null || echo "")
           
-          # Delete older versions from the GitHub Release using Python for safe PN extraction
-          python3 -c "
-          import os, re, subprocess
-          cpv = '${TARGET_CLEAN}'
-          pkg_ver = cpv.split('/')[1]
-          pn = re.split(r'-[0-9]', pkg_ver, 1)[0]
+          if [ -n "$NEW_BINARIES" ]; then
+            for file in $NEW_BINARIES; do
+              PN=$(echo "$file" | awk -F'/' '{print $3}')
+              
+              echo ">>> Processing new package: $PN"
+              
+              # Delete older versions of THIS specific package from the release
+              python3 -c "
+          import re, subprocess
+          pn = '${PN}'
           repo = '${REPO}'
-          
-          print(f'>>> Cleaning up older versions of {pn} from the release...')
           try:
               out = subprocess.check_output(['gh', 'release', 'view', 'rolling', '--repo', repo, '--json', 'assets', '-q', '.assets[].name'])
               assets = out.decode().strip().split('\n')
               for asset in assets:
                   if not asset: continue
-                  # Match exact package name prefix
                   if re.match(rf'^{pn}-[0-9].*\.gpkg\.tar$', asset):
                       print(f'>>> Deleting old asset: {asset}')
                       subprocess.run(['gh', 'release', 'delete-asset', 'rolling', asset, '--repo', repo, '-y'], check=False)
           except Exception as e:
               print(f'Cleanup error: {e}')
           "
-
-          # Only find and upload the newly built .gpkg.tar file
-          if [ -n "$CATEGORY" ] && [ -d "binpkgs/$CATEGORY" ]; then
-            find "binpkgs/$CATEGORY" -type f -name '*.gpkg.tar' -mmin -60 | while read -r file; do
+              # Upload the fresh binary
               retry_upload "$file"
             done
+          else
+            echo "No new binaries found to upload."
           fi
 
       - name: Fix Workspace Permissions
