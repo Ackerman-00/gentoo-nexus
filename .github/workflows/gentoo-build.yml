@@ -275,6 +275,7 @@ jobs:
           echo 'sys-libs/minizip-ng compat' > /etc/portage/package.use/minizip-ng
           echo 'sys-apps/dbus -systemd elogind' > /etc/portage/package.use/dbus
           echo 'media-video/pipewire -systemd elogind' > /etc/portage/package.use/pipewire
+          echo 'dev-libs/libdbusmenu gtk3' > /etc/portage/package.use/libdbusmenu
 
           echo ">>> Regenerating Packages index to map loaded binaries..."
           emaint binhost --fix
