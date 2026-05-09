@@ -45,22 +45,34 @@ jobs:
 
           updated_atoms = set()
           gh_token = os.environ.get('GITHUB_TOKEN')
-          hdrs = {"Authorization": f"Bearer {gh_token}"} if gh_token else {}
+          hdrs = {"Authorization": f"Bearer {gh_token}", "Accept": "application/vnd.github.v3+json"} if gh_token else {}
 
           def get_latest_github_release(repo):
+              best_ver = None
               try:
+                  # 1. Check /releases/latest first
                   r = requests.get(f"https://api.github.com/repos/{repo}/releases/latest", headers=hdrs, timeout=15)
                   if r.status_code == 200:
                       tag = r.json().get("tag_name", "").lstrip("v")
-                      if tag and re.match(r'^[0-9]', tag): return tag
-                  r2 = requests.get(f"https://api.github.com/repos/{repo}/tags", headers=hdrs, timeout=15)
+                      if tag and re.match(r'^[0-9]', tag): 
+                          best_ver = tag
+                  
+                  # 2. Fallback: Parse up to 100 tags and find the absolute maximum semantic version
+                  r2 = requests.get(f"https://api.github.com/repos/{repo}/tags?per_page=100", headers=hdrs, timeout=15)
                   if r2.status_code == 200 and r2.json():
-                      for tag in r2.json():
-                          name = tag.get("name", "").lstrip("v")
-                          if re.match(r'^[0-9]', name): return name
+                      for tag_obj in r2.json():
+                          name = tag_obj.get("name", "").lstrip("v")
+                          if re.match(r'^[0-9]', name):
+                              if not best_ver:
+                                  best_ver = name
+                              else:
+                                  try:
+                                      if parse_version(name) > parse_version(best_ver):
+                                          best_ver = name
+                                  except: pass
               except Exception as e:
                   print(f"API Error for {repo}: {e}")
-              return None
+              return best_ver
 
           def get_latest_commit(repo_url):
               try:
@@ -259,9 +271,10 @@ jobs:
           media-libs/vulkan-loader ~amd64
           sys-kernel/gentoo-kernel ~amd64
           virtual/dist-kernel ~amd64
+          games-util/heroic-bin ~amd64
           KEYW
           LOCAL_PKGS=$(find /overlay -mindepth 2 -maxdepth 3 -name "*.ebuild" | awk -F/ '{print $(NF-2)"/"$(NF-1)}' | sort -u || true)
-          UPSTREAM_PKGS="media-libs/mesa media-libs/vulkan-loader sys-kernel/gentoo-kernel virtual/dist-kernel"
+          UPSTREAM_PKGS="media-libs/mesa media-libs/vulkan-loader sys-kernel/gentoo-kernel virtual/dist-kernel games-util/heroic-bin"
           > /overlay/desired_state.txt
           for pkg in $LOCAL_PKGS $UPSTREAM_PKGS; do
              RES=$(emerge -pqO --color=n "$pkg" 2>/dev/null | awk '/^\[ebuild/ {for(i=1;i<=NF;i++) if($i ~ /\//) {print $i; break}}' || true)
@@ -312,6 +325,7 @@ jobs:
             "media-libs/vulkan-loader"
             "sys-kernel/gentoo-kernel"
             "virtual/dist-kernel"
+            "games-util/heroic-bin"
             "gui-libs/scenefx"
             "gui-apps/quickshell"
             "gui-apps/noctalia-qs"
