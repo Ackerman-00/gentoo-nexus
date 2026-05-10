@@ -7,7 +7,10 @@ inherit desktop unpacker xdg
 
 DESCRIPTION="Custom Discord desktop client with Vencord preinstalled (Wayland Optimized)"
 HOMEPAGE="https://github.com/Vencord/Vesktop"
-SRC_URI="https://github.com/Vencord/Vesktop/releases/download/v${PV}/vesktop-${PV}.tar.gz"
+SRC_URI="
+    https://github.com/Vencord/Vesktop/releases/download/v${PV}/vesktop-${PV}.tar.gz
+    https://raw.githubusercontent.com/Vencord/Vesktop/v${PV}/assets/icon.png -> vesktop-${PV}.png
+"
 
 LICENSE="GPL-3.0-or-later"
 SLOT="0"
@@ -47,7 +50,7 @@ src_install() {
     local destdir="/opt/Vesktop"
     dodir "${destdir}"
 
-    # Use cp -a instead of doins to preserve ALL executable permissions!
+    # Preserve ALL executable permissions
     cp -a "${S}"/* "${ED}/${destdir}/" || die "Failed to copy application files"
 
     # Set crucial security permissions for Electron's sandbox
@@ -63,6 +66,9 @@ EOF
     exeinto /usr/bin
     doexe "${T}/vesktop"
 
-    # Create a simple desktop entry so it shows up in fuzzel/rofi
-    make_desktop_entry "vesktop" "Vesktop" "discord" "Network;InstantMessaging;"
+    # Fetch the official icon and inject it into the system icon directory
+    newicon "${DISTDIR}/vesktop-${PV}.png" vesktop.png
+    
+    # Generate the desktop entry linked exactly to the new icon
+    make_desktop_entry "vesktop" "Vesktop" "vesktop" "Network;InstantMessaging;"
 }
