@@ -1,75 +1,68 @@
+# Copyright 1999-2026 Gentoo Authors
+# Distributed under the terms of the GNU General Public License v2
+
 EAPI=8
 
-inherit desktop xdg-utils
+inherit desktop unpacker xdg
 
-DESCRIPTION="Custom Discord desktop client with Vencord preinstalled (Binary Repackage)"
+DESCRIPTION="Custom Discord desktop client with Vencord preinstalled (Wayland Optimized)"
 HOMEPAGE="https://github.com/Vencord/Vesktop"
-SRC_URI="https://github.com/Vencord/Vesktop/releases/download/v${PV}/vesktop_${PV}_amd64.deb"
+SRC_URI="https://github.com/Vencord/Vesktop/releases/download/v${PV}/vesktop-${PV}.tar.gz"
 
 LICENSE="GPL-3.0-or-later"
 SLOT="0"
 KEYWORDS="~amd64"
-IUSE=""
+RESTRICT="bindist mirror strip test"
 
-# Dependencies mapped from your Void and Fedora templates
 RDEPEND="
-	app-accessibility/at-spi2-core:2
-	app-crypt/libsecret
-	dev-libs/nss
-	media-libs/alsa-lib
-	media-libs/mesa[gbm(+)]
-	net-print/cups
-	x11-libs/gtk+:3
-	x11-libs/libnotify
-	x11-libs/libX11
-	x11-libs/libXcomposite
-	x11-libs/libXcursor
-	x11-libs/libXdamage
-	x11-libs/libXext
-	x11-libs/libXfixes
-	x11-libs/libXi
-	x11-libs/libXrandr
-	x11-libs/libXrender
-	x11-libs/libXScrnSaver
-	x11-libs/libXtst
-	x11-misc/xdg-utils
+    app-accessibility/at-spi2-core:2
+    dev-libs/expat
+    dev-libs/glib
+    dev-libs/nspr
+    dev-libs/nss
+    media-libs/alsa-lib
+    media-libs/mesa[gbm(+)]
+    net-print/cups
+    sys-apps/dbus
+    x11-libs/cairo
+    x11-libs/gdk-pixbuf:2
+    x11-libs/gtk+:3
+    x11-libs/libX11
+    x11-libs/libXcomposite
+    x11-libs/libXdamage
+    x11-libs/libXext
+    x11-libs/libXfixes
+    x11-libs/libXrandr
+    x11-libs/libdrm
+    x11-libs/libxcb
+    x11-libs/libxkbcommon
+    x11-libs/pango
 "
 
-BDEPEND="app-arch/xz-utils"
+S="${WORKDIR}/vesktop-${PV}"
 
-S="${WORKDIR}"
-
-# Prevents Gentoo from trying to 'fix' the pre-compiled JS/Node binaries
 QA_PREBUILT="*"
 
-src_unpack() {
-	# Unpack the .deb archive
-	unpack ${A}
-	# Unpack the data payload (wildcard handles both .xz and .zst)
-	unpack ./data.tar.*
-}
-
-src_prepare() {
-	default
-	# Fix the path in the desktop entry so it finds our wrapper
-	sed -i 's|Exec=/opt/Vesktop/vesktop|Exec=vesktop|g' usr/share/applications/vesktop.desktop || die
-}
-
 src_install() {
-	# 1. Install the main application folder to /opt
-	insinto /opt/Vesktop
-	doins -r opt/Vesktop/*
+    local destdir="/opt/Vesktop"
+    dodir "${destdir}"
 
-	# 2. Install icons and desktop files
-	insinto /usr/share
-	doins -r usr/share/icons
-	doins -r usr/share/applications
+    # Use cp -a instead of doins to preserve ALL executable permissions!
+    cp -a "${S}"/* "${ED}/${destdir}/" || die "Failed to copy application files"
 
-	# 3. Create the Wayland-Optimized Wrapper (as seen in your Fedora spec)
-	# This ensures it runs natively on niri/Wayland
-	make_wrapper vesktop \
-		"env ELECTRON_OZONE_PLATFORM_HINT=auto /opt/Vesktop/vesktop"
+    # Set crucial security permissions for Electron's sandbox
+    fowners root:root "${destdir}/chrome-sandbox"
+    fperms 4711 "${destdir}/chrome-sandbox"
 
-	# 4. Set correct permissions for the sandbox
-	fperms 4755 /opt/Vesktop/chrome-sandbox
+    # Create the Wayland-Optimized Native Wrapper for Niri
+    cat <<-EOF > "${T}/vesktop"
+#!/bin/sh
+exec env ELECTRON_OZONE_PLATFORM_HINT=auto ${destdir}/vesktop "\$@"
+EOF
+
+    exeinto /usr/bin
+    doexe "${T}/vesktop"
+
+    # Create a simple desktop entry so it shows up in fuzzel/rofi
+    make_desktop_entry "vesktop" "Vesktop" "discord" "Network;InstantMessaging;"
 }
