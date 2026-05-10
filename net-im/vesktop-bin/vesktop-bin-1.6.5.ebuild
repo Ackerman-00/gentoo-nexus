@@ -65,10 +65,23 @@ EOF
 
     exeinto /usr/bin
     doexe "${T}/vesktop"
-
-    # Fetch the official icon and inject it into the system icon directory
-    newicon "${DISTDIR}/vesktop-${PV}.png" vesktop.png
     
-    # Generate the desktop entry linked exactly to the new icon
-    make_desktop_entry "vesktop" "Vesktop" "vesktop" "Network;InstantMessaging;"
+    # 1. Use doicon to force the icon into the hicolor theme directory. 
+    cp "${DISTDIR}/vesktop-${PV}.png" "${WORKDIR}/vesktop.png" || die
+    doicon -s 256 "${WORKDIR}/vesktop.png"
+    
+    # 2. Use domenu to install a perfectly named .desktop file.
+    cat <<-EOF > "${WORKDIR}/vesktop.desktop"
+[Desktop Entry]
+Name=Vesktop
+GenericName=Discord Client
+Exec=vesktop %U
+Icon=vesktop
+Terminal=false
+Type=Application
+StartupWMClass=Vesktop
+Categories=Network;InstantMessaging;
+EOF
+
+    domenu "${WORKDIR}/vesktop.desktop"
 }
