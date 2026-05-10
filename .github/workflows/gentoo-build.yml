@@ -240,9 +240,10 @@ jobs:
 
           cat > /etc/portage/make.conf << 'MAKECONF'
           COMMON_FLAGS="-O2 -march=x86-64 -pipe"
+          VIDEO_CARDS="amdgpu radeonsi"
           CFLAGS="${COMMON_FLAGS}"
           CXXFLAGS="${COMMON_FLAGS}"
-          USE="elogind -systemd"
+          USE="vaapi vdpau vulkan amdgpu ffmpeg encode elogind egl -systemd"
           FEATURES="buildpkg parallel-install -binpkg-verify-signature -sandbox -usersandbox -ipc-sandbox -network-sandbox -pid-sandbox"
           BINPKG_FORMAT="gpkg"
           PKGDIR="/var/cache/binpkgs"
