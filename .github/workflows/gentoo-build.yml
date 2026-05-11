@@ -101,12 +101,10 @@ jobs:
               path = os.path.join(pkgdir, f)
 
               # Strip .gpkg.tar suffix, then strip trailing build ID (-1)
-              # rsplit returns a list — [0] gives us the string we need
               base = f[:-9]
               if '-' in base:
                   base = base.rsplit('-', 1)[0]
 
-              # pkgsplit returns (pn, ver, rev) tuple — [0] is the package name
               split_res = pkgsplit(base)
               if not split_res:
                   split_res = pkgsplit(f[:-9])
@@ -181,8 +179,6 @@ jobs:
 
           CPV="${TARGET#=}"
 
-          # cpv.split('/') returns a list — [0] is category, [1] is pkg-version string
-          # re.split on the pkg-version string returns a list — [0] is the package name
           python3 -c "
           import os, shutil, re
           cpv = '${CPV}'
@@ -282,6 +278,13 @@ jobs:
           echo 'media-video/pipewire -systemd elogind' > /etc/portage/package.use/pipewire
           echo 'dev-libs/libdbusmenu gtk3' > /etc/portage/package.use/libdbusmenu
 
+          # Fix known circular dependency (ncurses - gpm)
+          echo 'sys-libs/ncurses -gpm' > /etc/portage/package.use/ncurses-gpm
+
+          # Fix slot conflict: cargo-c requires libgit2-1.9.2, mask newer
+          mkdir -p /etc/portage/package.mask
+          echo '>=dev-libs/libgit2-1.9.3' > /etc/portage/package.mask/libgit2
+
           echo ">>> Regenerating Packages index to map loaded binaries..."
           emaint binhost --fix
 
@@ -293,7 +296,7 @@ jobs:
           done
 
           echo ">>> Building: $1"
-          emerge --usepkg --update --deep --with-bdeps=y \
+          emerge --oneshot --usepkg --buildpkg --binpkg-respect-use=y --quiet-build=y --keep-going \
             --autounmask=y --autounmask-write --autounmask-continue=y "$1" || {
             echo ">>> WARNING: emerge exited with non-zero code, continuing to save partial binaries..."
           }
