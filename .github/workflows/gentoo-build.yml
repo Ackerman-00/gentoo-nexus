@@ -189,6 +189,15 @@ jobs:
           pn = pn_parts[0]
           target_dir = os.path.join('binpkgs', cat, pn)
 
+          # Always rebuild live ebuilds (version == 9999) because the source
+          # or ebuild may have changed without a version bump.
+          if pkg_ver == '9999':
+              print(f'Live ebuild detected for {cpv}. Forcing rebuild.')
+              if os.path.exists(target_dir): shutil.rmtree(target_dir)
+              with open(os.environ['GITHUB_OUTPUT'], 'a') as f:
+                  f.write('skip_compile=false\n')
+              exit(0)
+
           force_input = '${{ github.event.inputs.force_rebuild }}'
           force = False
           if force_input.lower() == 'true':
