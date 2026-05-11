@@ -243,7 +243,7 @@ jobs:
           VIDEO_CARDS="amdgpu radeonsi"
           CFLAGS="${COMMON_FLAGS}"
           CXXFLAGS="${COMMON_FLAGS}"
-          USE="vaapi vdpau vulkan amdgpu ffmpeg encode elogind egl -systemd"
+          USE="vaapi vdpau vulkan amdgpu ffmpeg encode elogind egl -systemd -cups abi_x86_32"
           FEATURES="buildpkg parallel-install -binpkg-verify-signature -sandbox -usersandbox -ipc-sandbox -network-sandbox -pid-sandbox"
           BINPKG_FORMAT="gpkg"
           PKGDIR="/var/cache/binpkgs"
