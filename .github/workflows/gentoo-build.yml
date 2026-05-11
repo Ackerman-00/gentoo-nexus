@@ -104,14 +104,14 @@ jobs:
               # Strip .gpkg.tar and the trailing build ID (-1)
               base = f[:-9]
               if '-' in base:
-                  base = base.rsplit('-', 1)[0]
+                  base = base.rsplit('-', 1)
                   
               split_res = pkgsplit(base)
               if not split_res:
                   split_res = pkgsplit(f[:-9])
                   
               if split_res:
-                  pn = split_res[0]
+                  pn = split_res
                   if pn in pn_to_cat:
                       cat = pn_to_cat[pn]
                       target_dir = os.path.join(pkgdir, cat, pn)
@@ -168,7 +168,7 @@ jobs:
         id: queue
         run: |
           read -r -a PKGS <<< "${{ github.event.inputs.package_list }}"
-          echo "TARGET_PKG=${PKGS[0]:-}" >> "$GITHUB_OUTPUT"
+          echo "TARGET_PKG=${PKGS:-}" >> "$GITHUB_OUTPUT"
           echo "REMAINING_PKGS=${PKGS[*]:1}" >> "$GITHUB_OUTPUT"
 
       - name: Check Binary Exists
@@ -182,9 +182,9 @@ jobs:
           python3 -c "
           import os, shutil, re
           cpv = '${CPV}'
-          cat = cpv.split('/')[0]
-          pkg_ver = cpv.split('/')[1]
-          pn = re.split(r'-[0-9]', pkg_ver, 1)[0]
+          cat = cpv.split('/')
+          pkg_ver = cpv.split('/')
+          pn = re.split(r'-[0-9]', pkg_ver, 1)
           target_dir = os.path.join('binpkgs', cat, pn)
           
           force_input = '${{ github.event.inputs.force_rebuild }}'
@@ -289,7 +289,7 @@ jobs:
           done
 
           echo ">>> Building: $1"
-          emerge --usepkg --autounmask=y --autounmask-write --autounmask-continue=y "$1" || {
+          emerge --usepkg --update --deep --with-bdeps=y --autounmask=y --autounmask-write --autounmask-continue=y "$1" || {
             echo ">>> WARNING: emerge exited with non-zero code, but continuing to save partial binaries..."
           }
 
