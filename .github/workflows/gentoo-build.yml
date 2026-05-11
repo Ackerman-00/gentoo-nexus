@@ -287,20 +287,19 @@ jobs:
           echo 'media-video/pipewire -systemd elogind' > /etc/portage/package.use/pipewire
           echo 'dev-libs/libdbusmenu gtk3' > /etc/portage/package.use/libdbusmenu
 
-          # Fix known circular dependency (ncurses - gpm)
+          # (ncurses - gpm)
           echo 'sys-libs/ncurses -gpm' > /etc/portage/package.use/ncurses-gpm
 
-          # REQUIRED_USE: pipewire[ffmpeg] requires pipewire[extra] (verified: Gentoo Wiki,
-          # https://wiki.gentoo.org/wiki/PipeWire#USE_flags, and multiple Gentoo Forums reports)
+          # REQUIRED_USE: pipewire[ffmpeg] requires pipewire[extra]
+          # Ref: Gentoo Wiki (https://wiki.gentoo.org/wiki/PipeWire#USE_flags)
           echo 'media-video/pipewire extra' > /etc/portage/package.use/pipewire-extra
 
-          # Fix slot conflict: cargo-c requires libgit2-1.9.2, mask newer
+          # argo-c requires libgit2-1.9.2, mask newer
           mkdir -p /etc/portage/package.mask
           echo '>=dev-libs/libgit2-1.9.3' > /etc/portage/package.mask/libgit2
 
-          # Ensure zlib-ng is used as the virtual/zlib provider (matching consumer system)
+          # Ensure zlib-ng is used as the virtual/zlib provider
           # Per gentoo-dev: virtual/zlib covers both sys-libs/zlib and sys-libs/zlib-ng[compat]
-          # (https://public-inbox.gentoo.org/gentoo-dev/87tszdnbyg.fsf@gentoo.org/)
           echo 'sys-libs/zlib-ng abi_x86_32 abi_x86_64 compat' > /etc/portage/package.use/zlib-ng
 
           echo ">>> Regenerating Packages index to map loaded binaries..."
@@ -314,22 +313,32 @@ jobs:
           done
 
           # Ensure wayland and wayland-scanner meet Mesa's configure requirement (>=1.25.0)
-          # They are tightly coupled; upgrade both together to avoid soft block.
           echo ">>> Pre-upgrading wayland & wayland-scanner for Mesa compatibility..."
           emerge --oneshot --usepkg --buildpkg --quiet-build=y \
             '>=dev-libs/wayland-1.25.0' '>=dev-util/wayland-scanner-1.25.0' || true
 
-          # Switch to zlib-ng as the virtual/zlib provider so binary packages
-          # record dependencies compatible with consumer systems that use zlib-ng[compat]
+          # Switch to zlib-ng as the virtual/zlib provider
           echo ">>> Switching virtual/zlib provider to sys-libs/zlib-ng[compat]..."
           emerge --oneshot --usepkg --buildpkg --quiet-build=y \
             'sys-libs/zlib-ng' || true
 
+          # Per Gentoo Wiki (Portage/Help/Circular dependencies):
+          echo ">>> Breaking circular dependency: bootstrapping libsdl2 without pipewire..."
+          USE="-pipewire" emerge --oneshot --usepkg --buildpkg --quiet-build=y \
+            media-libs/libsdl2 || true
+
+          # Build the target package — now ffmpeg[sdl] and pipewire[ffmpeg]
+          # can resolve because libsdl2 is already installed (without pipewire).
           echo ">>> Building: $1"
           emerge --oneshot --usepkg --buildpkg --binpkg-respect-use=y --quiet-build=y --keep-going \
             --autounmask=y --autounmask-write --autounmask-continue=y "$1" || {
             echo ">>> WARNING: emerge exited with non-zero code, continuing to save partial binaries..."
           }
+
+          # Rebuild libsdl2 with pipewire so the final binary has correct USE flags.
+          echo ">>> Restoring libsdl2[pipewire] for complete binary package..."
+          emerge --oneshot --usepkg --buildpkg --quiet-build=y \
+            media-libs/libsdl2 || true
 
           echo ">>> Finalising Packages index..."
           emaint binhost --fix
@@ -354,7 +363,7 @@ jobs:
             gentoo/stage3:amd64-desktop-openrc \
             bash /build.sh "${{ env.TARGET }}"
 
-      - name: Fix Workspace Permissions (Post-Build)
+      - name: Workspace Permissions (Post-Build)
         if: steps.check_bin.outputs.skip_compile != 'true'
         run: sudo chown -R "$(id -u):$(id -g)" "${{ github.workspace }}"
 
