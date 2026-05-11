@@ -285,6 +285,10 @@ jobs:
           mkdir -p /etc/portage/package.mask
           echo '>=dev-libs/libgit2-1.9.3' > /etc/portage/package.mask/libgit2
 
+          # Ensure zlib-ng is used as the virtual/zlib provider (matching consumer system)
+          # This prevents "no ebuilds built with USE flags to satisfy sys-libs/zlib-ng[compat]"
+          echo 'sys-libs/zlib-ng abi_x86_32 abi_x86_64 compat' > /etc/portage/package.use/zlib-ng
+
           echo ">>> Regenerating Packages index to map loaded binaries..."
           emaint binhost --fix
 
@@ -300,6 +304,12 @@ jobs:
           echo ">>> Pre-upgrading wayland & wayland-scanner for Mesa compatibility..."
           emerge --oneshot --usepkg --buildpkg --quiet-build=y \
             '>=dev-libs/wayland-1.25.0' '>=dev-util/wayland-scanner-1.25.0' || true
+
+          # Switch to zlib-ng as the virtual/zlib provider so binary packages
+          # record dependencies compatible with consumer systems that use zlib-ng[compat]
+          echo ">>> Switching virtual/zlib provider to sys-libs/zlib-ng[compat]..."
+          emerge --oneshot --usepkg --buildpkg --quiet-build=y \
+            'sys-libs/zlib-ng' || true
 
           echo ">>> Building: $1"
           emerge --oneshot --usepkg --buildpkg --binpkg-respect-use=y --quiet-build=y --keep-going \
