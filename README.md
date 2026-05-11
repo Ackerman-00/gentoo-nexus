@@ -55,7 +55,7 @@ nano /etc/portage/binrepos.conf/nexus.conf
 
 ```ini
 [gentoo-nexus-bin]
-priority         = 99999
+priority         = 9999
 sync-uri         = https://github.com/Ackerman-00/gentoo-nexus/releases/download/rolling/
 verify-signature = false
 ```
