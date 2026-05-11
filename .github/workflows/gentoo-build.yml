@@ -55,7 +55,7 @@ jobs:
             -p "*.gpkg.tar" -p "Packages*" \
             --repo ${{ github.repository }} \
             --dir binpkgs --clobber 2>/dev/null || true
-            
+
           echo ">>> Scanning for and removing corrupted/incomplete downloads..."
           for f in binpkgs/*.gpkg.tar; do
             [ -e "$f" ] || continue
@@ -74,17 +74,16 @@ jobs:
             gentoo/stage3:amd64-desktop-openrc \
             python3 -c "
           import os, shutil
-          import portage
           from portage.versions import pkgsplit
-          
+
           pkgdir = '/var/cache/binpkgs'
-          
+
           # Sync portage tree so we can map upstream packages too
           os.system('emerge-webrsync -q')
-          
+
           repos = ['/var/db/repos/gentoo-nexus', '/var/db/repos/gentoo']
           pn_to_cat = {}
-          
+
           # Map every package name to its true category
           for repo in repos:
               if not os.path.exists(repo): continue
@@ -95,34 +94,38 @@ jobs:
                   for pn in os.listdir(cat_path):
                       if pn not in pn_to_cat:
                           pn_to_cat[pn] = cat
-                          
+
           for f in os.listdir(pkgdir):
               if not f.endswith('.gpkg.tar'): continue
-              
+
               path = os.path.join(pkgdir, f)
-              
-              # Strip .gpkg.tar and the trailing build ID (-1)
+
+              # Strip .gpkg.tar suffix, then strip trailing build ID (-1)
+              # rsplit returns a list — [0] gives us the string we need
               base = f[:-9]
               if '-' in base:
-                  base = base.rsplit('-', 1)
-                  
+                  base = base.rsplit('-', 1)[0]
+
+              # pkgsplit returns (pn, ver, rev) tuple — [0] is the package name
               split_res = pkgsplit(base)
               if not split_res:
                   split_res = pkgsplit(f[:-9])
-                  
+
               if split_res:
-                  pn = split_res
+                  pn = split_res[0]
                   if pn in pn_to_cat:
                       cat = pn_to_cat[pn]
                       target_dir = os.path.join(pkgdir, cat, pn)
                       target_path = os.path.join(target_dir, f)
-                      
+
                       if path != target_path:
                           os.makedirs(target_dir, exist_ok=True)
                           shutil.move(path, target_path)
                           print(f'Restored: {cat}/{pn}/{f}')
+                  else:
+                      print(f'Warning: Could not resolve category for {pn}')
               else:
-                  print(f'Warning: Could not resolve category for {pn}')
+                  print(f'Warning: pkgsplit could not parse: {base}')
           "
 
       - name: Pre-fetch webkit-gtk from official binhost if missing
@@ -139,23 +142,22 @@ jobs:
                 mkdir -p /var/db/repos/gentoo /etc/portage/repos.conf /etc/portage/package.accept_keywords
                 emerge-webrsync -q
                 cat > /etc/portage/make.conf << EOF
-            ACCEPT_KEYWORDS="~amd64"
-            ACCEPT_LICENSE="*"
-            FEATURES="getbinpkg -binpkg-verify-signature"
-            EMERGE_DEFAULT_OPTS="--getbinpkgonly --quiet-build=y"
-            PORTAGE_BINPKG_SIGVERIFY="0"
-            BINPKG_FORMAT="gpkg"
-            PKGDIR="/var/cache/binpkgs"
-            EOF
+          ACCEPT_KEYWORDS="~amd64"
+          ACCEPT_LICENSE="*"
+          FEATURES="getbinpkg -binpkg-verify-signature"
+          EMERGE_DEFAULT_OPTS="--getbinpkgonly --quiet-build=y"
+          BINPKG_FORMAT="gpkg"
+          PKGDIR="/var/cache/binpkgs"
+          EOF
                 rm -rf /etc/portage/binrepos.conf/
                 mkdir -p /etc/portage/binrepos.conf
                 cat > /etc/portage/binrepos.conf/gentoo.conf << BINHOST
-            [DEFAULT]
-            verify-signature = false
-            [gentoo]
-            priority = 9999
-            sync-uri = https://distfiles.gentoo.org/releases/amd64/binpackages/23.0/x86-64/
-            BINHOST
+          [DEFAULT]
+          verify-signature = false
+          [gentoo]
+          priority = 9999
+          sync-uri = https://distfiles.gentoo.org/releases/amd64/binpackages/23.0/x86-64/
+          BINHOST
                 echo "net-libs/webkit-gtk -~amd64 amd64" > /etc/portage/package.accept_keywords/stable
                 emerge net-libs/webkit-gtk
               '
@@ -168,7 +170,7 @@ jobs:
         id: queue
         run: |
           read -r -a PKGS <<< "${{ github.event.inputs.package_list }}"
-          echo "TARGET_PKG=${PKGS:-}" >> "$GITHUB_OUTPUT"
+          echo "TARGET_PKG=${PKGS[0]:-}" >> "$GITHUB_OUTPUT"
           echo "REMAINING_PKGS=${PKGS[*]:1}" >> "$GITHUB_OUTPUT"
 
       - name: Check Binary Exists
@@ -176,17 +178,21 @@ jobs:
         run: |
           TARGET="${{ steps.queue.outputs.TARGET_PKG }}"
           [ -z "$TARGET" ] && { echo "skip_compile=true" >> "$GITHUB_OUTPUT"; exit 0; }
-          
+
           CPV="${TARGET#=}"
-          
+
+          # cpv.split('/') returns a list — [0] is category, [1] is pkg-version string
+          # re.split on the pkg-version string returns a list — [0] is the package name
           python3 -c "
           import os, shutil, re
           cpv = '${CPV}'
-          cat = cpv.split('/')
-          pkg_ver = cpv.split('/')
-          pn = re.split(r'-[0-9]', pkg_ver, 1)
+          parts = cpv.split('/')
+          cat = parts[0]
+          pkg_ver = parts[1] if len(parts) > 1 else parts[0]
+          pn_parts = re.split(r'-[0-9]', pkg_ver, 1)
+          pn = pn_parts[0]
           target_dir = os.path.join('binpkgs', cat, pn)
-          
+
           force_input = '${{ github.event.inputs.force_rebuild }}'
           force = False
           if force_input.lower() == 'true':
@@ -195,25 +201,24 @@ jobs:
               for fp in force_input.split():
                   if fp.replace('=', '') in cpv:
                       force = True
-          
+
           if force:
-              print(f'Force rebuild triggered for {cpv}. Purging old package cache: {target_dir}')
+              print(f'Force rebuild triggered for {cpv}. Purging: {target_dir}')
               if os.path.exists(target_dir): shutil.rmtree(target_dir)
               with open(os.environ['GITHUB_OUTPUT'], 'a') as f:
                   f.write('skip_compile=false\n')
           else:
-              # Check if it is already in the Packages file
               skip = False
               if os.path.exists('binpkgs/Packages'):
                   with open('binpkgs/Packages', 'r') as f:
                       if f'CPV: {cpv}' in f.read(): skip = True
-              
+
               if skip:
-                  print(f'Binary {cpv} is already in the Packages index. Skipping compile.')
+                  print(f'Binary {cpv} already in Packages index. Skipping compile.')
                   with open(os.environ['GITHUB_OUTPUT'], 'a') as f:
                       f.write('skip_compile=true\n')
               else:
-                  print(f'Binary {cpv} not found in index. Will compile from source.')
+                  print(f'Binary {cpv} not found. Will compile from source.')
                   if os.path.exists(target_dir):
                       shutil.rmtree(target_dir)
                       print(f'Purged older versions from {target_dir} before compile')
@@ -252,7 +257,6 @@ jobs:
           ACCEPT_KEYWORDS="~amd64"
           EMERGE_DEFAULT_OPTS="--usepkg --buildpkg --binpkg-respect-use=y --quiet-build=y --jobs=4 --load-average=4 --keep-going"
           MAKEOPTS="-j4"
-          PORTAGE_BINPKG_SIGVERIFY="0"
           MAKECONF
 
           mkdir -p /etc/portage/repos.conf
@@ -289,8 +293,9 @@ jobs:
           done
 
           echo ">>> Building: $1"
-          emerge --usepkg --update --deep --with-bdeps=y --autounmask=y --autounmask-write --autounmask-continue=y "$1" || {
-            echo ">>> WARNING: emerge exited with non-zero code, but continuing to save partial binaries..."
+          emerge --usepkg --update --deep --with-bdeps=y \
+            --autounmask=y --autounmask-write --autounmask-continue=y "$1" || {
+            echo ">>> WARNING: emerge exited with non-zero code, continuing to save partial binaries..."
           }
 
           echo ">>> Finalising Packages index..."
@@ -346,13 +351,13 @@ jobs:
             return 1
           }
 
-          echo ">>> Flattening PATH and URI fields for flat GitHub Release..."
+          echo ">>> Flattening PATH and URI fields for flat GitHub Release store..."
           sed -i -E \
             -e 's|^PATH: .*/([^/]+\.gpkg\.tar)$|PATH: \1|' \
             -e 's|^URI: .*/([^/]+\.gpkg\.tar)$|URI: \1|' \
             binpkgs/Packages
 
-          echo ">>> Removing acct-* entries to prevent 404 traps..."
+          echo ">>> Removing acct-group/acct-user entries to prevent 404 traps..."
           python3 -c "
           import re
           with open('binpkgs/Packages', 'r') as f:
@@ -361,46 +366,51 @@ jobs:
           filtered = [b for b in blocks if not re.search(r'^CPV: acct-(group|user)/', b, re.MULTILINE)]
           with open('binpkgs/Packages', 'w') as f:
               f.write('\n\n'.join(filtered))
-          print(f'Filtered {len(blocks) - len(filtered)} entries')
+          print(f'Filtered {len(blocks) - len(filtered)} acct-* entries from index')
           "
 
-          echo ">>> Compressing index..."
+          echo ">>> Compressing Packages index..."
           rm -f binpkgs/Packages.gz
           gzip -c binpkgs/Packages > binpkgs/Packages.gz
 
-          echo ">>> Uploading updated Packages indexes..."
+          echo ">>> Uploading Packages indexes..."
           shopt -s nullglob
           for file in binpkgs/Packages*; do
             [ -f "$file" ] && retry_upload "$file"
           done
 
-          echo ">>> Scanning for ALL newly compiled binaries to upload..."
-          # Find any .gpkg.tar file created or modified AFTER the build started. Unaffected by build duration!
+          echo ">>> Scanning for newly compiled binaries to upload..."
           NEW_BINARIES=$(find binpkgs -type f -name '*.gpkg.tar' -newer build_start_marker 2>/dev/null || echo "")
-          
+
           if [ -n "$NEW_BINARIES" ]; then
             for file in $NEW_BINARIES; do
+              # binpkgs/cat/pn/pkg-ver-1.gpkg.tar — field 3 is pn
               PN=$(echo "$file" | awk -F'/' '{print $3}')
-              
+
               echo ">>> Processing new package: $PN"
-              
-              # Delete older versions of THIS specific package from the release
+
+              # Delete older versions of this package from the release before uploading
               python3 -c "
           import re, subprocess
           pn = '${PN}'
           repo = '${REPO}'
           try:
-              out = subprocess.check_output(['gh', 'release', 'view', 'rolling', '--repo', repo, '--json', 'assets', '-q', '.assets[].name'])
+              out = subprocess.check_output([
+                  'gh', 'release', 'view', 'rolling',
+                  '--repo', repo, '--json', 'assets', '-q', '.assets[].name'
+              ])
               assets = out.decode().strip().split('\n')
               for asset in assets:
                   if not asset: continue
-                  if re.match(rf'^{pn}-[0-9].*\.gpkg\.tar$', asset):
+                  if re.match(rf'^{re.escape(pn)}-[0-9].*\.gpkg\.tar\$', asset):
                       print(f'>>> Deleting old asset: {asset}')
-                      subprocess.run(['gh', 'release', 'delete-asset', 'rolling', asset, '--repo', repo, '-y'], check=False)
+                      subprocess.run([
+                          'gh', 'release', 'delete-asset', 'rolling', asset,
+                          '--repo', repo, '-y'
+                      ], check=False)
           except Exception as e:
               print(f'Cleanup error: {e}')
           "
-              # Upload the fresh binary
               retry_upload "$file"
             done
           else
