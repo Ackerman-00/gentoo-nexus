@@ -295,6 +295,10 @@ jobs:
              }
           done
 
+          # Ensure wayland-scanner meets Mesa's configure requirement (>=1.25.0)
+          echo ">>> Pre-upgrading wayland-scanner for Mesa compatibility..."
+          emerge --oneshot --usepkg --buildpkg --quiet-build=y '>=dev-util/wayland-scanner-1.25.0' || true
+
           echo ">>> Building: $1"
           emerge --oneshot --usepkg --buildpkg --binpkg-respect-use=y --quiet-build=y --keep-going \
             --autounmask=y --autounmask-write --autounmask-continue=y "$1" || {
