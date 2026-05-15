@@ -1,11 +1,11 @@
-app-misc
-setup
+games-util
 x11-base
-sys-apps
+gui-apps
 x11-misc
+setup
 gui-libs
 dev-python
-gui-wm
-gui-apps
-games-util
+app-misc
 app-office
+gui-wm
+sys-apps
