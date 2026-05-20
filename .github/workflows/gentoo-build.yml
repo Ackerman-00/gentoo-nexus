@@ -78,7 +78,7 @@ jobs:
 
           pkgdir = '/var/cache/binpkgs'
 
-          # Sync portage tree so we can map upstream packages too
+          # Sync portage tree
           os.system('emerge-webrsync -q')
 
           repos = ['/var/db/repos/gentoo-nexus', '/var/db/repos/gentoo']
@@ -287,17 +287,17 @@ jobs:
           echo 'media-video/pipewire -systemd elogind' > /etc/portage/package.use/pipewire
           echo 'dev-libs/libdbusmenu gtk3' > /etc/portage/package.use/libdbusmenu
 
-          # Fix known circular dependency (ncurses - gpm)
+          # circular dependency (ncurses - gpm)
           echo 'sys-libs/ncurses -gpm' > /etc/portage/package.use/ncurses-gpm
 
           # REQUIRED_USE: pipewire[ffmpeg] requires pipewire[extra]
           echo 'media-video/pipewire extra' > /etc/portage/package.use/pipewire-extra
 
-          # Fix slot conflict: cargo-c requires libgit2-1.9.2, mask newer
+          # cargo-c requires libgit2-1.9.2, mask newer
           mkdir -p /etc/portage/package.mask
           echo '>=dev-libs/libgit2-1.9.3' > /etc/portage/package.mask/libgit2
 
-          # Ensure zlib-ng is used as the virtual/zlib provider (matching consumer system)
+          # Ensure zlib-ng is used as the virtual/zlib provider
           echo 'sys-libs/zlib-ng abi_x86_32 abi_x86_64 compat' > /etc/portage/package.use/zlib-ng
 
           echo ">>> Regenerating Packages index to map loaded binaries..."
@@ -316,32 +316,21 @@ jobs:
             '>=dev-libs/wayland-1.25.0' '>=dev-util/wayland-scanner-1.25.0' || true
 
           # Switch to zlib-ng as the virtual/zlib provider so binary packages
-          # record dependencies compatible with consumer systems that use zlib-ng[compat]
           echo ">>> Switching virtual/zlib provider to sys-libs/zlib-ng[compat]..."
           emerge --oneshot --usepkg --buildpkg --quiet-build=y \
             'sys-libs/zlib-ng' || true
 
           # Pre-emptively upgrade glib and its blockers to avoid soft-block
-          # (seen in logs: gobject-introspection & gdbus-codegen block glib upgrade)
           echo ">>> Resolving glib soft-block..."
           emerge --oneshot --usepkg --buildpkg --quiet-build=y \
             dev-libs/glib dev-libs/gobject-introspection dev-util/gdbus-codegen || true
 
-          # ─────────────────────────────────────────────────────────────────
-          # BREAK CIRCULAR DEPENDENCY: ffmpeg → libsdl2 → pipewire → ffmpeg
-          #
-          # This bootstrap sequence is the documented Gentoo approach for
-          # resolving this known cycle (Debian #1051191, NixOS #288911).
-          # We build each package in order, temporarily disabling the USE flag
-          # that closes the loop, then restore it after the cycle is broken.
-          # ─────────────────────────────────────────────────────────────────
-
-          # Step 1: Build libsdl2 WITHOUT pipewire (breaks the cycle at SDL)
+          # Step 1: Build libsdl2 WITHOUT pipewire
           echo ">>> Bootstrap step 1/4: libsdl2 without pipewire..."
           USE="-pipewire" emerge --oneshot --usepkg --buildpkg --quiet-build=y \
             media-libs/libsdl2 || true
 
-          # Step 2: Build ffmpeg with SDL (uses libsdl2 from step 1; no cycle)
+          # Step 2: Build ffmpeg with SDL
           echo ">>> Bootstrap step 2/4: ffmpeg with SDL..."
           emerge --oneshot --usepkg --buildpkg --quiet-build=y \
             media-video/ffmpeg || true
@@ -351,7 +340,7 @@ jobs:
           emerge --oneshot --usepkg --buildpkg --quiet-build=y \
             media-video/pipewire || true
 
-          # Step 4: Rebuild libsdl2 WITH pipewire (pipewire is now available)
+          # Step 4: Rebuild libsdl2 WITH pipewire
           echo ">>> Bootstrap step 4/4: restoring libsdl2 with pipewire..."
           emerge --oneshot --usepkg --buildpkg --quiet-build=y \
             media-libs/libsdl2 || true
@@ -386,7 +375,7 @@ jobs:
             gentoo/stage3:amd64-desktop-openrc \
             bash /build.sh "${{ env.TARGET }}"
 
-      - name: Fix Workspace Permissions (Post-Build)
+      - name: Workspace Permissions (Post-Build)
         if: steps.check_bin.outputs.skip_compile != 'true'
         run: sudo chown -R "$(id -u):$(id -g)" "${{ github.workspace }}"
 
