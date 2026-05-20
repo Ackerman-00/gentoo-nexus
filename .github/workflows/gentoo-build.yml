@@ -249,11 +249,11 @@ jobs:
           getuto 2>/dev/null || emerge -q --oneshot app-crypt/gentoo-keys 2>/dev/null || true
 
           cat > /etc/portage/make.conf << 'MAKECONF'
-          COMMON_FLAGS="-O2 -march=x86-64 -pipe"
-          VIDEO_CARDS="amdgpu radeonsi"
+          COMMON_FLAGS="-O2 -march=x86-64-v3 -mtune=znver3 -pipe"
+          VIDEO_CARDS="amdgpu radeonsi nvidia nouveau"
           CFLAGS="${COMMON_FLAGS}"
           CXXFLAGS="${COMMON_FLAGS}"
-          USE="vaapi vdpau vulkan amdgpu ffmpeg encode elogind egl -systemd -cups abi_x86_32"
+          USE="vaapi vdpau vulkan amdgpu ffmpeg encode nvenc elogind egl -systemd -cups abi_x86_32"
           FEATURES="buildpkg parallel-install -binpkg-verify-signature -sandbox -usersandbox -ipc-sandbox -network-sandbox -pid-sandbox"
           BINPKG_FORMAT="gpkg"
           PKGDIR="/var/cache/binpkgs"
