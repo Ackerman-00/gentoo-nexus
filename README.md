@@ -172,84 +172,7 @@ emerge --config sys-kernel/gentoo-kernel:7.0.5
 
 ---
 
-### ⑦ Configure fstab & GRUB
-
-Find your NVMe partition UUIDs:
-
-```bash
-blkid | grep nvme0n1
-```
-
-Open fstab and paste the UUID for your root (and any other) partition:
-
-```bash
-nano /etc/fstab
-```
-
-Install and configure GRUB:
-
-```bash
-emerge -g sys-boot/grub sys-boot/efibootmgr
-
-grub-install --target=x86_64-efi --efi-directory=/boot/efi --bootloader-id=Gentoo
-
-grub-mkconfig -o /boot/grub/grub.cfg
-```
-
----
-
-### ⑧ Enable Base Services
-
-```bash
-rc-update add dbus default
-rc-update add elogind default
-```
-
----
-
-### ⑨ Set Root Password & Create User
-
-```bash
-passwd
-```
-
-```bash
-# Create required groups
-groupadd plugdev
-groupadd seat
-
-# Create your user account
-useradd -m -G users,wheel,audio,video,input,plugdev,seat -s /bin/bash <your-username>
-
-# Set user password
-passwd <your-username>
-```
-
----
-
-### ⑩ Install sudo & NetworkManager
-
-```bash
-emerge -g app-admin/sudo net-misc/networkmanager
-
-rc-update add NetworkManager default
-```
-
-Allow the `wheel` group to use sudo:
-
-```bash
-nano /etc/sudoers
-```
-
-Uncomment this line (remove the `# ` at the start):
-
-```
-%wheel ALL=(ALL:ALL) ALL
-```
-
----
-
-### ⑪ Accept Keywords for Nexus Packages
+### ⑦ Accept Keywords for Nexus Packages
 
 ```bash
 mkdir -p /etc/portage/package.accept_keywords
@@ -258,7 +181,7 @@ echo "*/*::gentoo-nexus **" > /etc/portage/package.accept_keywords/nexus
 
 ---
 
-### ⑫ Configure USE Flags for Graphics & Media
+### ⑧ Configure USE Flags for Graphics & Media
 
 AMD GPU / 32-bit compatibility (needed for Steam and similar):
 
@@ -283,40 +206,11 @@ echo "media-video/ffmpeg -sdl" >> /etc/portage/package.use/ffmpeg
 
 ---
 
-### ⑬ Install niri, greetd & tuigreet
+### ⑨ Install niri, greetd & tuigreet
 
 ```bash
 emerge -g gui-wm/niri gui-libs/greetd gui-apps/tuigreet
 ```
-
----
-
-### ⑭ Configure greetd + tuigreet
-
-Set up tuigreet as the greetd session:
-
-```bash
-nano /etc/greetd/config.toml
-```
-
-```toml
-[terminal]
-vt = 1
-
-[default_session]
-command = "tuigreet --time --cmd niri-session"
-user = "greeter"
-```
-
-Create the greeter user and enable greetd:
-
-```bash
-useradd -M -G video greeter
-chmod -R go+r /etc/greetd/
-rc-update add greetd default
-```
-
-> On OpenRC with niri, use `niri --session` instead of `niri-session` if your greetd `.desktop` file needs adjustment. See the [Gentoo niri wiki](https://wiki.gentoo.org/wiki/Niri) for details.
 
 ---
 
@@ -422,21 +316,6 @@ emaint sync -r gentoo-nexus
 ```
 
 Then retry your emerge.
-
-</details>
-
-<details>
-<summary><strong>niri fails to start from greetd on OpenRC</strong></summary>
-
-On OpenRC, `niri-session` may require dbus to be running first. Use `niri --session` in your greetd config:
-
-```toml
-[default_session]
-command = "tuigreet --time --cmd 'niri --session'"
-user = "greeter"
-```
-
-Make sure `dbus` and `elogind` are both added to the default runlevel.
 
 </details>
 
