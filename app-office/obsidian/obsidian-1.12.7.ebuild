@@ -93,20 +93,14 @@ src_prepare() {
     chromium_remove_language_paks
     popd >/dev/null || die "location reset for language cleanup failed"
 
-    # Create a copy of upstream's .desktop
-    cp usr/share/applications/obsidian.desktop \
-        usr/share/applications/obsidian-wayland.desktop \
-        || die "failed to create obsidian-wayland.desktop file"
-
-    # Inject modern Electron Wayland flags
-    sed -i \
-        '
-            /Exec/s/obsidian /obsidian --ozone-platform-hint=auto /
-            /^Name/s/$/ Wayland/
-            /^Comment/s/$/ with Wayland support enabled/
-        ' \
-        'usr/share/applications/obsidian-wayland.desktop' ||
-        die "sed failed for obsidian-wayland.desktop file"
+    # Inject modern Electron Wayland flags directly into the primary desktop file.
+    # We drop the sloppy dual-desktop file approach. 'auto' handles fallback gracefully.
+    if use wayland; then
+        sed -i \
+            '/Exec/s/obsidian /obsidian --ozone-platform-hint=auto /' \
+            'usr/share/applications/obsidian.desktop' ||
+            die "sed failed for obsidian.desktop"
+    fi
 }
 
 src_install() {
@@ -132,10 +126,8 @@ src_install() {
         dosym ../../usr/lib64/libayatana-appindicator3.so "${destdir}/libappindicator3.so"
     fi
 
+    # Install the single unified desktop file
     domenu usr/share/applications/obsidian.desktop
-    if use wayland; then
-        domenu usr/share/applications/obsidian-wayland.desktop
-    fi
 
     local size
     for size in 16 32 48 64 128 256 512; do
@@ -146,7 +138,9 @@ src_install() {
 pkg_postinst() {
     xdg_pkg_postinst
 
-    ewarn "This package provides application entries for both Obsidian and"
-    ewarn "Obsidian Wayland. If Obsidian Wayland breaks for you under Wayland,"
-    ewarn "try the other Obsidian entry to launch with XWayland."
+    if use wayland; then
+        elog "Obsidian has been configured to use native Wayland automatically."
+        elog "If you experience graphical issues, launch via terminal with:"
+        elog "  obsidian --disable-features=UseOzonePlatform"
+    fi
 }
