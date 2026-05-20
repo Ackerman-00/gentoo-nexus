@@ -1,12 +1,11 @@
 games-util
 x11-base
-gui-apps
 x11-misc
 setup
 gui-libs
 www-client
 dev-python
+net-im
 app-misc
 app-office
 gui-wm
-sys-apps
