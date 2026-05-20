@@ -110,7 +110,7 @@ jobs:
 
               if pkg_name == "rootapp-bin":
                   print(f"--- Scanning {pkg_cat_name} (AppImage) ---")
-                  curr_ver_m = re.search(rf'{re.escape(pkg_name)}-(\d+(?:\.\d+)*(?:_(?:alpha|beta|pre|rc|p)\d*)?(?:-r\d+)?)\.ebuild$', ebuild_path.name)
+                  curr_ver_m = re.search(rf'{re.escape(pkg_name)}-(\d+(?:\.\d+)*[a-z]?(?:_(?:alpha|beta|pre|rc|p)\d*)?(?:-r\d+)?)\.ebuild$', ebuild_path.name)
                   if not curr_ver_m: continue
                   curr_ver = curr_ver_m.group(1)
                   appimage_url = "https://installer.rootapp.com/installer/Linux/X64/Root.AppImage"
@@ -155,7 +155,7 @@ jobs:
                       else:
                           print(f"  [-] Commit hash for {branch} already up to date.")
               else:
-                  curr_ver_m = re.search(rf'{re.escape(pkg_name)}-(\d+(?:\.\d+)*(?:_(?:alpha|beta|pre|rc|p)\d*)?(?:-r\d+)?)\.ebuild$', ebuild_path.name)
+                  curr_ver_m = re.search(rf'{re.escape(pkg_name)}-(\d+(?:\.\d+)*[a-z]?(?:_(?:alpha|beta|pre|rc|p)\d*)?(?:-r\d+)?)\.ebuild$', ebuild_path.name)
                   if not curr_ver_m: 
                       print("  [!] Could not extract current version from filename.")
                       continue
