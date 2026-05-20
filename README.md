@@ -24,7 +24,7 @@
 
 ## Overview
 
-**gentoo-nexus** is an autonomous Gentoo overlay and binary host targeting a fully configured [niri](https://github.com/niri-wm/niri) scrollable-tiling Wayland desktop. Packages are compiled nightly via GitHub Actions and served as ready-to-install `gpkg` binaries — no waiting for compilation on your end.
+**gentoo-nexus** is an autonomous Gentoo overlay and binary host. Packages are compiled nightly via GitHub Actions and served as ready-to-install `gpkg` binaries — no waiting for compilation on your end.
 
 ```
 overlay  →  ebuilds tracked & auto-updated from upstream
