@@ -4,6 +4,7 @@ gui-apps
 x11-misc
 setup
 gui-libs
+www-client
 dev-python
 app-misc
 app-office
