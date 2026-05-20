@@ -159,7 +159,7 @@ getuto
 Pull the pre-built distribution kernel directly from the Gentoo binhost. No manual compilation required:
 
 ```bash
-emerge -g sys-kernel/gentoo-kernel:7.0.5
+emerge -G1 sys-kernel/gentoo-kernel
 ```
 
 > `sys-kernel/gentoo-kernel` is Gentoo's distribution kernel — it compiles and installs itself automatically via Portage, with sane defaults for most desktop hardware.
@@ -167,7 +167,7 @@ emerge -g sys-kernel/gentoo-kernel:7.0.5
 Configure and install the kernel:
 
 ```bash
-emerge --config sys-kernel/gentoo-kernel:7.0.5
+emerge --config sys-kernel/gentoo-kernel
 ```
 
 ---
