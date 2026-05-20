@@ -34,98 +34,289 @@ CI       →  GitHub Actions rebuilds on every version bump or commit
 
 ---
 
-## Quick Setup
+## Packages
 
-### ① Add the Overlay
+| Atom | Description | Track |
+|------|-------------|-------|
+| `gui-wm/niri` | Scrollable-tiling Wayland compositor | `9999` |
+| `gui-libs/greetd` | Minimal login manager daemon | stable |
+| `gui-apps/tuigreet` | TUI greeter frontend for greetd | stable |
+| `gui-apps/quickshell` | Scriptable desktop widget engine | stable |
+| `app-misc/matugen` | Material You color token generator | stable |
+| `x11-misc/xwayland-satellite` | Rootless XWayland for any Wayland compositor | `9999` |
+| `gui-apps/dgop` | Fast application launcher | stable |
+| `app-misc/danksearch` | System-wide fuzzy search | stable |
+| `gui-apps/dank-material-shell` | Material Design shell for niri | stable |
 
-One command — adds and syncs the repository immediately:
-
-```bash
-eselect repository add gentoo-nexus git https://github.com/Ackerman-00/gentoo-nexus.git \
-  && emaint sync -r gentoo-nexus
-```
-
----
-
-### ② Configure the Binary Host
-
-```bash
-nano /etc/portage/binrepos.conf/nexus.conf
-```
-
-```ini
-[gentoo-nexus-bin]
-priority         = 9999
-sync-uri         = https://github.com/Ackerman-00/gentoo-nexus/releases/download/rolling/
-verify-signature = false
-```
+`9999` ebuilds track upstream HEAD and rebuild automatically on every new commit.
 
 ---
 
-### ③ Update `make.conf`
+## Installation Guide
+
+> This guide walks through a complete Gentoo + niri setup using the nexus binhost. All packages are pulled as pre-built `gpkg` binaries — no local compilation required for overlay packages.
+
+---
+
+### ① Configure `make.conf`
 
 ```bash
 nano /etc/portage/make.conf
 ```
 
 ```bash
-# Required: gpkg format for Nexus binaries
+# Default flags
+COMMON_FLAGS="-O2 -march=x86-64 -pipe"
+CFLAGS="${COMMON_FLAGS}"
+CXXFLAGS="${COMMON_FLAGS}"
+FCFLAGS="${COMMON_FLAGS}"
+FFLAGS="${COMMON_FLAGS}"
+
+# Wayland/Desktop flags
+USE="elogind -systemd dbus wayland egl"
+
+# Binary host flags
+FEATURES="getbinpkg parallel-install -binpkg-verify-signature"
+EMERGE_DEFAULT_OPTS="--getbinpkg --quiet-build=y --keep-going"
 BINPKG_FORMAT="gpkg"
-FEATURES="getbinpkg"
-EMERGE_DEFAULT_OPTS="--getbinpkg --binpkg-respect-use=y --binpkg-changed-deps=n"
-```
+PORTAGE_BINPKG_SIGVERIFY="0"
 
-> **Why `--binpkg-respect-use=y`?**  
-> Without it, Portage rejects pre-built packages whose USE flags differ from your local profile and falls back to compiling from source — defeating the point of a binhost.
+ACCEPT_LICENSE="*"
+ACCEPT_KEYWORDS="~amd64"
+MAKEOPTS="-j4"
+LC_MESSAGES=C.UTF-8
+
+# AMD GPU & codec support
+VIDEO_CARDS="amdgpu radeonsi"
+USE="${USE} vaapi vdpau vulkan amdgpu ffmpeg encode"
+```
 
 ---
 
-## Packages
-
-| Atom | Description | Track |
-|------|-------------|-------|
-| `gui-wm/niri` | Scrollable-tiling Wayland compositor | `9999` |
-| `gui-wm/mangowc` | Lightweight Wayland compositor layer | stable |
-| `gui-apps/dank-material-shell` | Material Design shell for niri | stable |
-| `gui-apps/quickshell` | Scriptable desktop widget engine | stable |
-| `app-misc/matugen` | Material You color token generator | stable |
-| `x11-misc/xwayland-satellite` | Rootless XWayland for any Wayland compositor | `9999` |
-| `gui-apps/dgop` | Fast application launcher | stable |
-| `app-misc/danksearch` | System-wide fuzzy search | stable |
-
-`9999` ebuilds track upstream HEAD and rebuild automatically on every new commit.
-
----
-
-## Testing with Distrobox
-
-Try the overlay and binhost safely inside an isolated container — no risk to your host:
+### ② Prepare Config Directories & Sync Portage
 
 ```bash
-# 1. Create a Gentoo container
-distrobox create \
-  --image gentoo/stage3:amd64-desktop-openrc \
-  --name gentoo-nexus-test
-
-# 2. Enter it
-distrobox enter gentoo-nexus-test
+mkdir -p /etc/portage/repos.conf
+mkdir -p /etc/portage/binrepos.conf
 ```
 
-Inside the container (as root):
-
 ```bash
-# Initialize Gentoo GPG trust keys — required in fresh stage3 containers
-# (without this, emerge will reject signed packages from the official binhost)
-getuto
-
-# Sync the Portage tree
 emerge-webrsync
-
-# Install prerequisites
-emerge app-eselect/eselect-repository dev-vcs/git
-
-# Then follow the Quick Setup steps above ↑
 ```
+
+---
+
+### ③ Configure the Binary Host
+
+```bash
+nano /etc/portage/binrepos.conf/gentoo-nexus.conf
+```
+
+```ini
+[gentoo-nexus]
+priority = 9999
+sync-uri = https://github.com/Ackerman-00/gentoo-nexus/releases/download/rolling/
+```
+
+---
+
+### ④ Add the Overlay
+
+```bash
+nano /etc/portage/repos.conf/gentoo-nexus.conf
+```
+
+```ini
+[gentoo-nexus]
+location    = /var/db/repos/gentoo-nexus
+sync-type   = git
+sync-uri    = https://github.com/Ackerman-00/gentoo-nexus.git
+priority    = 9999
+auto-sync   = yes
+```
+
+Then install git and sync the overlay:
+
+```bash
+emerge dev-vcs/git
+emaint sync -r gentoo-nexus
+```
+
+---
+
+### ⑤ Initialize Gentoo GPG Trust
+
+Required in fresh stage3 containers or new installs — without this, Portage rejects signed packages from the official Gentoo binhost:
+
+```bash
+getuto
+```
+
+---
+
+### ⑥ Install the Kernel
+
+Pull the pre-built distribution kernel directly from the Gentoo binhost. No manual compilation required:
+
+```bash
+emerge -g sys-kernel/gentoo-kernel:7.0.5
+```
+
+> `sys-kernel/gentoo-kernel` is Gentoo's distribution kernel — it compiles and installs itself automatically via Portage, with sane defaults for most desktop hardware.
+
+Configure and install the kernel:
+
+```bash
+emerge --config sys-kernel/gentoo-kernel:7.0.5
+```
+
+---
+
+### ⑦ Configure fstab & GRUB
+
+Find your NVMe partition UUIDs:
+
+```bash
+blkid | grep nvme0n1
+```
+
+Open fstab and paste the UUID for your root (and any other) partition:
+
+```bash
+nano /etc/fstab
+```
+
+Install and configure GRUB:
+
+```bash
+emerge -g sys-boot/grub sys-boot/efibootmgr
+
+grub-install --target=x86_64-efi --efi-directory=/boot/efi --bootloader-id=Gentoo
+
+grub-mkconfig -o /boot/grub/grub.cfg
+```
+
+---
+
+### ⑧ Enable Base Services
+
+```bash
+rc-update add dbus default
+rc-update add elogind default
+```
+
+---
+
+### ⑨ Set Root Password & Create User
+
+```bash
+passwd
+```
+
+```bash
+# Create required groups
+groupadd plugdev
+groupadd seat
+
+# Create your user account
+useradd -m -G users,wheel,audio,video,input,plugdev,seat -s /bin/bash <your-username>
+
+# Set user password
+passwd <your-username>
+```
+
+---
+
+### ⑩ Install sudo & NetworkManager
+
+```bash
+emerge -g app-admin/sudo net-misc/networkmanager
+
+rc-update add NetworkManager default
+```
+
+Allow the `wheel` group to use sudo:
+
+```bash
+nano /etc/sudoers
+```
+
+Uncomment this line (remove the `# ` at the start):
+
+```
+%wheel ALL=(ALL:ALL) ALL
+```
+
+---
+
+### ⑪ Accept Keywords for Nexus Packages
+
+```bash
+mkdir -p /etc/portage/package.accept_keywords
+echo "*/*::gentoo-nexus **" > /etc/portage/package.accept_keywords/nexus
+```
+
+---
+
+### ⑫ Configure USE Flags for Graphics & Media
+
+AMD GPU / 32-bit compatibility (needed for Steam and similar):
+
+```bash
+echo "media-libs/mesa abi_x86_32" | tee /etc/portage/package.use/graphics
+echo "media-libs/vulkan-loader abi_x86_32" | tee -a /etc/portage/package.use/graphics
+echo "x11-libs/libdrm abi_x86_32" | tee -a /etc/portage/package.use/graphics
+```
+
+PipeWire extras (required for screen sharing, audio routing):
+
+```bash
+mkdir -p /etc/portage/package.use
+echo "media-video/pipewire extra" >> /etc/portage/package.use/pipewire
+```
+
+FFmpeg (disable SDL to avoid circular deps):
+
+```bash
+echo "media-video/ffmpeg -sdl" >> /etc/portage/package.use/ffmpeg
+```
+
+---
+
+### ⑬ Install niri, greetd & tuigreet
+
+```bash
+emerge -g gui-wm/niri gui-libs/greetd gui-apps/tuigreet
+```
+
+---
+
+### ⑭ Configure greetd + tuigreet
+
+Set up tuigreet as the greetd session:
+
+```bash
+nano /etc/greetd/config.toml
+```
+
+```toml
+[terminal]
+vt = 1
+
+[default_session]
+command = "tuigreet --time --cmd niri-session"
+user = "greeter"
+```
+
+Create the greeter user and enable greetd:
+
+```bash
+useradd -M -G video greeter
+chmod -R go+r /etc/greetd/
+rc-update add greetd default
+```
+
+> On OpenRC with niri, use `niri --session` instead of `niri-session` if your greetd `.desktop` file needs adjustment. See the [Gentoo niri wiki](https://wiki.gentoo.org/wiki/Niri) for details.
 
 ---
 
@@ -134,10 +325,28 @@ emerge app-eselect/eselect-repository dev-vcs/git
 No manual intervention needed. Packages update with your system:
 
 ```bash
-emerge -uDNaG @world
+emerge -g -uDN @world
 ```
 
 The CI pipeline handles version bumps, binary rebuilds, and index updates automatically.
+
+---
+
+## Testing with Distrobox
+
+Try the overlay and binhost safely inside an isolated container — no risk to your host:
+
+```bash
+# Create a Gentoo container
+distrobox create \
+  --image gentoo/stage3:amd64-desktop-openrc \
+  --name gentoo-nexus-test
+
+# Enter it
+distrobox enter gentoo-nexus-test
+```
+
+Then follow the Quick Setup steps above from inside the container.
 
 ---
 
@@ -158,20 +367,27 @@ Version bumps are automated — no need to bump manually.
 <details>
 <summary><strong>Portage ignores the binhost and compiles from source</strong></summary>
 
-Ensure `make.conf` contains all three flags:
+Verify your `make.conf` contains all three binary host directives:
 
 ```bash
 BINPKG_FORMAT="gpkg"
-FEATURES="getbinpkg"
-EMERGE_DEFAULT_OPTS="--getbinpkg --binpkg-respect-use=n --binpkg-changed-deps=n"
+FEATURES="getbinpkg -binpkg-verify-signature"
+EMERGE_DEFAULT_OPTS="--getbinpkg --quiet-build=y --keep-going"
 ```
+
+Also confirm `PORTAGE_BINPKG_SIGVERIFY="0"` is set. Then run `emerge --info | grep FEATURES` to verify the flags are active.
 
 </details>
 
 <details>
-<summary><strong>Signature verification error</strong></summary>
+<summary><strong>Signature verification error on binhost packages</strong></summary>
 
-Set `verify-signature = false` in your `binrepos.conf`. The binhost does not currently ship signed package indexes.
+The nexus binhost does not ship signed package indexes. Ensure your `make.conf` has:
+
+```bash
+FEATURES="... -binpkg-verify-signature"
+PORTAGE_BINPKG_SIGVERIFY="0"
+```
 
 </details>
 
@@ -185,19 +401,20 @@ Go to **Actions → Gentoo Build Relay → Run workflow**, enter the package ato
 <details>
 <summary><strong>eselect repository crashes on duplicate</strong></summary>
 
-If the repo was previously added manually, remove the existing entry first:
+If the repo was previously added manually, remove the conflicting entry first:
 
 ```bash
 eselect repository remove gentoo-nexus
-eselect repository add gentoo-nexus git https://github.com/Ackerman-00/gentoo-nexus.git
 ```
+
+Then re-add via `repos.conf` as shown in step ④.
 
 </details>
 
 <details>
 <summary><strong>404 Not Found or packages missing after a CI update</strong></summary>
 
-Portage caches the `Packages` index locally and won't re-fetch it until the TTL expires. If CI just finished a build but you're still hitting 404s, bust the cache manually:
+Portage caches the `Packages` index locally. If CI just finished but you're still hitting 404s, bust the cache:
 
 ```bash
 rm -rf /var/cache/binhost/*
@@ -205,6 +422,45 @@ emaint sync -r gentoo-nexus
 ```
 
 Then retry your emerge.
+
+</details>
+
+<details>
+<summary><strong>niri fails to start from greetd on OpenRC</strong></summary>
+
+On OpenRC, `niri-session` may require dbus to be running first. Use `niri --session` in your greetd config:
+
+```toml
+[default_session]
+command = "tuigreet --time --cmd 'niri --session'"
+user = "greeter"
+```
+
+Make sure `dbus` and `elogind` are both added to the default runlevel.
+
+</details>
+
+<details>
+<summary><strong>Mesa / Vulkan not working after install</strong></summary>
+
+Confirm the USE flags were applied before the mesa emerge:
+
+```bash
+cat /etc/portage/package.use/graphics
+```
+
+Expected output:
+```
+media-libs/mesa abi_x86_32
+media-libs/vulkan-loader abi_x86_32
+x11-libs/libdrm abi_x86_32
+```
+
+If flags were added after mesa was installed, force a rebuild:
+
+```bash
+emerge -g --oneshot media-libs/mesa media-libs/vulkan-loader
+```
 
 </details>
 
