@@ -91,6 +91,9 @@ jobs:
       - name: Fix Workspace Permissions
         run: sudo chown -R "$(id -u):$(id -g)" "${{ github.workspace }}"
 
+      # ═══════════════════════════════════════════════════════════════
+      #  QUEUE PARSING — now uses portageq best_visible, not awk
+      # ═══════════════════════════════════════════════════════════════
       - name: Parse Queue & Target Evaluation
         id: queue
         run: |
@@ -98,18 +101,19 @@ jobs:
           TARGET="${PKGS[0]:-}"
           [ -z "$TARGET" ] && { echo "skip_compile=true" >> "$GITHUB_OUTPUT"; echo "TARGET_PKG=" >> "$GITHUB_OUTPUT"; exit 0; }
 
-          # If target is a bare category/package (no version), resolve to latest
+          # If target is a bare category/package (no version and no = prefix),
+          # resolve to latest using portageq (the Gentoo-native method)
           if [[ "$TARGET" != *=* && "$TARGET" != *"-9999"* ]]; then
-              echo ">>> Bare package name given: $TARGET - resolving latest version..."
+              echo ">>> Bare package name given: $TARGET - resolving latest version via portageq..."
               RESOLVED=$(docker run --rm \
                 -v "${{ github.workspace }}/overlay:/var/db/repos/gentoo-nexus:ro" \
                 gentoo/stage3:amd64-desktop-openrc \
-                bash -c "emerge-webrsync -q 2>/dev/null; emerge -qpO '$TARGET' 2>/dev/null" | awk '/^\[ebuild/ {print \$NF; exit}')
-              if [ -n "$RESOLVED" ]; then
-                  TARGET="=$RESOLVED"
+                bash -c 'emerge-webrsync -q 2>/dev/null; portageq best_visible / '"$TARGET" 2>/dev/null)
+              if [ -n "$RESOLVED" ] && [ "$RESOLVED" != "null" ]; then
+                  TARGET="=${RESOLVED}"
                   echo ">>> Resolved to: $TARGET"
               else
-                  echo "!!! Failed to resolve $TARGET"
+                  echo "!!! Failed to resolve $TARGET via portageq — aborting this package"
                   echo "skip_compile=true" >> "$GITHUB_OUTPUT"
                   echo "TARGET_PKG=$TARGET" >> "$GITHUB_OUTPUT"
                   exit 0
@@ -137,6 +141,9 @@ jobs:
              echo "skip_compile=false" >> "$GITHUB_OUTPUT"
           fi
 
+      # ═══════════════════════════════════════════════════════════════
+      #  BUILD SCRIPT
+      # ═══════════════════════════════════════════════════════════════
       - name: Write Build Script
         if: steps.queue.outputs.skip_compile != 'true'
         run: |
@@ -154,6 +161,7 @@ jobs:
 
           getuto 2>/dev/null || emerge -q --oneshot app-crypt/gentoo-keys 2>/dev/null || true
 
+          # ── make.conf (--backtrack removed from EMERGE_DEFAULT_OPTS; added to emerge calls) ──
           cat > /etc/portage/make.conf << 'MAKECONF'
           COMMON_FLAGS="-O2 -march=x86-64-v3 -mtune=znver3 -pipe"
           VIDEO_CARDS="amdgpu radeonsi nvidia nouveau"
@@ -167,7 +175,7 @@ jobs:
           ACCEPT_LICENSE="*"
           ACCEPT_KEYWORDS="~amd64"
           ACCEPT_CHOSTS="x86_64-pc-linux-gnu"
-          EMERGE_DEFAULT_OPTS="--usepkg --getbinpkg --buildpkg --binpkg-respect-use=n --quiet-build=y --jobs=4 --load-average=4 --keep-going --backtrack=30"
+          EMERGE_DEFAULT_OPTS="--usepkg --getbinpkg --buildpkg --binpkg-respect-use=n --quiet-build=y --jobs=4 --load-average=4 --keep-going"
           MAKEOPTS="-j4"
           MAKECONF
 
@@ -222,23 +230,26 @@ jobs:
               ebuild "$ebuild_file" manifest >/dev/null 2>&1 || true
           done
 
+          # ── Pre-resolve common soft blocks ───────────────────────
           echo ">>> Pre-resolving common blocks..."
-          emerge --oneshot --getbinpkg --quiet-build=y \
+          emerge --oneshot --getbinpkg --backtrack=30 --quiet-build=y \
             '>=dev-libs/gobject-introspection-1.86.0' 2>/dev/null || true
-          emerge --oneshot --getbinpkg --quiet-build=y \
+          emerge --oneshot --getbinpkg --backtrack=30 --quiet-build=y \
             '>=dev-util/gdbus-codegen-2.88.1' 2>/dev/null || true
 
+          # ── STEP 1: Binary-only fast path ────────────────────────
           echo ">>> Attempting binary-only install of: $1"
-          if emerge --usepkgonly --getbinpkg --binpkg-respect-use=n "$1" 2>&1; then
+          if emerge --usepkgonly --getbinpkg --backtrack=30 --binpkg-respect-use=n "$1" 2>&1; then
               echo ">>> SUCCESS: Target installed entirely from binary cache."
               emaint binhost --fix
               exit 0
           fi
           echo ">>> Binary-only failed. Attempting full build..."
 
+          # ── STEP 2: Full build with circular-dep catch ───────────
           EMERGE_ERR=$(mktemp)
-          emerge --oneshot --usepkg --getbinpkg --buildpkg --binpkg-respect-use=n \
-            --quiet-build=y --keep-going \
+          emerge --oneshot --usepkg --getbinpkg --buildpkg --backtrack=30 \
+            --binpkg-respect-use=n --quiet-build=y --keep-going \
             --autounmask=y --autounmask-write --autounmask-continue=y \
             "$1" 2> "$EMERGE_ERR"
           BUILD_EXIT=$?
@@ -246,21 +257,21 @@ jobs:
           if [ $BUILD_EXIT -ne 0 ] && grep -q "circular dependencies" "$EMERGE_ERR"; then
               echo ">>> Circular dependency detected — applying 4-step bootstrap..."
 
-              USE="-pipewire" emerge --oneshot --usepkg --getbinpkg --buildpkg --quiet-build=y \
-                media-libs/libsdl2 || true
+              USE="-pipewire" emerge --oneshot --usepkg --getbinpkg --buildpkg --backtrack=30 \
+                --quiet-build=y media-libs/libsdl2 || true
 
-              emerge --oneshot --usepkg --getbinpkg --buildpkg --quiet-build=y \
-                media-video/ffmpeg || true
+              emerge --oneshot --usepkg --getbinpkg --buildpkg --backtrack=30 \
+                --quiet-build=y media-video/ffmpeg || true
 
-              emerge --oneshot --usepkg --getbinpkg --buildpkg --quiet-build=y \
-                media-video/pipewire || true
+              emerge --oneshot --usepkg --getbinpkg --buildpkg --backtrack=30 \
+                --quiet-build=y media-video/pipewire || true
 
-              emerge --oneshot --usepkg --getbinpkg --buildpkg --quiet-build=y \
-                media-libs/libsdl2 || true
+              emerge --oneshot --usepkg --getbinpkg --buildpkg --backtrack=30 \
+                --quiet-build=y media-libs/libsdl2 || true
 
               echo ">>> Retrying target build after bootstrap..."
-              emerge --oneshot --usepkg --getbinpkg --buildpkg --binpkg-respect-use=n \
-                --quiet-build=y --keep-going \
+              emerge --oneshot --usepkg --getbinpkg --buildpkg --backtrack=30 \
+                --binpkg-respect-use=n --quiet-build=y --keep-going \
                 --autounmask=y --autounmask-write --autounmask-continue=y \
                 "$1" || echo ">>> WARNING: Build failed even after bootstrap. Saving partial binaries..."
           elif [ $BUILD_EXIT -ne 0 ]; then
