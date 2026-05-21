@@ -18,7 +18,7 @@ HOMEPAGE="https://github.com/Vencord/Vesktop/"
 SRC_URI="
     amd64? ( https://github.com/Vencord/Vesktop/releases/download/v${PV}/${MY_PN}-${PV}.tar.gz )
     arm64? ( https://github.com/Vencord/Vesktop/releases/download/v${PV}/${MY_PN}-${PV}-arm64.tar.gz )
-    https://raw.githubusercontent.com/Vencord/Vesktop/v${PV}/build/icon.png -> ${MY_PN}.png
+    https://raw.githubusercontent.com/Vencord/Vesktop/v${PV}/static/icon.png -> ${MY_PN}.png
 "
 S="${WORKDIR}/${MY_PN}-${PV}"
 
