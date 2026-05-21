@@ -28,6 +28,15 @@ jobs:
           token: ${{ secrets.GITHUB_TOKEN }}
           fetch-depth: 0
 
+      - name: Allocate 10GB Swap Space (OOM Prevention)
+        run: |
+          echo ">>> Carving 10GB of Swap Space to prevent Rust/C++ OOM Kills..."
+          sudo fallocate -l 10G /swapfile
+          sudo chmod 600 /swapfile
+          sudo mkswap /swapfile
+          sudo swapon /swapfile
+          free -h
+
       - name: Prepare Workspace & Overlay
         run: |
           mkdir -p binpkgs overlay/metadata overlay/profiles distfiles ccache
@@ -76,11 +85,11 @@ jobs:
           for f in os.listdir('/var/cache/binpkgs'):
               if not f.endswith('.gpkg.tar'): continue
               base = f[:-9]
-              if '-' in base: base = base.rsplit('-', 1)[0]
+              if '-' in base: base = base.rsplit('-', 1)
               split_res = pkgsplit(base) or pkgsplit(f[:-9])
-              if split_res and split_res[0] in pn_to_cat:
-                  cat = pn_to_cat[split_res[0]]
-                  target_dir = os.path.join('/var/cache/binpkgs', cat, split_res[0])
+              if split_res and split_res in pn_to_cat:
+                  cat = pn_to_cat[split_res]
+                  target_dir = os.path.join('/var/cache/binpkgs', cat, split_res)
                   src = os.path.join('/var/cache/binpkgs', f)
                   dst = os.path.join(target_dir, f)
                   if src != dst:
@@ -91,18 +100,13 @@ jobs:
       - name: Fix Workspace Permissions
         run: sudo chown -R "$(id -u):$(id -g)" "${{ github.workspace }}"
 
-      # ═══════════════════════════════════════════════════════════════
-      #  QUEUE PARSING — now uses portageq best_visible, not awk
-      # ═══════════════════════════════════════════════════════════════
       - name: Parse Queue & Target Evaluation
         id: queue
         run: |
           read -r -a PKGS <<< "${{ github.event.inputs.package_list }}"
-          TARGET="${PKGS[0]:-}"
+          TARGET="${PKGS:-}"
           [ -z "$TARGET" ] && { echo "skip_compile=true" >> "$GITHUB_OUTPUT"; echo "TARGET_PKG=" >> "$GITHUB_OUTPUT"; exit 0; }
 
-          # If target is a bare category/package (no version and no = prefix),
-          # resolve to latest using portageq (the Gentoo-native method)
           if [[ "$TARGET" != *=* && "$TARGET" != *"-9999"* ]]; then
               echo ">>> Bare package name given: $TARGET - resolving latest version via portageq..."
               RESOLVED=$(docker run --rm \
@@ -131,6 +135,7 @@ jobs:
 
           FORCE="${{ github.event.inputs.force_rebuild }}"
           if [[ "$FORCE" == "true" || "$FORCE" == *"${CPV}"* ]]; then
+             rm -rf "binpkgs/${CPV%/*}" 2>/dev/null || true
              echo "skip_compile=false" >> "$GITHUB_OUTPUT"
              exit 0
           fi
@@ -138,13 +143,11 @@ jobs:
           if grep -q "^CPV: ${CPV}$" binpkgs/Packages 2>/dev/null; then
              echo "skip_compile=true" >> "$GITHUB_OUTPUT"
           else
+             rm -rf "binpkgs/${CPV%/*}" 2>/dev/null || true
              echo "skip_compile=false" >> "$GITHUB_OUTPUT"
           fi
 
-      # ═══════════════════════════════════════════════════════════════
-      #  BUILD SCRIPT
-      # ═══════════════════════════════════════════════════════════════
-      - name: Write Build Script
+      - name: Write Monolithic Docker Build Script
         if: steps.queue.outputs.skip_compile != 'true'
         run: |
           cat > build.sh << 'BUILDSCRIPT'
@@ -161,7 +164,6 @@ jobs:
 
           getuto 2>/dev/null || emerge -q --oneshot app-crypt/gentoo-keys 2>/dev/null || true
 
-          # ── make.conf (--backtrack removed from EMERGE_DEFAULT_OPTS; added to emerge calls) ──
           cat > /etc/portage/make.conf << 'MAKECONF'
           COMMON_FLAGS="-O2 -march=x86-64-v3 -mtune=znver3 -pipe"
           VIDEO_CARDS="amdgpu radeonsi nvidia nouveau"
@@ -174,7 +176,10 @@ jobs:
           DISTDIR="/var/cache/distfiles"
           ACCEPT_LICENSE="*"
           ACCEPT_KEYWORDS="~amd64"
+          ACCEPT_PROPERTIES="*"
+          ACCEPT_RESTRICT="*"
           ACCEPT_CHOSTS="x86_64-pc-linux-gnu"
+          CONFIG_PROTECT_MASK="/etc"
           EMERGE_DEFAULT_OPTS="--usepkg --getbinpkg --buildpkg --binpkg-respect-use=n --quiet-build=y --jobs=4 --load-average=4 --keep-going"
           MAKEOPTS="-j4"
           MAKECONF
@@ -230,14 +235,10 @@ jobs:
               ebuild "$ebuild_file" manifest >/dev/null 2>&1 || true
           done
 
-          # ── Pre-resolve common soft blocks ───────────────────────
           echo ">>> Pre-resolving common blocks..."
-          emerge --oneshot --getbinpkg --backtrack=30 --quiet-build=y \
-            '>=dev-libs/gobject-introspection-1.86.0' 2>/dev/null || true
-          emerge --oneshot --getbinpkg --backtrack=30 --quiet-build=y \
-            '>=dev-util/gdbus-codegen-2.88.1' 2>/dev/null || true
+          emerge --oneshot --getbinpkg --backtrack=30 --quiet-build=y '>=dev-libs/gobject-introspection-1.86.0' 2>/dev/null || true
+          emerge --oneshot --getbinpkg --backtrack=30 --quiet-build=y '>=dev-util/gdbus-codegen-2.88.1' 2>/dev/null || true
 
-          # ── STEP 1: Binary-only fast path ────────────────────────
           echo ">>> Attempting binary-only install of: $1"
           if emerge --usepkgonly --getbinpkg --backtrack=30 --binpkg-respect-use=n "$1" 2>&1; then
               echo ">>> SUCCESS: Target installed entirely from binary cache."
@@ -246,44 +247,33 @@ jobs:
           fi
           echo ">>> Binary-only failed. Attempting full build..."
 
-          # ── STEP 2: Full build with circular-dep catch ───────────
-          EMERGE_ERR=$(mktemp)
+          BUILD_EXIT=0
           emerge --oneshot --usepkg --getbinpkg --buildpkg --backtrack=30 \
             --binpkg-respect-use=n --quiet-build=y --keep-going \
             --autounmask=y --autounmask-write --autounmask-continue=y \
-            "$1" 2> "$EMERGE_ERR"
-          BUILD_EXIT=$?
+            "$1" 2>&1 | tee emerge.log || BUILD_EXIT=${PIPESTATUS}
 
-          if [ $BUILD_EXIT -ne 0 ] && grep -q "circular dependencies" "$EMERGE_ERR"; then
-              echo ">>> Circular dependency detected — applying 4-step bootstrap..."
+          if [ $BUILD_EXIT -ne 0 ]; then
+              if grep -q "circular dependencies" emerge.log; then
+                  echo ">>> Circular dependency detected — applying 4-step bootstrap..."
+                  USE="-pipewire" emerge --oneshot --usepkg --getbinpkg --buildpkg --backtrack=30 --quiet-build=y media-libs/libsdl2 || true
+                  emerge --oneshot --usepkg --getbinpkg --buildpkg --backtrack=30 --quiet-build=y media-video/ffmpeg || true
+                  emerge --oneshot --usepkg --getbinpkg --buildpkg --backtrack=30 --quiet-build=y media-video/pipewire || true
+                  emerge --oneshot --usepkg --getbinpkg --buildpkg --backtrack=30 --quiet-build=y media-libs/libsdl2 || true
 
-              USE="-pipewire" emerge --oneshot --usepkg --getbinpkg --buildpkg --backtrack=30 \
-                --quiet-build=y media-libs/libsdl2 || true
-
-              emerge --oneshot --usepkg --getbinpkg --buildpkg --backtrack=30 \
-                --quiet-build=y media-video/ffmpeg || true
-
-              emerge --oneshot --usepkg --getbinpkg --buildpkg --backtrack=30 \
-                --quiet-build=y media-video/pipewire || true
-
-              emerge --oneshot --usepkg --getbinpkg --buildpkg --backtrack=30 \
-                --quiet-build=y media-libs/libsdl2 || true
-
-              echo ">>> Retrying target build after bootstrap..."
-              emerge --oneshot --usepkg --getbinpkg --buildpkg --backtrack=30 \
-                --binpkg-respect-use=n --quiet-build=y --keep-going \
-                --autounmask=y --autounmask-write --autounmask-continue=y \
-                "$1" || echo ">>> WARNING: Build failed even after bootstrap. Saving partial binaries..."
-          elif [ $BUILD_EXIT -ne 0 ]; then
-              echo ">>> WARNING: emerge exited with code $BUILD_EXIT. Saving partial binaries..."
+                  echo ">>> Retrying target build after bootstrap..."
+                  emerge --oneshot --usepkg --getbinpkg --buildpkg --backtrack=30 \
+                    --binpkg-respect-use=n --quiet-build=y --keep-going \
+                    --autounmask=y --autounmask-write --autounmask-continue=y \
+                    "$1" || echo ">>> WARNING: Build failed even after bootstrap. Saving partial binaries..."
+              else
+                  echo ">>> WARNING: emerge exited with code $BUILD_EXIT. Check the logs above. Saving partial binaries..."
+              fi
           fi
-
-          rm -f "$EMERGE_ERR"
 
           echo ">>> Finalising Packages index..."
           emaint binhost --fix
           BUILDSCRIPT
-
           chmod +x build.sh
           echo "TARGET=${{ steps.queue.outputs.TARGET_PKG }}" >> "$GITHUB_ENV"
 
