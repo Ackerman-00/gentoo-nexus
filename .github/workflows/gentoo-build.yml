@@ -31,13 +31,11 @@ jobs:
       - name: Allocate 10GB Swap Space (OOM Prevention)
         run: |
           echo ">>> Carving 10GB of Swap Space on the Ephemeral SSD (/mnt)..."
-          sudo swapoff -a || true
-          sudo rm -f /mnt/swapfile
-          # Fallback to dd if the filesystem rejects fallocate
-          sudo fallocate -l 10G /mnt/swapfile || sudo dd if=/dev/zero of=/mnt/swapfile bs=1G count=10 status=none
-          sudo chmod 600 /mnt/swapfile
-          sudo mkswap /mnt/swapfile
-          sudo swapon /mnt/swapfile
+          # Bypassing ETXTBSY by utilizing a uniquely named swapfile 
+          sudo fallocate -l 10G /mnt/10g.swap || sudo dd if=/dev/zero of=/mnt/10g.swap bs=1G count=10 status=none
+          sudo chmod 600 /mnt/10g.swap
+          sudo mkswap /mnt/10g.swap
+          sudo swapon /mnt/10g.swap
           free -h
 
       - name: Prepare Workspace & Overlay
@@ -92,7 +90,8 @@ jobs:
               split_res = pkgsplit(base) or pkgsplit(f[:-9])
               if split_res and split_res in pn_to_cat:
                   cat = pn_to_cat[split_res]
-                  target_dir = os.path.join('/var/cache/binpkgs', cat, split_res)
+                  pn = split_res
+                  target_dir = os.path.join('/var/cache/binpkgs', cat, pn)
                   src = os.path.join('/var/cache/binpkgs', f)
                   dst = os.path.join(target_dir, f)
                   if src != dst:
@@ -110,12 +109,13 @@ jobs:
           TARGET="${PKGS:-}"
           [ -z "$TARGET" ] && { echo "skip_compile=true" >> "$GITHUB_OUTPUT"; echo "TARGET_PKG=" >> "$GITHUB_OUTPUT"; exit 0; }
 
+          # Unpolluted portageq resolution
           if [[ "$TARGET" != *=* && "$TARGET" != *"-9999"* ]]; then
               echo ">>> Bare package name given: $TARGET - resolving latest version via portageq..."
               RESOLVED=$(docker run --rm \
                 -v "${{ github.workspace }}/overlay:/var/db/repos/gentoo-nexus:ro" \
                 gentoo/stage3:amd64-desktop-openrc \
-                bash -c 'emerge-webrsync -q 2>/dev/null; portageq best_visible / '"$TARGET" 2>/dev/null)
+                bash -c "emerge-webrsync -q >/dev/null 2>&1; portageq best_visible / \"$TARGET\" 2>/dev/null")
               if [ -n "$RESOLVED" ] && [ "$RESOLVED" != "null" ]; then
                   TARGET="=${RESOLVED}"
                   echo ">>> Resolved to: $TARGET"
