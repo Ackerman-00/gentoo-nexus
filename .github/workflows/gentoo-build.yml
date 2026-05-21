@@ -30,11 +30,14 @@ jobs:
 
       - name: Allocate 10GB Swap Space (OOM Prevention)
         run: |
-          echo ">>> Carving 10GB of Swap Space to prevent Rust/C++ OOM Kills..."
-          sudo fallocate -l 10G /swapfile
-          sudo chmod 600 /swapfile
-          sudo mkswap /swapfile
-          sudo swapon /swapfile
+          echo ">>> Carving 10GB of Swap Space on the Ephemeral SSD (/mnt)..."
+          sudo swapoff -a || true
+          sudo rm -f /mnt/swapfile
+          # Fallback to dd if the filesystem rejects fallocate
+          sudo fallocate -l 10G /mnt/swapfile || sudo dd if=/dev/zero of=/mnt/swapfile bs=1G count=10 status=none
+          sudo chmod 600 /mnt/swapfile
+          sudo mkswap /mnt/swapfile
+          sudo swapon /mnt/swapfile
           free -h
 
       - name: Prepare Workspace & Overlay
