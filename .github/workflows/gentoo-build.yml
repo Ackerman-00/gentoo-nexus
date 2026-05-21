@@ -286,6 +286,7 @@ jobs:
           echo 'sys-apps/dbus -systemd elogind' > /etc/portage/package.use/dbus
           echo 'media-video/pipewire -systemd elogind' > /etc/portage/package.use/pipewire
           echo 'dev-libs/libdbusmenu gtk3' > /etc/portage/package.use/libdbusmenu
+          echo 'net-misc/networkmanager -modemmanager -bluetooth' > /etc/portage/package.use/networkmanager
 
           # circular dependency (ncurses - gpm)
           echo 'sys-libs/ncurses -gpm' > /etc/portage/package.use/ncurses-gpm
