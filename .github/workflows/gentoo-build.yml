@@ -28,224 +28,89 @@ jobs:
           token: ${{ secrets.GITHUB_TOKEN }}
           fetch-depth: 0
 
-      - name: Prepare Workspace
+      - name: Prepare Workspace & Overlay
         run: |
-          mkdir -p binpkgs overlay distfiles ccache
+          mkdir -p binpkgs overlay/metadata overlay/profiles distfiles ccache
           chmod -R 777 binpkgs overlay distfiles ccache
-
-      - name: Prepare Overlay with Full Repo Structure
-        run: |
           rsync -a --exclude='.git' --exclude='binpkgs' --exclude='overlay' ./ overlay/
-          mkdir -p overlay/metadata
-          cat > overlay/metadata/layout.conf << 'LAYOUTEOF'
-          masters = gentoo
-          thin-manifests = true
-          sign-manifests = false
-          LAYOUTEOF
-          mkdir -p overlay/profiles
+          
+          echo "masters = gentoo" > overlay/metadata/layout.conf
+          echo "thin-manifests = true" >> overlay/metadata/layout.conf
+          echo "sign-manifests = false" >> overlay/metadata/layout.conf
           echo "gentoo-nexus" > overlay/profiles/repo_name
-          chmod -R 777 overlay/
 
       - name: Download Release Binaries
         env:
           GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
         run: |
-          echo ">>> Downloading existing .gpkg.tar and Packages from rolling release..."
-          gh release download rolling \
-            -p "*.gpkg.tar" -p "Packages*" \
-            --repo ${{ github.repository }} \
-            --dir binpkgs --clobber 2>/dev/null || true
-
-          echo ">>> Scanning for and removing corrupted/incomplete downloads..."
+          gh release download rolling -p "*.gpkg.tar" -p "Packages*" --repo ${{ github.repository }} --dir binpkgs --clobber 2>/dev/null || true
           for f in binpkgs/*.gpkg.tar; do
             [ -e "$f" ] || continue
-            if ! tar -tf "$f" >/dev/null 2>&1; then
-              echo "Removed corrupted file to protect indexer: $f"
-              rm -f "$f"
-            fi
+            if ! tar -tf "$f" >/dev/null 2>&1; then rm -f "$f"; fi
           done
 
-      - name: Restore GPKG Layout using Overlay Mapping
+      - name: Restore Native GPKG Layout
         run: |
-          echo ">>> Restoring GPKG folder strict-layout via Overlay Mapping..."
-          docker run --rm \
-            -v "${{ github.workspace }}/binpkgs:/var/cache/binpkgs:rw" \
-            -v "${{ github.workspace }}/overlay:/var/db/repos/gentoo-nexus:ro" \
-            gentoo/stage3:amd64-desktop-openrc \
-            python3 -c "
-          import os, shutil
-          from portage.versions import pkgsplit
-
-          pkgdir = '/var/cache/binpkgs'
-
-          # Sync portage tree
-          os.system('emerge-webrsync -q')
-
-          repos = ['/var/db/repos/gentoo-nexus', '/var/db/repos/gentoo']
-          pn_to_cat = {}
-
-          # Map every package name to its true category
-          for repo in repos:
-              if not os.path.exists(repo): continue
-              for cat in os.listdir(repo):
-                  if cat.startswith('.') or cat in ['metadata', 'profiles', 'eclass', 'scripts']: continue
-                  cat_path = os.path.join(repo, cat)
-                  if not os.path.isdir(cat_path): continue
-                  for pn in os.listdir(cat_path):
-                      if pn not in pn_to_cat:
-                          pn_to_cat[pn] = cat
-
-          for f in os.listdir(pkgdir):
-              if not f.endswith('.gpkg.tar'): continue
-
-              path = os.path.join(pkgdir, f)
-
-              # Strip .gpkg.tar suffix, then strip trailing build ID (-1)
-              base = f[:-9]
-              if '-' in base:
-                  base = base.rsplit('-', 1)[0]
-
-              split_res = pkgsplit(base)
-              if not split_res:
-                  split_res = pkgsplit(f[:-9])
-
-              if split_res:
-                  pn = split_res[0]
-                  if pn in pn_to_cat:
-                      cat = pn_to_cat[pn]
-                      target_dir = os.path.join(pkgdir, cat, pn)
-                      target_path = os.path.join(target_dir, f)
-
-                      if path != target_path:
-                          os.makedirs(target_dir, exist_ok=True)
-                          shutil.move(path, target_path)
-                          print(f'Restored: {cat}/{pn}/{f}')
-                  else:
-                      print(f'Warning: Could not resolve category for {pn}')
-              else:
-                  print(f'Warning: pkgsplit could not parse: {base}')
+          python3 -c "
+          import os, shutil, re
+          if os.path.exists('binpkgs/Packages'):
+              with open('binpkgs/Packages', 'r') as f:
+                  for block in f.read().split('\n\n'):
+                      cpv = next((l.split(' ', 1) for l in block.split('\n') if l.startswith('CPV: ')), None)
+                      uri = next((l.split(' ', 1) for l in block.split('\n') if l.startswith('URI: ')), None)
+                      if cpv and uri:
+                          cat, pn_ver = cpv.split('/', 1)
+                          pn = re.split(r'-(?=\d)', pn_ver)
+                          src, dest_dir = f'binpkgs/{uri}', f'binpkgs/{cat}/{pn}'
+                          if os.path.exists(src):
+                              os.makedirs(dest_dir, exist_ok=True)
+                              shutil.move(src, f'{dest_dir}/{uri}')
           "
 
-      - name: Pre-fetch webkit-gtk from official binhost if missing
-        run: |
-          if ls binpkgs/*/webkit-gtk/*.gpkg.tar >/dev/null 2>&1; then
-            echo "✓ webkit-gtk binary already cached."
-          else
-            echo ">>> webkit-gtk not in release – fetching from official Gentoo binhost..."
-            docker run --rm \
-              -v "${{ github.workspace }}/binpkgs:/var/cache/binpkgs:rw" \
-              gentoo/stage3:amd64-desktop-openrc \
-              bash -c '
-                set -euo pipefail
-                mkdir -p /var/db/repos/gentoo /etc/portage/repos.conf /etc/portage/package.accept_keywords
-                emerge-webrsync -q
-                cat > /etc/portage/make.conf << EOF
-          ACCEPT_KEYWORDS="~amd64"
-          ACCEPT_LICENSE="*"
-          FEATURES="getbinpkg -binpkg-verify-signature"
-          EMERGE_DEFAULT_OPTS="--getbinpkgonly --quiet-build=y"
-          BINPKG_FORMAT="gpkg"
-          PKGDIR="/var/cache/binpkgs"
-          EOF
-                rm -rf /etc/portage/binrepos.conf/
-                mkdir -p /etc/portage/binrepos.conf
-                cat > /etc/portage/binrepos.conf/gentoo.conf << BINHOST
-          [DEFAULT]
-          verify-signature = false
-          [gentoo]
-          priority = 9999
-          sync-uri = https://distfiles.gentoo.org/releases/amd64/binpackages/23.0/x86-64/
-          BINHOST
-                echo "net-libs/webkit-gtk -~amd64 amd64" > /etc/portage/package.accept_keywords/stable
-                emerge net-libs/webkit-gtk
-              '
-          fi
-
-      - name: Fix Workspace Permissions (Pre-Build)
+      - name: Fix Workspace Permissions
         run: sudo chown -R "$(id -u):$(id -g)" "${{ github.workspace }}"
 
-      - name: Parse Queue
+      - name: Parse Queue & Target Evaluation
         id: queue
         run: |
           read -r -a PKGS <<< "${{ github.event.inputs.package_list }}"
-          echo "TARGET_PKG=${PKGS[0]:-}" >> "$GITHUB_OUTPUT"
+          TARGET="${PKGS:-}"
+          echo "TARGET_PKG=$TARGET" >> "$GITHUB_OUTPUT"
           echo "REMAINING_PKGS=${PKGS[*]:1}" >> "$GITHUB_OUTPUT"
-
-      - name: Check Binary Exists
-        id: check_bin
-        run: |
-          TARGET="${{ steps.queue.outputs.TARGET_PKG }}"
+          
           [ -z "$TARGET" ] && { echo "skip_compile=true" >> "$GITHUB_OUTPUT"; exit 0; }
-
           CPV="${TARGET#=}"
 
-          python3 -c "
-          import os, shutil, re
-          cpv = '${CPV}'
-          parts = cpv.split('/')
-          cat = parts[0]
-          pkg_ver = parts[1] if len(parts) > 1 else parts[0]
-          pn_parts = re.split(r'-[0-9]', pkg_ver, 1)
-          pn = pn_parts[0]
-          target_dir = os.path.join('binpkgs', cat, pn)
+          if [[ "$CPV" == *"-9999" ]]; then
+             echo "skip_compile=false" >> "$GITHUB_OUTPUT"
+             exit 0
+          fi
 
-          # Always rebuild live ebuilds (version == 9999) because the source
-          # or ebuild may have changed without a version bump.
-          if pkg_ver == '9999':
-              print(f'Live ebuild detected for {cpv}. Forcing rebuild.')
-              if os.path.exists(target_dir): shutil.rmtree(target_dir)
-              with open(os.environ['GITHUB_OUTPUT'], 'a') as f:
-                  f.write('skip_compile=false\n')
-              exit(0)
+          FORCE="${{ github.event.inputs.force_rebuild }}"
+          if [[ "$FORCE" == "true" || "$FORCE" == *"${CPV}"* ]]; then
+             rm -rf "binpkgs/${CPV%/*}" 2>/dev/null || true
+             echo "skip_compile=false" >> "$GITHUB_OUTPUT"
+             exit 0
+          fi
 
-          force_input = '${{ github.event.inputs.force_rebuild }}'
-          force = False
-          if force_input.lower() == 'true':
-              force = True
-          else:
-              for fp in force_input.split():
-                  if fp.replace('=', '') in cpv:
-                      force = True
+          if grep -q "^CPV: ${CPV}$" binpkgs/Packages 2>/dev/null; then
+             echo "skip_compile=true" >> "$GITHUB_OUTPUT"
+          else
+             rm -rf "binpkgs/${CPV%/*}" 2>/dev/null || true
+             echo "skip_compile=false" >> "$GITHUB_OUTPUT"
+          fi
 
-          if force:
-              print(f'Force rebuild triggered for {cpv}. Purging: {target_dir}')
-              if os.path.exists(target_dir): shutil.rmtree(target_dir)
-              with open(os.environ['GITHUB_OUTPUT'], 'a') as f:
-                  f.write('skip_compile=false\n')
-          else:
-              skip = False
-              if os.path.exists('binpkgs/Packages'):
-                  with open('binpkgs/Packages', 'r') as f:
-                      if f'CPV: {cpv}' in f.read(): skip = True
-
-              if skip:
-                  print(f'Binary {cpv} already in Packages index. Skipping compile.')
-                  with open(os.environ['GITHUB_OUTPUT'], 'a') as f:
-                      f.write('skip_compile=true\n')
-              else:
-                  print(f'Binary {cpv} not found. Will compile from source.')
-                  if os.path.exists(target_dir):
-                      shutil.rmtree(target_dir)
-                      print(f'Purged older versions from {target_dir} before compile')
-                  with open(os.environ['GITHUB_OUTPUT'], 'a') as f:
-                      f.write('skip_compile=false\n')
-          "
-
-      - name: Write Docker Build Script to File
-        if: steps.check_bin.outputs.skip_compile != 'true'
+      - name: Write Monolithic Docker Build Script
+        if: steps.queue.outputs.skip_compile != 'true'
         run: |
-          TARGET="${{ steps.queue.outputs.TARGET_PKG }}"
-          cat > build_inside_docker.sh << 'BUILDSCRIPT'
+          cat > build_inside_docker.sh << 'EOF'
           #!/bin/bash
           set -euo pipefail
 
-          mkdir -p /var/db/repos/gentoo
+          mkdir -p /var/db/repos/gentoo /etc/portage/repos.conf /etc/portage/package.{accept_keywords,use,mask}
           emerge-webrsync -q
 
-          eselect profile set default/linux/amd64/23.0/desktop 2>/dev/null || \
-            eselect profile list 2>/dev/null | grep -m1 desktop | awk '{print $1}' | tr -d '[]' | xargs -r eselect profile set || \
-            eselect profile set 1
-
+          eselect profile set default/linux/amd64/23.0/desktop 2>/dev/null || eselect profile set 1
           getuto 2>/dev/null || emerge -q --oneshot app-crypt/gentoo-keys 2>/dev/null || true
 
           cat > /etc/portage/make.conf << 'MAKECONF'
@@ -264,7 +129,6 @@ jobs:
           MAKEOPTS="-j4"
           MAKECONF
 
-          mkdir -p /etc/portage/repos.conf
           cat > /etc/portage/repos.conf/gentoo-nexus.conf << 'REPOCONF'
           [gentoo-nexus]
           location = /var/db/repos/gentoo-nexus
@@ -273,100 +137,54 @@ jobs:
           auto-sync = no
           REPOCONF
 
-          mkdir -p /etc/portage/package.accept_keywords
-          echo '*/*::gentoo-nexus **' > /etc/portage/package.accept_keywords/nexus
-          echo 'net-libs/webkit-gtk -~amd64 amd64' > /etc/portage/package.accept_keywords/stable-binary
+          cat > /etc/portage/package.accept_keywords/nexus << 'KEYS'
+          */*::gentoo-nexus **
+          net-libs/webkit-gtk -~amd64 amd64
+          KEYS
 
-          mkdir -p /etc/portage/package.use
-          echo 'media-libs/opus abi_x86_64' > /etc/portage/package.use/opus
-          echo 'gui-libs/gtk introspection' > /etc/portage/package.use/gtk
-          echo 'sys-auth/seatd builtin server' > /etc/portage/package.use/seatd
-          echo 'sys-kernel/installkernel dracut' > /etc/portage/package.use/installkernel
-          echo 'sys-libs/minizip-ng compat' > /etc/portage/package.use/minizip-ng
-          echo 'sys-apps/dbus -systemd elogind' > /etc/portage/package.use/dbus
-          echo 'media-video/pipewire -systemd elogind' > /etc/portage/package.use/pipewire
-          echo 'dev-libs/libdbusmenu gtk3' > /etc/portage/package.use/libdbusmenu
-          echo 'net-misc/networkmanager -modemmanager -bluetooth' > /etc/portage/package.use/networkmanager
+          cat > /etc/portage/package.use/nexus << 'USES'
+          media-libs/opus abi_x86_64
+          gui-libs/gtk introspection
+          sys-auth/seatd builtin server
+          sys-kernel/installkernel dracut
+          sys-libs/minizip-ng compat
+          sys-apps/dbus -systemd elogind
+          media-video/pipewire -systemd elogind extra
+          dev-libs/libdbusmenu gtk3
+          net-misc/networkmanager -modemmanager -bluetooth
+          sys-libs/ncurses -gpm
+          sys-libs/zlib-ng abi_x86_32 abi_x86_64 compat
+          USES
 
-          # circular dependency (ncurses - gpm)
-          echo 'sys-libs/ncurses -gpm' > /etc/portage/package.use/ncurses-gpm
-
-          # REQUIRED_USE: pipewire[ffmpeg] requires pipewire[extra]
-          echo 'media-video/pipewire extra' > /etc/portage/package.use/pipewire-extra
-
-          # cargo-c requires libgit2-1.9.2, mask newer
-          mkdir -p /etc/portage/package.mask
           echo '>=dev-libs/libgit2-1.9.3' > /etc/portage/package.mask/libgit2
 
-          # Ensure zlib-ng is used as the virtual/zlib provider
-          echo 'sys-libs/zlib-ng abi_x86_32 abi_x86_64 compat' > /etc/portage/package.use/zlib-ng
+          if ! ls /var/cache/binpkgs/*/webkit-gtk/*.gpkg.tar >/dev/null 2>&1; then
+              mkdir -p /etc/portage/binrepos.conf
+              cat > /etc/portage/binrepos.conf/gentoo.conf << 'BINHOST'
+          [gentoo]
+          priority = 1
+          sync-uri = https://distfiles.gentoo.org/releases/amd64/binpackages/23.0/x86-64/
+          BINHOST
+              emerge --getbinpkgonly --quiet-build=y net-libs/webkit-gtk || true
+              rm -f /etc/portage/binrepos.conf/gentoo.conf
+          fi
 
-          echo ">>> Regenerating Packages index to map loaded binaries..."
           emaint binhost --fix
 
-          echo ">>> Generating Manifests for local ebuilds..."
-          for ebuild_file in $(find /var/db/repos/gentoo-nexus -mindepth 2 -maxdepth 3 -name "*.ebuild"); do
-             ebuild "$ebuild_file" manifest >/dev/null 2>&1 || {
-               echo "WARNING: Manifest generation failed for $(basename "$ebuild_file")"
-             }
+          for e in $(find /var/db/repos/gentoo-nexus -mindepth 2 -maxdepth 3 -name "*.ebuild"); do
+              ebuild "$e" manifest >/dev/null 2>&1 || true
           done
 
-          # Ensure wayland and wayland-scanner meet Mesa's configure requirement (>=1.25.0)
-          echo ">>> Pre-upgrading wayland & wayland-scanner for Mesa compatibility..."
-          emerge --oneshot --usepkg --buildpkg --quiet-build=y \
-            '>=dev-libs/wayland-1.25.0' '>=dev-util/wayland-scanner-1.25.0' || true
+          emerge --oneshot --autounmask=y --autounmask-write --autounmask-continue=y "$1" || true
 
-          # Switch to zlib-ng as the virtual/zlib provider so binary packages
-          echo ">>> Switching virtual/zlib provider to sys-libs/zlib-ng[compat]..."
-          emerge --oneshot --usepkg --buildpkg --quiet-build=y \
-            'sys-libs/zlib-ng' || true
-
-          # Pre-emptively upgrade glib and its blockers to avoid soft-block
-          echo ">>> Resolving glib soft-block..."
-          emerge --oneshot --usepkg --buildpkg --quiet-build=y \
-            dev-libs/glib dev-libs/gobject-introspection dev-util/gdbus-codegen || true
-
-          # Step 1: Build libsdl2 WITHOUT pipewire
-          echo ">>> Bootstrap step 1/4: libsdl2 without pipewire..."
-          USE="-pipewire" emerge --oneshot --usepkg --buildpkg --quiet-build=y \
-            media-libs/libsdl2 || true
-
-          # Step 2: Build ffmpeg with SDL
-          echo ">>> Bootstrap step 2/4: ffmpeg with SDL..."
-          emerge --oneshot --usepkg --buildpkg --quiet-build=y \
-            media-video/ffmpeg || true
-
-          # Step 3: Build pipewire with ffmpeg (uses ffmpeg from step 2; no cycle)
-          echo ">>> Bootstrap step 3/4: pipewire with ffmpeg..."
-          emerge --oneshot --usepkg --buildpkg --quiet-build=y \
-            media-video/pipewire || true
-
-          # Step 4: Rebuild libsdl2 WITH pipewire
-          echo ">>> Bootstrap step 4/4: restoring libsdl2 with pipewire..."
-          emerge --oneshot --usepkg --buildpkg --quiet-build=y \
-            media-libs/libsdl2 || true
-
-          # Now the full cycle is broken; build the target package
-          echo ">>> Building: $1"
-          emerge --oneshot --usepkg --buildpkg --binpkg-respect-use=y --quiet-build=y --keep-going \
-            --autounmask=y --autounmask-write --autounmask-continue=y "$1" || {
-            echo ">>> WARNING: emerge exited with non-zero code, continuing to save partial binaries..."
-          }
-
-          echo ">>> Finalising Packages index..."
           emaint binhost --fix
-          BUILDSCRIPT
-
+          EOF
           chmod +x build_inside_docker.sh
-          echo "TARGET=$TARGET" >> "$GITHUB_ENV"
-
-      - name: Mark Build Start Time
-        if: steps.check_bin.outputs.skip_compile != 'true'
-        run: touch build_start_marker
 
       - name: Build Package in Docker
-        if: steps.check_bin.outputs.skip_compile != 'true'
+        if: steps.queue.outputs.skip_compile != 'true'
         run: |
+          touch build_start_marker
           docker run --rm --privileged \
             -v "${{ github.workspace }}/binpkgs:/var/cache/binpkgs:rw" \
             -v "${{ github.workspace }}/overlay:/var/db/repos/gentoo-nexus:rw" \
@@ -374,114 +192,43 @@ jobs:
             -v "${{ github.workspace }}/ccache:/var/cache/ccache:rw" \
             -v "${{ github.workspace }}/build_inside_docker.sh:/build.sh:ro" \
             gentoo/stage3:amd64-desktop-openrc \
-            bash /build.sh "${{ env.TARGET }}"
-
-      - name: Workspace Permissions (Post-Build)
-        if: steps.check_bin.outputs.skip_compile != 'true'
-        run: sudo chown -R "$(id -u):$(id -g)" "${{ github.workspace }}"
+            bash /build.sh "${{ steps.queue.outputs.TARGET_PKG }}"
 
       - name: Upload to GitHub Release
-        if: steps.check_bin.outputs.skip_compile != 'true'
+        if: steps.queue.outputs.skip_compile != 'true'
         env:
           GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
           REPO: ${{ github.repository }}
         run: |
-          gh release view rolling --repo "$REPO" 2>/dev/null || \
-            gh release create rolling \
-              --repo "$REPO" \
-              --title "Nexus Rolling Binaries" \
-              --notes "Automated Gentoo Binhost - GPKG format" \
-              --prerelease
+          sudo chown -R "$(id -u):$(id -g)" "${{ github.workspace }}"
+          
+          gh release view rolling --repo "$REPO" 2>/dev/null || gh release create rolling --repo "$REPO" --title "Nexus Rolling Binaries" --prerelease
 
-          retry_upload() {
-            local file="$1"
-            local max_retries=3
-            for i in $(seq 1 $max_retries); do
-              if gh release upload rolling "$file" --repo "$REPO" --clobber 2>&1; then
-                return 0
-              fi
-              sleep 5
-            done
-            echo "::error::Failed to upload $file after $max_retries attempts"
-            return 1
-          }
-
-          echo ">>> Flattening PATH and URI fields for flat GitHub Release store..."
-          sed -i -E \
-            -e 's|^PATH: .*/([^/]+\.gpkg\.tar)$|PATH: \1|' \
-            -e 's|^URI: .*/([^/]+\.gpkg\.tar)$|URI: \1|' \
-            binpkgs/Packages
-
-          echo ">>> Removing acct-group/acct-user entries to prevent 404 traps..."
-          python3 -c "
-          import re
-          with open('binpkgs/Packages', 'r') as f:
-              content = f.read()
-          blocks = content.split('\n\n')
-          filtered = [b for b in blocks if not re.search(r'^CPV: acct-(group|user)/', b, re.MULTILINE)]
-          with open('binpkgs/Packages', 'w') as f:
-              f.write('\n\n'.join(filtered))
-          print(f'Filtered {len(blocks) - len(filtered)} acct-* entries from index')
-          "
-
-          echo ">>> Compressing Packages index..."
+          sed -i -E -e 's|^PATH: .*/([^/]+\.gpkg\.tar)$|PATH: \1|' -e 's|^URI: .*/([^/]+\.gpkg\.tar)$|URI: \1|' binpkgs/Packages
+          awk '/^CPV: acct-(group|user)\//{skip=1} /^$/{if(skip){skip=0; next}} !skip' binpkgs/Packages > binpkgs/Packages.tmp && mv binpkgs/Packages.tmp binpkgs/Packages
+          
           rm -f binpkgs/Packages.gz
           gzip -c binpkgs/Packages > binpkgs/Packages.gz
 
-          echo ">>> Uploading Packages indexes..."
+          retry_upload() {
+            for i in 1 2 3; do gh release upload rolling "$1" --repo "$REPO" --clobber 2>&1 && return 0 || sleep 5; done; return 1;
+          }
+
           shopt -s nullglob
-          for file in binpkgs/Packages*; do
-            [ -f "$file" ] && retry_upload "$file"
+          for file in binpkgs/Packages*; do retry_upload "$file"; done
+
+          for file in $(find binpkgs -type f -name '*.gpkg.tar' -newer build_start_marker 2>/dev/null); do
+            PN=$(echo "$file" | awk -F'/' '{print $3}')
+            OLD_ASSETS=$(gh release view rolling --json assets --jq ".assets[].name" --repo "$REPO" | grep -E "^${PN}-[0-9].*\.gpkg\.tar$" || true)
+            for asset in $OLD_ASSETS; do gh release delete-asset rolling "$asset" --repo "$REPO" -y || true; done
+            retry_upload "$file"
           done
 
-          echo ">>> Scanning for newly compiled binaries to upload..."
-          NEW_BINARIES=$(find binpkgs -type f -name '*.gpkg.tar' -newer build_start_marker 2>/dev/null || echo "")
-
-          if [ -n "$NEW_BINARIES" ]; then
-            for file in $NEW_BINARIES; do
-              # binpkgs/cat/pn/pkg-ver-1.gpkg.tar — field 3 is pn
-              PN=$(echo "$file" | awk -F'/' '{print $3}')
-
-              echo ">>> Processing new package: $PN"
-
-              # Delete older versions of this package from the release before uploading
-              python3 -c "
-          import re, subprocess
-          pn = '${PN}'
-          repo = '${REPO}'
-          try:
-              out = subprocess.check_output([
-                  'gh', 'release', 'view', 'rolling',
-                  '--repo', repo, '--json', 'assets', '-q', '.assets[].name'
-              ])
-              assets = out.decode().strip().split('\n')
-              for asset in assets:
-                  if not asset: continue
-                  if re.match(rf'^{re.escape(pn)}-[0-9].*\.gpkg\.tar\$', asset):
-                      print(f'>>> Deleting old asset: {asset}')
-                      subprocess.run([
-                          'gh', 'release', 'delete-asset', 'rolling', asset,
-                          '--repo', repo, '-y'
-                      ], check=False)
-          except Exception as e:
-              print(f'Cleanup error: {e}')
-          "
-              retry_upload "$file"
-            done
-          else
-            echo "No new binaries found to upload."
-          fi
-
-      - name: Fix Workspace Permissions (Final)
-        if: always()
-        run: sudo chown -R "$(id -u):$(id -g)" "${{ github.workspace }}"
-
       - name: Trigger Relay for Next Package
-        if: steps.queue.outputs.REMAINING_PKGS != ''
+        if: always() && steps.queue.outputs.REMAINING_PKGS != ''
         env:
           GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
         run: |
-          echo "Relaying to: ${{ steps.queue.outputs.REMAINING_PKGS }}"
           gh workflow run "${{ github.workflow }}" \
             --ref "${GITHUB_REF_NAME}" \
             --repo ${{ github.repository }} \
