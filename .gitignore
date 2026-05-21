@@ -1,4 +1,4 @@
 changed_packages.txt
 packages_to_build.txt
-gentoo_ops.sh
-desired_state.txt
+gen_manifests.sh
+resolve_state.sh
