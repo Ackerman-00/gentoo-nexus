@@ -28,7 +28,6 @@ jobs:
           token: ${{ secrets.GITHUB_TOKEN }}
           fetch-depth: 0
 
-      # ── Workspace Preparation ──────────────────────────────────────
       - name: Prepare Workspace & Overlay
         run: |
           mkdir -p binpkgs overlay/metadata overlay/profiles distfiles ccache
@@ -42,7 +41,6 @@ jobs:
           LAYOUT
           echo "gentoo-nexus" > overlay/profiles/repo_name
 
-      # ── Download existing binaries from GitHub Release ─────────────
       - name: Download Release Binaries
         env:
           GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
@@ -56,7 +54,6 @@ jobs:
             if ! tar -tf "$f" >/dev/null 2>&1; then rm -f "$f"; fi
           done
 
-      # ── Restore GPKG Layout (category/package/ structure) ──────────
       - name: Restore GPKG Layout
         run: |
           docker run --rm \
@@ -94,7 +91,6 @@ jobs:
       - name: Fix Workspace Permissions
         run: sudo chown -R "$(id -u):$(id -g)" "${{ github.workspace }}"
 
-      # ── Queue Parsing ─────────────────────────────────────────────
       - name: Parse Queue & Target Evaluation
         id: queue
         run: |
@@ -106,7 +102,6 @@ jobs:
           [ -z "$TARGET" ] && { echo "skip_compile=true" >> "$GITHUB_OUTPUT"; exit 0; }
           CPV="${TARGET#=}"
 
-          # Always rebuild live ebuilds (9999)
           if [[ "$CPV" == *"-9999" ]]; then
              echo "skip_compile=false" >> "$GITHUB_OUTPUT"
              exit 0
@@ -126,7 +121,6 @@ jobs:
              echo "skip_compile=false" >> "$GITHUB_OUTPUT"
           fi
 
-      # ── Write the monolithic build script ─────────────────────────
       - name: Write Build Script
         if: steps.queue.outputs.skip_compile != 'true'
         run: |
@@ -144,7 +138,6 @@ jobs:
 
           getuto 2>/dev/null || emerge -q --oneshot app-crypt/gentoo-keys 2>/dev/null || true
 
-          # ── make.conf: Binary-first configuration ──────────────
           cat > /etc/portage/make.conf << 'MAKECONF'
           COMMON_FLAGS="-O2 -march=x86-64-v3 -mtune=znver3 -pipe"
           VIDEO_CARDS="amdgpu radeonsi nvidia nouveau"
@@ -161,7 +154,6 @@ jobs:
           MAKEOPTS="-j4"
           MAKECONF
 
-          # ── Repository configuration ──────────────────────────
           cat > /etc/portage/repos.conf/gentoo-nexus.conf << 'REPO'
           [gentoo-nexus]
           location = /var/db/repos/gentoo-nexus
@@ -170,7 +162,6 @@ jobs:
           auto-sync = no
           REPO
 
-          # ── Official Gentoo binhost (permanent, priority 1) ──
           mkdir -p /etc/portage/binrepos.conf
           cat > /etc/portage/binrepos.conf/gentoo-official.conf << 'BINHOST'
           [gentoo-official]
@@ -179,12 +170,10 @@ jobs:
           verify-signature = false
           BINHOST
 
-          # ── Package keywords ──────────────────────────────────
           mkdir -p /etc/portage/package.accept_keywords
           echo '*/*::gentoo-nexus **' > /etc/portage/package.accept_keywords/nexus
           echo 'net-libs/webkit-gtk -~amd64 amd64' > /etc/portage/package.accept_keywords/stable-binary
 
-          # ── Package USE flags ─────────────────────────────────
           mkdir -p /etc/portage/package.use
           cat > /etc/portage/package.use/nexus << 'USES'
           media-libs/opus abi_x86_64
@@ -200,23 +189,17 @@ jobs:
           sys-libs/zlib-ng abi_x86_32 abi_x86_64 compat
           USES
 
-          # ── libgit2 mask for cargo-c/rustup compatibility ────
           mkdir -p /etc/portage/package.mask
           echo '>=dev-libs/libgit2-1.9.3' > /etc/portage/package.mask/libgit2
 
-          # ── Regenerate binhost index from loaded binaries ────
           echo ">>> Regenerating Packages index..."
           emaint binhost --fix
 
-          # ── Generate manifests for custom ebuilds ─────────────
           echo ">>> Generating Manifests..."
           for ebuild_file in $(find /var/db/repos/gentoo-nexus -mindepth 2 -maxdepth 3 -name "*.ebuild"); do
               ebuild "$ebuild_file" manifest >/dev/null 2>&1 || true
           done
 
-          # ═══════════════════════════════════════════════════════
-          # STEP 1: Try binary-only first (fast path)
-          # ═══════════════════════════════════════════════════════
           echo ">>> Attempting binary-only install of: $1"
           if emerge --usepkgonly --getbinpkg --binpkg-respect-use=n "$1" 2>&1; then
               echo ">>> SUCCESS: Target installed entirely from binary cache."
@@ -224,40 +207,25 @@ jobs:
               exit 0
           fi
 
-          # ═══════════════════════════════════════════════════════
-          # STEP 2: Binary-only failed. Check for circular deps.
-          #         Only bootstrap if Portage reports a cycle.
-          # ═══════════════════════════════════════════════════════
           echo ">>> Binary-only failed. Checking for circular dependencies..."
           if emerge --pretend --usepkg --getbinpkg "$1" 2>&1 | grep -q "circular dependencies"; then
               echo ">>> Circular dependency detected — applying 4-step bootstrap..."
 
-              # Step 1: libsdl2 without pipewire
-              echo ">>> [BOOTSTRAP 1/4] libsdl2 without pipewire..."
               USE="-pipewire" emerge --oneshot --usepkg --getbinpkg --buildpkg --quiet-build=y \
                 media-libs/libsdl2 || true
 
-              # Step 2: ffmpeg with SDL (no pipewire in libsdl2 yet)
-              echo ">>> [BOOTSTRAP 2/4] ffmpeg with SDL..."
               emerge --oneshot --usepkg --getbinpkg --buildpkg --quiet-build=y \
                 media-video/ffmpeg || true
 
-              # Step 3: pipewire with ffmpeg (cycle broken)
-              echo ">>> [BOOTSTRAP 3/4] pipewire with ffmpeg..."
               emerge --oneshot --usepkg --getbinpkg --buildpkg --quiet-build=y \
                 media-video/pipewire || true
 
-              # Step 4: libsdl2 restored with pipewire
-              echo ">>> [BOOTSTRAP 4/4] libsdl2 with pipewire..."
               emerge --oneshot --usepkg --getbinpkg --buildpkg --quiet-build=y \
                 media-libs/libsdl2 || true
           else
               echo ">>> No circular dependency detected. Proceeding with normal build."
           fi
 
-          # ═══════════════════════════════════════════════════════
-          # STEP 3: Build the target (binary-first, source fallback)
-          # ═══════════════════════════════════════════════════════
           echo ">>> Building target: $1"
           emerge --oneshot --usepkg --getbinpkg --buildpkg --binpkg-respect-use=n \
             --quiet-build=y --keep-going \
@@ -272,7 +240,6 @@ jobs:
           chmod +x build.sh
           echo "TARGET=${{ steps.queue.outputs.TARGET_PKG }}" >> "$GITHUB_ENV"
 
-      # ── Execute Build ────────────────────────────────────────────
       - name: Build Package in Docker
         if: steps.queue.outputs.skip_compile != 'true'
         run: |
@@ -290,7 +257,6 @@ jobs:
         if: steps.queue.outputs.skip_compile != 'true'
         run: sudo chown -R "$(id -u):$(id -g)" "${{ github.workspace }}"
 
-      # ── Upload to GitHub Release ────────────────────────────────
       - name: Upload to GitHub Release
         if: steps.queue.outputs.skip_compile != 'true'
         env:
@@ -336,7 +302,6 @@ jobs:
             retry_upload "$file"
           done
 
-      # ── Trigger Next Package in Queue ────────────────────────────
       - name: Trigger Relay for Next Package
         if: always() && steps.queue.outputs.REMAINING_PKGS != ''
         env:
