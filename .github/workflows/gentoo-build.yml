@@ -4,7 +4,7 @@ on:
   workflow_dispatch:
     inputs:
       package_list:
-        description: 'Space-separated list of package atoms to build (e.g. =app-editors/zed-1.2.6 or simply app-editors/zed)'
+        description: 'Space-separated list of package atoms (e.g. =app-editors/zed-1.2.6 or app-editors/zed)'
         required: true
       force_rebuild:
         description: 'List of specific packages to force rebuild (or "true" for all)'
@@ -28,27 +28,25 @@ jobs:
           token: ${{ secrets.GITHUB_TOKEN }}
           fetch-depth: 0
 
-      - name: Allocate 10GB Swap Space (OOM Prevention)
+      - name: Allocate Swap Space (OOM Prevention)
         run: |
-          echo ">>> Carving 10GB of Swap Space on the Ephemeral SSD (/mnt)..."
-          # Bypassing ETXTBSY by utilizing a uniquely named swapfile 
           sudo fallocate -l 10G /mnt/10g.swap || sudo dd if=/dev/zero of=/mnt/10g.swap bs=1G count=10 status=none
           sudo chmod 600 /mnt/10g.swap
           sudo mkswap /mnt/10g.swap
           sudo swapon /mnt/10g.swap
           free -h
 
+      - name: Free Disk Space for Docker
+        run: |
+          sudo rm -rf /usr/share/dotnet /usr/local/lib/android /opt/ghc /opt/hostedtoolcache/CodeQL || true
+          df -h /
+
       - name: Prepare Workspace & Overlay
         run: |
           mkdir -p binpkgs overlay/metadata overlay/profiles distfiles ccache
           chmod -R 777 binpkgs overlay distfiles ccache
           rsync -a --exclude='.git' --exclude='binpkgs' --exclude='overlay' ./ overlay/
-
-          cat > overlay/metadata/layout.conf << 'LAYOUT'
-          masters = gentoo
-          thin-manifests = true
-          sign-manifests = false
-          LAYOUT
+          printf 'masters = gentoo\nthin-manifests = true\nsign-manifests = false\n' > overlay/metadata/layout.conf
           echo "gentoo-nexus" > overlay/profiles/repo_name
 
       - name: Download Release Binaries
@@ -61,43 +59,60 @@ jobs:
             --dir binpkgs --clobber 2>/dev/null || true
           for f in binpkgs/*.gpkg.tar; do
             [ -e "$f" ] || continue
-            if ! tar -tf "$f" >/dev/null 2>&1; then rm -f "$f"; fi
+            tar -tf "$f" >/dev/null 2>&1 || { echo "Removing corrupt: $f"; rm -f "$f"; }
           done
 
-      - name: Restore GPKG Layout
+      - name: Restore GPKG Layout from Packages Index
         run: |
-          docker run --rm \
-            -v "${{ github.workspace }}/binpkgs:/var/cache/binpkgs:rw" \
-            -v "${{ github.workspace }}/overlay:/var/db/repos/gentoo-nexus:ro" \
-            gentoo/stage3:amd64-desktop-openrc \
-            python3 -c "
-          import os, shutil
-          from portage.versions import pkgsplit
-          os.system('emerge-webrsync -q')
-          pn_to_cat = {}
-          for repo in ['/var/db/repos/gentoo-nexus', '/var/db/repos/gentoo']:
-              if not os.path.exists(repo): continue
-              for cat in os.listdir(repo):
-                  cat_path = os.path.join(repo, cat)
-                  if not os.path.isdir(cat_path) or cat.startswith('.'): continue
-                  if cat in ['metadata','profiles','eclass','scripts']: continue
-                  for pn in os.listdir(cat_path):
-                      pn_to_cat[pn] = cat
-          for f in os.listdir('/var/cache/binpkgs'):
-              if not f.endswith('.gpkg.tar'): continue
-              base = f[:-9]
-              if '-' in base: base = base.rsplit('-', 1)
-              split_res = pkgsplit(base) or pkgsplit(f[:-9])
-              if split_res and split_res in pn_to_cat:
-                  cat = pn_to_cat[split_res]
-                  pn = split_res
-                  target_dir = os.path.join('/var/cache/binpkgs', cat, pn)
-                  src = os.path.join('/var/cache/binpkgs', f)
-                  dst = os.path.join(target_dir, f)
-                  if src != dst:
-                      os.makedirs(target_dir, exist_ok=True)
-                      shutil.move(src, dst)
-          "
+          # Parse CPV and URI directly from the Packages index — no Docker, no portage API needed.
+          # CPV format: cat/pn-ver   URI format: pn-ver-buildid.gpkg.tar (flat, at root of binpkgs/)
+          python3 << 'PYEOF'
+          import os, shutil, re
+
+          pkg_index = 'binpkgs/Packages'
+          if not os.path.exists(pkg_index):
+              print("No Packages index found, skipping layout restore.")
+              exit(0)
+
+          with open(pkg_index, 'r') as f:
+              content = f.read()
+
+          moved = 0
+          skipped = 0
+          for block in content.split('\n\n'):
+              cpv_match = re.search(r'^CPV: (.+)$', block, re.MULTILINE)
+              # URI field holds the bare filename as uploaded (flat)
+              uri_match = re.search(r'^URI: ([^\s/]+\.gpkg\.tar)$', block, re.MULTILINE)
+              if not (cpv_match and uri_match):
+                  skipped += 1
+                  continue
+
+              cpv  = cpv_match.group(1).strip()   # e.g. app-editors/zed-1.2.6
+              uri  = uri_match.group(1).strip()    # e.g. zed-1.2.6-1.gpkg.tar
+
+              if '/' not in cpv:
+                  continue
+              cat, pn_ver = cpv.split('/', 1)
+              # Strip version suffix to get bare pn (split on first digit group after a dash)
+              pn_match = re.match(r'^([a-zA-Z0-9_+.-]+?)(?:-\d)', pn_ver)
+              pn = pn_match.group(1) if pn_match else pn_ver
+
+              src      = os.path.join('binpkgs', uri)
+              dest_dir = os.path.join('binpkgs', cat, pn)
+              dest     = os.path.join(dest_dir, uri)
+
+              if not os.path.exists(src):
+                  continue   # already moved or not downloaded
+              if src == dest:
+                  continue
+
+              os.makedirs(dest_dir, exist_ok=True)
+              shutil.move(src, dest)
+              print(f"  Restored: {cat}/{pn}/{uri}")
+              moved += 1
+
+          print(f"Layout restore complete: {moved} moved, {skipped} blocks skipped.")
+          PYEOF
 
       - name: Fix Workspace Permissions
         run: sudo chown -R "$(id -u):$(id -g)" "${{ github.workspace }}"
@@ -106,48 +121,44 @@ jobs:
         id: queue
         run: |
           read -r -a PKGS <<< "${{ github.event.inputs.package_list }}"
-          TARGET="${PKGS:-}"
-          [ -z "$TARGET" ] && { echo "skip_compile=true" >> "$GITHUB_OUTPUT"; echo "TARGET_PKG=" >> "$GITHUB_OUTPUT"; exit 0; }
+          # BUG FIX: was `${PKGS:-}` which stringifies the whole array; must index [0]
+          TARGET="${PKGS[0]:-}"
+          echo "REMAINING_PKGS=${PKGS[*]:1}" >> "$GITHUB_OUTPUT"
 
-          # Unpolluted portageq resolution
-          if [[ "$TARGET" != *=* && "$TARGET" != *"-9999"* ]]; then
-              echo ">>> Bare package name given: $TARGET - resolving latest version via portageq..."
-              RESOLVED=$(docker run --rm \
-                -v "${{ github.workspace }}/overlay:/var/db/repos/gentoo-nexus:ro" \
-                gentoo/stage3:amd64-desktop-openrc \
-                bash -c "emerge-webrsync -q >/dev/null 2>&1; portageq best_visible / \"$TARGET\" 2>/dev/null")
-              if [ -n "$RESOLVED" ] && [ "$RESOLVED" != "null" ]; then
-                  TARGET="=${RESOLVED}"
-                  echo ">>> Resolved to: $TARGET"
-              else
-                  echo "!!! Failed to resolve $TARGET via portageq — aborting this package"
-                  echo "skip_compile=true" >> "$GITHUB_OUTPUT"
-                  echo "TARGET_PKG=$TARGET" >> "$GITHUB_OUTPUT"
-                  exit 0
-              fi
+          if [ -z "$TARGET" ]; then
+            echo "skip_compile=true" >> "$GITHUB_OUTPUT"
+            echo "TARGET_PKG=" >> "$GITHUB_OUTPUT"
+            exit 0
           fi
 
           echo "TARGET_PKG=$TARGET" >> "$GITHUB_OUTPUT"
-          echo "REMAINING_PKGS=${PKGS[*]:1}" >> "$GITHUB_OUTPUT"
           CPV="${TARGET#=}"
 
+          # Live ebuilds always rebuild
           if [[ "$CPV" == *"-9999" ]]; then
-             echo "skip_compile=false" >> "$GITHUB_OUTPUT"
-             exit 0
+            echo "skip_compile=false" >> "$GITHUB_OUTPUT"
+            exit 0
           fi
 
           FORCE="${{ github.event.inputs.force_rebuild }}"
-          if [[ "$FORCE" == "true" || "$FORCE" == *"${CPV}"* ]]; then
-             rm -rf "binpkgs/${CPV%/*}" 2>/dev/null || true
-             echo "skip_compile=false" >> "$GITHUB_OUTPUT"
-             exit 0
+          if [[ "$FORCE" == "true" || "$FORCE" == *"${CPV%%/*}"* ]]; then
+            # Purge old binaries for this cat/pn
+            CAT="${CPV%%/*}"
+            PN_VER="${CPV#*/}"
+            PN="${PN_VER%%-[0-9]*}"
+            rm -rf "binpkgs/${CAT}/${PN}" 2>/dev/null || true
+            echo "skip_compile=false" >> "$GITHUB_OUTPUT"
+            exit 0
           fi
 
           if grep -q "^CPV: ${CPV}$" binpkgs/Packages 2>/dev/null; then
-             echo "skip_compile=true" >> "$GITHUB_OUTPUT"
+            echo "skip_compile=true" >> "$GITHUB_OUTPUT"
           else
-             rm -rf "binpkgs/${CPV%/*}" 2>/dev/null || true
-             echo "skip_compile=false" >> "$GITHUB_OUTPUT"
+            CAT="${CPV%%/*}"
+            PN_VER="${CPV#*/}"
+            PN="${PN_VER%%-[0-9]*}"
+            rm -rf "binpkgs/${CAT}/${PN}" 2>/dev/null || true
+            echo "skip_compile=false" >> "$GITHUB_OUTPUT"
           fi
 
       - name: Write Monolithic Docker Build Script
@@ -156,6 +167,8 @@ jobs:
           cat > build.sh << 'BUILDSCRIPT'
           #!/bin/bash
           set -euo pipefail
+
+          TARGET="$1"
 
           echo ">>> Syncing Gentoo ebuild repository..."
           mkdir -p /var/db/repos/gentoo /etc/portage/repos.conf
@@ -233,50 +246,62 @@ jobs:
           echo ">>> Regenerating Packages index..."
           emaint binhost --fix
 
-          echo ">>> Generating Manifests..."
-          for ebuild_file in $(find /var/db/repos/gentoo-nexus -mindepth 2 -maxdepth 3 -name "*.ebuild"); do
+          echo ">>> Generating Manifests for overlay ebuilds..."
+          while IFS= read -r -d '' ebuild_file; do
               ebuild "$ebuild_file" manifest >/dev/null 2>&1 || true
-          done
+          done < <(find /var/db/repos/gentoo-nexus -mindepth 2 -maxdepth 3 -name "*.ebuild" -print0)
 
-          echo ">>> Pre-resolving common blocks..."
-          emerge --oneshot --getbinpkg --backtrack=30 --quiet-build=y '>=dev-libs/gobject-introspection-1.86.0' 2>/dev/null || true
-          emerge --oneshot --getbinpkg --backtrack=30 --quiet-build=y '>=dev-util/gdbus-codegen-2.88.1' 2>/dev/null || true
+          echo ">>> Pre-resolving common soft blocks..."
+          emerge --oneshot --getbinpkg --backtrack=30 --quiet-build=y \
+            '>=dev-libs/gobject-introspection-1.86.0' 2>/dev/null || true
+          emerge --oneshot --getbinpkg --backtrack=30 --quiet-build=y \
+            '>=dev-util/gdbus-codegen-2.88.1' 2>/dev/null || true
 
-          echo ">>> Attempting binary-only install of: $1"
-          if emerge --usepkgonly --getbinpkg --backtrack=30 --binpkg-respect-use=n "$1" 2>&1; then
-              echo ">>> SUCCESS: Target installed entirely from binary cache."
+          # ── STEP 1: Binary-only fast path ────────────────────────────────────────
+          echo ">>> Attempting binary-only install of: ${TARGET}"
+          if emerge --usepkgonly --getbinpkg --backtrack=30 --binpkg-respect-use=n "${TARGET}" 2>&1; then
+              echo ">>> SUCCESS: Installed entirely from binary cache."
               emaint binhost --fix
               exit 0
           fi
-          echo ">>> Binary-only failed. Attempting full build..."
+          echo ">>> Binary-only path failed — falling back to full build..."
 
-          BUILD_EXIT=0
+          # ── STEP 2: Full build with circular-dep detection ───────────────────────
+          # Capture exit code from emerge side of the pipe correctly via PIPESTATUS[0]
+          set +e
           emerge --oneshot --usepkg --getbinpkg --buildpkg --backtrack=30 \
             --binpkg-respect-use=n --quiet-build=y --keep-going \
             --autounmask=y --autounmask-write --autounmask-continue=y \
-            "$1" 2>&1 | tee emerge.log || BUILD_EXIT=${PIPESTATUS}
+            "${TARGET}" 2>&1 | tee /tmp/emerge.log
+          BUILD_EXIT=${PIPESTATUS[0]}
+          set -e
 
-          if [ $BUILD_EXIT -ne 0 ]; then
-              if grep -q "circular dependencies" emerge.log; then
-                  echo ">>> Circular dependency detected — applying 4-step bootstrap..."
-                  USE="-pipewire" emerge --oneshot --usepkg --getbinpkg --buildpkg --backtrack=30 --quiet-build=y media-libs/libsdl2 || true
-                  emerge --oneshot --usepkg --getbinpkg --buildpkg --backtrack=30 --quiet-build=y media-video/ffmpeg || true
-                  emerge --oneshot --usepkg --getbinpkg --buildpkg --backtrack=30 --quiet-build=y media-video/pipewire || true
-                  emerge --oneshot --usepkg --getbinpkg --buildpkg --backtrack=30 --quiet-build=y media-libs/libsdl2 || true
+          if [ "$BUILD_EXIT" -ne 0 ]; then
+              if grep -q "circular dependencies" /tmp/emerge.log; then
+                  echo ">>> Circular dependency detected — applying 4-step multimedia bootstrap..."
+                  USE="-pipewire" emerge --oneshot --usepkg --getbinpkg --buildpkg \
+                    --backtrack=30 --quiet-build=y media-libs/libsdl2 || true
+                  emerge --oneshot --usepkg --getbinpkg --buildpkg \
+                    --backtrack=30 --quiet-build=y media-video/ffmpeg || true
+                  emerge --oneshot --usepkg --getbinpkg --buildpkg \
+                    --backtrack=30 --quiet-build=y media-video/pipewire || true
+                  emerge --oneshot --usepkg --getbinpkg --buildpkg \
+                    --backtrack=30 --quiet-build=y media-libs/libsdl2 || true
 
-                  echo ">>> Retrying target build after bootstrap..."
+                  echo ">>> Retrying target after bootstrap..."
                   emerge --oneshot --usepkg --getbinpkg --buildpkg --backtrack=30 \
                     --binpkg-respect-use=n --quiet-build=y --keep-going \
                     --autounmask=y --autounmask-write --autounmask-continue=y \
-                    "$1" || echo ">>> WARNING: Build failed even after bootstrap. Saving partial binaries..."
+                    "${TARGET}" || echo ">>> WARNING: Build failed after bootstrap. Saving partial binaries."
               else
-                  echo ">>> WARNING: emerge exited with code $BUILD_EXIT. Check the logs above. Saving partial binaries..."
+                  echo ">>> WARNING: emerge exited ${BUILD_EXIT}. Saving any partial binaries."
               fi
           fi
 
           echo ">>> Finalising Packages index..."
           emaint binhost --fix
           BUILDSCRIPT
+
           chmod +x build.sh
           echo "TARGET=${{ steps.queue.outputs.TARGET_PKG }}" >> "$GITHUB_ENV"
 
@@ -314,6 +339,7 @@ jobs:
               gh release upload rolling "$1" --repo "$REPO" --clobber 2>&1 && return 0
               sleep 5
             done
+            echo "::error::Upload failed after 3 attempts: $1"
             return 1
           }
 
@@ -333,14 +359,16 @@ jobs:
             [ -f "$file" ] && retry_upload "$file"
           done
 
-          for file in $(find binpkgs -type f -name '*.gpkg.tar' -newer build_start_marker 2>/dev/null); do
+          while IFS= read -r -d '' file; do
             PN=$(echo "$file" | awk -F'/' '{print $3}')
-            OLD_ASSETS=$(gh release view rolling --json assets --jq ".assets[].name" --repo "$REPO" | grep -E "^${PN}-[0-9].*\.gpkg\.tar$" || true)
+            OLD_ASSETS=$(gh release view rolling --json assets \
+              --jq ".assets[].name" --repo "$REPO" \
+              | grep -E "^${PN}-[0-9].*\.gpkg\.tar$" || true)
             for asset in $OLD_ASSETS; do
               gh release delete-asset rolling "$asset" --repo "$REPO" -y || true
             done
             retry_upload "$file"
-          done
+          done < <(find binpkgs -type f -name '*.gpkg.tar' -newer build_start_marker -print0 2>/dev/null)
 
       - name: Trigger Relay for Next Package
         if: always() && steps.queue.outputs.REMAINING_PKGS != ''
