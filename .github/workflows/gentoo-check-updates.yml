@@ -31,39 +31,48 @@ jobs:
           python-version: '3.12'
 
       - name: Install Dependencies
-        run: pip install requests packaging
+        run: pip install requests packaging urllib3
 
       - name: Phase 1 - Scan Local Ebuilds & Bump Versions
         id: scan
         env:
           GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
         run: |
-          python3 << 'EOF'
-          import os, re, requests, subprocess, shutil, tempfile
+          cat > scan.py << 'EOF'
+          import os, re, subprocess, shutil, tempfile
           from pathlib import Path
           from packaging.version import parse as parse_version
+          import requests
+          from requests.adapters import HTTPAdapter
+          from urllib3.util.retry import Retry
+
+          session = requests.Session()
+          retries = Retry(total=3, backoff_factor=1, status_forcelist=)
+          session.mount('https://', HTTPAdapter(max_retries=retries))
+          
+          gh_token = os.environ.get('GITHUB_TOKEN')
+          if gh_token:
+              session.headers.update({"Authorization": f"Bearer {gh_token}", "Accept": "application/vnd.github.v3+json"})
 
           updated_atoms = set()
-          gh_token = os.environ.get('GITHUB_TOKEN')
-          hdrs = {"Authorization": f"Bearer {gh_token}", "Accept": "application/vnd.github.v3+json"} if gh_token else {}
 
           def get_latest_github_release(repo):
               best_ver = None
               try:
-                  r = requests.get(f"https://api.github.com/repos/{repo}/releases/latest", headers=hdrs, timeout=15)
+                  r = session.get(f"https://api.github.com/repos/{repo}/releases/latest", timeout=15)
                   if r.status_code == 200:
                       tag = r.json().get("tag_name", "").lstrip("v")
-                      if tag and re.match(r'^[0-9]', tag): 
-                          best_ver = tag
+                      if tag and re.match(r'^[0-9]', tag): best_ver = tag
                   
-                  r2 = requests.get(f"https://api.github.com/repos/{repo}/tags?per_page=100", headers=hdrs, timeout=15)
+                  r2 = session.get(f"https://api.github.com/repos/{repo}/tags?per_page=100", timeout=15)
                   if r2.status_code == 200 and r2.json():
                       for tag_obj in r2.json():
                           name = tag_obj.get("name", "").lstrip("v")
                           if re.match(r'^[0-9]', name):
                               if not best_ver or (parse_version(name) > parse_version(best_ver)):
                                   best_ver = name
-              except: pass
+              except Exception as e:
+                  print(f"  [!] API Error for {repo}: {e}")
               return best_ver
 
           def get_latest_commit(repo_url, branch="HEAD"):
@@ -100,6 +109,7 @@ jobs:
               content = ebuild_path.read_text(encoding="utf-8")
 
               if pkg_dir.parts[-1] == "rootapp-bin":
+                  print(f"--- Scanning {pkg_cat_name} (AppImage) ---")
                   curr_ver_m = re.search(rf'{re.escape(pkg_dir.parts[-1])}-(\d+(?:\.\d+)*[a-z]?(?:_(?:alpha|beta|pre|rc|p)\d*)?(?:-r\d+)?)\.ebuild$', ebuild_path.name)
                   if not curr_ver_m: continue
                   curr_ver = curr_ver_m.group(1)
@@ -113,14 +123,18 @@ jobs:
                       new_path = pkg_dir / f"{pkg_dir.parts[-1]}-{new_ver}.ebuild"
                       ebuild_path.rename(new_path)
                       updated_atoms.add(pkg_cat_name)
+                      print(f"  [+] Renamed to: {new_path.name}")
+                  else:
+                      print("  [-] Already up to date.")
                   continue
 
-              is_live = ebuild_path.name.endswith('9999.ebuild')
               repo_m = re.search(r'github\.com/([A-Za-z0-9_.-]+/[A-Za-z0-9_.-]+?)(?:\.git|/archive|/releases|/tarball|["\s\'])', content)
               if not repo_m: continue
               repo = repo_m.group(1).rstrip('.')
+              
+              print(f"--- Scanning {pkg_cat_name} ({repo}) ---")
 
-              if is_live:
+              if ebuild_path.name.endswith('9999.ebuild'):
                   branch_m = re.search(r'^EGIT_BRANCH=["\']?([^"\']+)["\']?', content, re.MULTILINE)
                   branch = branch_m.group(1) if branch_m else "HEAD"
                   new_commit = get_latest_commit(f"https://github.com/{repo}.git", branch)
@@ -129,9 +143,14 @@ jobs:
                       if new_content != content:
                           ebuild_path.write_text(new_content, encoding="utf-8")
                           updated_atoms.add(pkg_cat_name)
+                          print(f"  [+] Bumped live commit on {branch} to: {new_commit}")
+                      else:
+                          print("  [-] Commit hash already up to date.")
               else:
                   curr_ver_m = re.search(rf'{re.escape(pkg_dir.parts[-1])}-(\d+(?:\.\d+)*[a-z]?(?:_(?:alpha|beta|pre|rc|p)\d*)?(?:-r\d+)?)\.ebuild$', ebuild_path.name)
-                  if not curr_ver_m: continue
+                  if not curr_ver_m:
+                      print("  [!] Could not extract current version.")
+                      continue
                   curr_ver = curr_ver_m.group(1)
                   latest_ver = get_latest_github_release(repo)
                   if latest_ver:
@@ -140,6 +159,11 @@ jobs:
                           new_path = pkg_dir / f"{pkg_dir.parts[-1]}-{latest_ver}.ebuild"
                           ebuild_path.rename(new_path)
                           updated_atoms.add(pkg_cat_name)
+                          print(f"  [+] Renamed to: {new_path.name}")
+                      else:
+                          print("  [-] Already up to date.")
+                  else:
+                      print("  [!] Failed to pull latest version from API.")
 
           changed_list = sorted(updated_atoms)
           if changed_list:
@@ -147,8 +171,10 @@ jobs:
           with open(os.environ['GITHUB_OUTPUT'], 'a') as f:
               f.write(f"changed_packages={'true' if changed_list else 'false'}\n")
           EOF
+          
+          python3 -u scan.py
 
-      - name: Phase 2 - Combined Portage Operations (Manifests & Resolution)
+      - name: Phase 2 - Combined Portage Operations
         run: |
           cat > gentoo_ops.sh << 'EOF'
           #!/bin/bash
@@ -223,13 +249,13 @@ jobs:
           chmod +x gentoo_ops.sh
           docker run --rm -v "${{ github.workspace }}:/overlay" gentoo/stage3:amd64-desktop-openrc bash /overlay/gentoo_ops.sh
 
-      - name: Phase 3 - Commit All Changes
+      - name: Phase 3 - Commit Changes
         run: |
           git config user.name "github-actions[bot]"
           git config user.email "github-actions[bot]@users.noreply.github.com"
           
-          echo -e "changed_packages.txt\npackages_to_build.txt\ngentoo_ops.sh\ndesired_state.txt" > .gitignore
-          git rm --cached changed_packages.txt packages_to_build.txt desired_state.txt 2>/dev/null || true
+          echo -e "scan.py\nchanged_packages.txt\npackages_to_build.txt\ngentoo_ops.sh\ndesired_state.txt" > .gitignore
+          git rm --cached scan.py changed_packages.txt packages_to_build.txt desired_state.txt 2>/dev/null || true
           
           git add -A
           if ! git diff --cached --quiet; then
