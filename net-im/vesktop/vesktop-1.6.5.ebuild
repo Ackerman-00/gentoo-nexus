@@ -15,12 +15,15 @@ inherit chromium-2 desktop linux-info optfeature unpacker xdg
 
 DESCRIPTION="All-in-one voice and text chat for gamers with Vencord Preinstalled"
 HOMEPAGE="https://github.com/Vencord/Vesktop/"
+
+# Adopting the Void Linux strategy: Use the .deb to natively acquire all icons and desktop files
 SRC_URI="
-    amd64? ( https://github.com/Vencord/Vesktop/releases/download/v${PV}/${MY_PN}-${PV}.tar.gz )
-    arm64? ( https://github.com/Vencord/Vesktop/releases/download/v${PV}/${MY_PN}-${PV}-arm64.tar.gz )
-    https://raw.githubusercontent.com/Vencord/Vesktop/v${PV}/static/icon.png -> ${MY_PN}.png
+    amd64? ( https://github.com/Vencord/Vesktop/releases/download/v${PV}/${MY_PN}_${PV}_amd64.deb -> ${P}-amd64.deb )
+    arm64? ( https://github.com/Vencord/Vesktop/releases/download/v${PV}/${MY_PN}_${PV}_arm64.deb -> ${P}-arm64.deb )
 "
-S="${WORKDIR}/${MY_PN}-${PV}"
+
+# The unpacker eclass extracts the .deb data payload directly into the root WORKDIR
+S="${WORKDIR}"
 
 LICENSE="GPL-3+"
 SLOT="0"
@@ -54,22 +57,24 @@ DEPEND="
     x11-misc/xdg-utils
 "
 
-# Installed specifically to MY_PN to prevent path breakage from the "-bin" suffix
-DESTDIR="/opt/${MY_PN}"
+# The .deb natively installs to /opt/Vesktop
+DESTDIR="/opt/Vesktop"
 
 QA_PREBUILT="*"
 
 CONFIG_CHECK="~USER_NS"
 
 src_unpack() {
-    # Only unpack the architecture tarballs, completely ignoring the fetched PNG
-    if use amd64; then
-        unpack ${MY_PN}-${PV}.tar.gz
-    elif use arm64; then
-        unpack ${MY_PN}-${PV}-arm64.tar.gz
-        # Normalize the arm64 directory name so the global S variable never breaks
-        mv "${WORKDIR}/${MY_PN}-${PV}-arm64" "${WORKDIR}/${MY_PN}-${PV}" || die
-    fi
+    # This single command natively cracks open the .deb and data.tar payloads
+    unpack_deb ${A}
+}
+
+src_prepare() {
+    default
+    
+    # The official .deb desktop file expects the binary to be named "vesktop".
+    # Since we symlink it to "vesktop-bin" to match your package name, we patch the Exec line.
+    sed -i 's/Exec=vesktop/Exec=vesktop-bin/g' usr/share/applications/vesktop.desktop || die "failed to patch desktop file"
 }
 
 src_configure() {
@@ -80,21 +85,22 @@ src_configure() {
 src_install() {
     local destdir="${DESTDIR}"
 
-    # 1. Self-contained Desktop file (No local files required)
-    make_desktop_entry "/usr/bin/vesktop-bin %U" "Vesktop" "${MY_PN}" "Network;InstantMessaging;Chat" "MimeType=x-scheme-handler/discord;"
-
-    # 2. Install the icon we fetched dynamically via SRC_URI
-    doicon -s 256 "${DISTDIR}/${MY_PN}.png"
-
-    # 3. Use dodir and cp to preserve upstream executable bits
+    # 1. Install the main app payload (preserving executable bits for Node modules)
     dodir "${destdir}"
-    cp -pPR * "${ED}${destdir}/" || die "failed to copy vesktop files"
+    cp -pPR opt/Vesktop/* "${ED}${destdir}/" || die "failed to copy vesktop files"
 
-    # 4. Chrome-sandbox permissions for the Electron sandbox
+    # 2. Install Desktop entries and Icons directly from the .deb
+    insinto /usr/share/applications
+    doins usr/share/applications/*.desktop
+
+    dodir /usr/share/icons
+    cp -pPR usr/share/icons/* "${ED}/usr/share/icons/" || die "failed to copy icons"
+
+    # 3. Fix the chrome-sandbox permissions for the Electron sandbox
     fowners root "${destdir}/chrome-sandbox"
     fperms 4711 "${destdir}/chrome-sandbox"
 
-    # 5. Create the execution symlink targeting the wrapper
+    # 4. Create the execution symlink targeting the wrapper
     dosym "${destdir}/vesktop" "/usr/bin/vesktop-bin"
 }
 
