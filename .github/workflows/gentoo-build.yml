@@ -138,13 +138,14 @@ jobs:
 
           getuto 2>/dev/null || emerge -q --oneshot app-crypt/gentoo-keys 2>/dev/null || true
 
+          # ── make.conf ───────────────────────────────────────────
           cat > /etc/portage/make.conf << 'MAKECONF'
           COMMON_FLAGS="-O2 -march=x86-64-v3 -mtune=znver3 -pipe"
           VIDEO_CARDS="amdgpu radeonsi nvidia nouveau"
           CFLAGS="${COMMON_FLAGS}"
           CXXFLAGS="${COMMON_FLAGS}"
           USE="vaapi vdpau vulkan amdgpu ffmpeg encode nvenc elogind egl -systemd -cups abi_x86_32"
-          FEATURES="getbinpkg buildpkg parallel-install -binpkg-verify-signature -sandbox -usersandbox -ipc-sandbox -network-sandbox -pid-sandbox"
+          FEATURES="getbinpkg buildpkg parallel-install binpkg-ignore-chost -binpkg-verify-signature -sandbox -usersandbox -ipc-sandbox -network-sandbox -pid-sandbox"
           BINPKG_FORMAT="gpkg"
           PKGDIR="/var/cache/binpkgs"
           DISTDIR="/var/cache/distfiles"
@@ -154,6 +155,7 @@ jobs:
           MAKEOPTS="-j4"
           MAKECONF
 
+          # ── Repositories ────────────────────────────────────────
           cat > /etc/portage/repos.conf/gentoo-nexus.conf << 'REPO'
           [gentoo-nexus]
           location = /var/db/repos/gentoo-nexus
@@ -162,18 +164,26 @@ jobs:
           auto-sync = no
           REPO
 
+          # ── Official Gentoo binhosts (x86-64-v3 primary, x86-64 fallback) ──
           mkdir -p /etc/portage/binrepos.conf
           cat > /etc/portage/binrepos.conf/gentoo-official.conf << 'BINHOST'
+          [gentoo-official-v3]
+          priority = 5
+          sync-uri = https://distfiles.gentoo.org/releases/amd64/binpackages/23.0/x86-64-v3/
+          verify-signature = false
+
           [gentoo-official]
           priority = 1
           sync-uri = https://distfiles.gentoo.org/releases/amd64/binpackages/23.0/x86-64/
           verify-signature = false
           BINHOST
 
+          # ── Package keywords ────────────────────────────────────
           mkdir -p /etc/portage/package.accept_keywords
           echo '*/*::gentoo-nexus **' > /etc/portage/package.accept_keywords/nexus
           echo 'net-libs/webkit-gtk -~amd64 amd64' > /etc/portage/package.accept_keywords/stable-binary
 
+          # ── Package USE flags ───────────────────────────────────
           mkdir -p /etc/portage/package.use
           cat > /etc/portage/package.use/nexus << 'USES'
           media-libs/opus abi_x86_64
@@ -189,9 +199,11 @@ jobs:
           sys-libs/zlib-ng abi_x86_32 abi_x86_64 compat
           USES
 
+          # ── libgit2 mask for cargo-c/rustup ────────────────────
           mkdir -p /etc/portage/package.mask
           echo '>=dev-libs/libgit2-1.9.3' > /etc/portage/package.mask/libgit2
 
+          # ── Regenerate index and manifests ─────────────────────
           echo ">>> Regenerating Packages index..."
           emaint binhost --fix
 
@@ -200,38 +212,61 @@ jobs:
               ebuild "$ebuild_file" manifest >/dev/null 2>&1 || true
           done
 
+          # ═══════════════════════════════════════════════════════
+          #  STEP 1 — Binary-only fast path
+          # ═══════════════════════════════════════════════════════
           echo ">>> Attempting binary-only install of: $1"
           if emerge --usepkgonly --getbinpkg --binpkg-respect-use=n "$1" 2>&1; then
               echo ">>> SUCCESS: Target installed entirely from binary cache."
               emaint binhost --fix
               exit 0
           fi
+          echo ">>> Binary-only failed. Attempting full build..."
 
-          echo ">>> Binary-only failed. Checking for circular dependencies..."
-          if emerge --pretend --usepkg --getbinpkg "$1" 2>&1 | grep -q "circular dependencies"; then
+          # ═══════════════════════════════════════════════════════
+          #  STEP 2 — Try full build, catch circular deps
+          # ═══════════════════════════════════════════════════════
+          EMERGE_ERR=$(mktemp)
+          emerge --oneshot --usepkg --getbinpkg --buildpkg --binpkg-respect-use=n \
+            --quiet-build=y --keep-going \
+            --autounmask=y --autounmask-write --autounmask-continue=y \
+            "$1" 2> "$EMERGE_ERR"
+          BUILD_EXIT=$?
+
+          if [ $BUILD_EXIT -ne 0 ] && grep -q "circular dependencies" "$EMERGE_ERR"; then
               echo ">>> Circular dependency detected — applying 4-step bootstrap..."
 
+              # Step 1: libsdl2 WITHOUT pipewire
+              echo ">>> [BOOTSTRAP 1/4] libsdl2 without pipewire..."
               USE="-pipewire" emerge --oneshot --usepkg --getbinpkg --buildpkg --quiet-build=y \
                 media-libs/libsdl2 || true
 
+              # Step 2: ffmpeg with SDL (pipewire not in libsdl2 yet)
+              echo ">>> [BOOTSTRAP 2/4] ffmpeg with SDL..."
               emerge --oneshot --usepkg --getbinpkg --buildpkg --quiet-build=y \
                 media-video/ffmpeg || true
 
+              # Step 3: pipewire with ffmpeg (cycle broken)
+              echo ">>> [BOOTSTRAP 3/4] pipewire with ffmpeg..."
               emerge --oneshot --usepkg --getbinpkg --buildpkg --quiet-build=y \
                 media-video/pipewire || true
 
+              # Step 4: libsdl2 WITH pipewire restored
+              echo ">>> [BOOTSTRAP 4/4] libsdl2 with pipewire..."
               emerge --oneshot --usepkg --getbinpkg --buildpkg --quiet-build=y \
                 media-libs/libsdl2 || true
-          else
-              echo ">>> No circular dependency detected. Proceeding with normal build."
+
+              # Retry build after bootstrap
+              echo ">>> Retrying target build after bootstrap..."
+              emerge --oneshot --usepkg --getbinpkg --buildpkg --binpkg-respect-use=n \
+                --quiet-build=y --keep-going \
+                --autounmask=y --autounmask-write --autounmask-continue=y \
+                "$1" || echo ">>> WARNING: Build failed even after bootstrap. Saving partial binaries..."
+          elif [ $BUILD_EXIT -ne 0 ]; then
+              echo ">>> WARNING: emerge exited with code $BUILD_EXIT (not circular deps). Saving partial binaries..."
           fi
 
-          echo ">>> Building target: $1"
-          emerge --oneshot --usepkg --getbinpkg --buildpkg --binpkg-respect-use=n \
-            --quiet-build=y --keep-going \
-            --autounmask=y --autounmask-write --autounmask-continue=y "$1" || {
-            echo ">>> WARNING: emerge exited with non-zero code. Saving partial binaries..."
-          }
+          rm -f "$EMERGE_ERR"
 
           echo ">>> Finalising Packages index..."
           emaint binhost --fix
