@@ -18,6 +18,7 @@ HOMEPAGE="https://github.com/Vencord/Vesktop/"
 SRC_URI="
     amd64? ( https://github.com/Vencord/Vesktop/releases/download/v${PV}/${MY_PN}-${PV}.tar.gz )
     arm64? ( https://github.com/Vencord/Vesktop/releases/download/v${PV}/${MY_PN}-${PV}-arm64.tar.gz )
+    https://raw.githubusercontent.com/Vencord/Vesktop/v${PV}/build/icon.png -> ${MY_PN}.png
 "
 S="${WORKDIR}/${MY_PN}-${PV}"
 
@@ -47,7 +48,6 @@ DEPEND="
     x11-libs/libXext
     x11-libs/libXfixes
     x11-libs/libXrandr
-    x11-libs/libdrm
     x11-libs/libxcb
     x11-libs/libxkbcommon
     x11-libs/pango
@@ -62,8 +62,14 @@ QA_PREBUILT="*"
 CONFIG_CHECK="~USER_NS"
 
 src_unpack() {
-    default
-    use arm64 && S="${WORKDIR}/${MY_PN}-${PV}-arm64"
+    # Only unpack the architecture tarballs, completely ignoring the fetched PNG
+    if use amd64; then
+        unpack ${MY_PN}-${PV}.tar.gz
+    elif use arm64; then
+        unpack ${MY_PN}-${PV}-arm64.tar.gz
+        # Normalize the arm64 directory name so the global S variable never breaks
+        mv "${WORKDIR}/${MY_PN}-${PV}-arm64" "${WORKDIR}/${MY_PN}-${PV}" || die
+    fi
 }
 
 src_configure() {
@@ -74,24 +80,26 @@ src_configure() {
 src_install() {
     local destdir="${DESTDIR}"
 
-    # Install the desktop file and icon from your overlay's FILESDIR
-    doicon -s 256 "${FILESDIR}/vesktop-bin.svg"
-    domenu "${FILESDIR}/vesktop.desktop"
+    # 1. Self-contained Desktop file (No local files required)
+    make_desktop_entry "/usr/bin/vesktop-bin %U" "Vesktop" "${MY_PN}" "Network;InstantMessaging;Chat" "MimeType=x-scheme-handler/discord;"
 
-    # 1. Use dodir and cp to preserve upstream executable bits
-    # This prevents doins from breaking the node modules inside resources/app.asar.unpacked
+    # 2. Install the icon we fetched dynamically via SRC_URI
+    doicon -s 256 "${DISTDIR}/${MY_PN}.png"
+
+    # 3. Use dodir and cp to preserve upstream executable bits
     dodir "${destdir}"
     cp -pPR * "${ED}${destdir}/" || die "failed to copy vesktop files"
 
-    # 2. Fix the chrome-sandbox permissions for the Electron sandbox
+    # 4. Chrome-sandbox permissions for the Electron sandbox
     fowners root "${destdir}/chrome-sandbox"
     fperms 4711 "${destdir}/chrome-sandbox"
 
-    # 3. Create the execution symlink targeting the wrapper
+    # 5. Create the execution symlink targeting the wrapper
     dosym "${destdir}/vesktop" "/usr/bin/vesktop-bin"
 }
 
 pkg_postinst() {
-    optfeature "Desktop notifications support" x11-libs/libnotify
     xdg_pkg_postinst
+    optfeature "Desktop notifications support" x11-libs/libnotify
+    optfeature "Text-to-Speech (TTS) support" app-accessibility/speech-dispatcher
 }
