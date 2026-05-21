@@ -4,10 +4,15 @@ on:
   workflow_dispatch:
     inputs:
       package_list:
-        description: 'Space-separated list of package atoms (e.g. =app-editors/zed-1.2.6 or app-editors/zed)'
+        description: |
+          Space-separated package atoms. Accepts any of:
+            app-editors/zed                    → latest ~amd64 from portage tree
+            =app-editors/zed-1.3.5            → exact version
+            sys-devel/gcc-16.1.0              → cat/pn-ver shorthand (= is added)
+            https://gitweb.gentoo.org/...ebuild → full gitweb URL
         required: true
       force_rebuild:
-        description: 'List of specific packages to force rebuild (or "true" for all)'
+        description: 'Packages to force rebuild (or "true" for all)'
         type: string
         required: false
         default: ""
@@ -64,8 +69,6 @@ jobs:
 
       - name: Restore GPKG Layout from Packages Index
         run: |
-          # Parse CPV and URI directly from the Packages index — no Docker, no portage API needed.
-          # CPV format: cat/pn-ver   URI format: pn-ver-buildid.gpkg.tar (flat, at root of binpkgs/)
           python3 << 'PYEOF'
           import os, shutil, re
 
@@ -78,60 +81,88 @@ jobs:
               content = f.read()
 
           moved = 0
-          skipped = 0
           for block in content.split('\n\n'):
-              cpv_match = re.search(r'^CPV: (.+)$', block, re.MULTILINE)
-              # URI field holds the bare filename as uploaded (flat)
-              uri_match = re.search(r'^URI: ([^\s/]+\.gpkg\.tar)$', block, re.MULTILINE)
-              if not (cpv_match and uri_match):
-                  skipped += 1
+              cpv_m = re.search(r'^CPV: (.+)$', block, re.MULTILINE)
+              uri_m = re.search(r'^URI: ([^\s/]+\.gpkg\.tar)$', block, re.MULTILINE)
+              if not (cpv_m and uri_m):
                   continue
-
-              cpv  = cpv_match.group(1).strip()   # e.g. app-editors/zed-1.2.6
-              uri  = uri_match.group(1).strip()    # e.g. zed-1.2.6-1.gpkg.tar
-
+              cpv = cpv_m.group(1).strip()
+              uri = uri_m.group(1).strip()
               if '/' not in cpv:
                   continue
               cat, pn_ver = cpv.split('/', 1)
-              # Strip version suffix to get bare pn (split on first digit group after a dash)
-              pn_match = re.match(r'^([a-zA-Z0-9_+.-]+?)(?:-\d)', pn_ver)
-              pn = pn_match.group(1) if pn_match else pn_ver
-
-              src      = os.path.join('binpkgs', uri)
+              pn_m = re.match(r'^([a-zA-Z0-9_+.-]+?)(?:-\d)', pn_ver)
+              pn = pn_m.group(1) if pn_m else pn_ver
+              src = os.path.join('binpkgs', uri)
               dest_dir = os.path.join('binpkgs', cat, pn)
-              dest     = os.path.join(dest_dir, uri)
-
-              if not os.path.exists(src):
-                  continue   # already moved or not downloaded
-              if src == dest:
+              dest = os.path.join(dest_dir, uri)
+              if not os.path.exists(src) or src == dest:
                   continue
-
               os.makedirs(dest_dir, exist_ok=True)
               shutil.move(src, dest)
               print(f"  Restored: {cat}/{pn}/{uri}")
               moved += 1
 
-          print(f"Layout restore complete: {moved} moved, {skipped} blocks skipped.")
+          print(f"Layout restore: {moved} files repositioned.")
           PYEOF
 
       - name: Fix Workspace Permissions
         run: sudo chown -R "$(id -u):$(id -g)" "${{ github.workspace }}"
 
-      - name: Parse Queue & Target Evaluation
+      - name: Parse Queue & Normalize Targets
         id: queue
         run: |
-          read -r -a PKGS <<< "${{ github.event.inputs.package_list }}"
-          # BUG FIX: was `${PKGS:-}` which stringifies the whole array; must index [0]
-          TARGET="${PKGS[0]:-}"
-          echo "REMAINING_PKGS=${PKGS[*]:1}" >> "$GITHUB_OUTPUT"
+          raw_input="${{ github.event.inputs.package_list }}"
+          read -r -a RAW_PKGS <<< "$raw_input"
+
+          normalize_target() {
+            local t="$1"
+
+            # Form 1: Full gitweb URL
+            # https://gitweb.gentoo.org/repo/gentoo.git/tree/cat/pn/pn-ver.ebuild
+            if [[ "$t" == https://gitweb.gentoo.org/*/tree/* ]]; then
+              t=$(echo "$t" | sed -E 's|.*/tree/([^/]+)/([^/]+)/\2-([^/]+)\.ebuild$|=\1/\2-\3|')
+              echo "$t"
+              return
+            fi
+
+            # Form 2: Already prefixed with =
+            if [[ "$t" == =* ]]; then
+              echo "$t"
+              return
+            fi
+
+            # Form 3: cat/pn-version shorthand (has a version number, no =)
+            # e.g. sys-devel/gcc-16.1.0  or  app-editors/zed-1.3.5
+            if echo "$t" | grep -qE '^[a-z][a-z0-9_+-]+/[a-zA-Z0-9_+.-]+-[0-9]'; then
+              echo "=${t}"
+              return
+            fi
+
+            # Form 4: Bare category/package — "always latest" mode
+            # e.g. app-editors/zed, dev-util/rustup
+            # Pass as-is; the build container will resolve via portageq best_visible
+            # using the full ~amd64 portage tree (not the stale official binhost index)
+            echo "$t"
+          }
+
+          NORMALIZED=()
+          for raw in "${RAW_PKGS[@]}"; do
+            norm=$(normalize_target "$raw")
+            NORMALIZED+=("$norm")
+          done
+
+          TARGET="${NORMALIZED[0]:-}"
+          REMAINING="${NORMALIZED[*]:1}"
+
+          echo "TARGET_PKG=$TARGET" >> "$GITHUB_OUTPUT"
+          echo "REMAINING_PKGS=$REMAINING" >> "$GITHUB_OUTPUT"
 
           if [ -z "$TARGET" ]; then
             echo "skip_compile=true" >> "$GITHUB_OUTPUT"
-            echo "TARGET_PKG=" >> "$GITHUB_OUTPUT"
             exit 0
           fi
 
-          echo "TARGET_PKG=$TARGET" >> "$GITHUB_OUTPUT"
           CPV="${TARGET#=}"
 
           # Live ebuilds always rebuild
@@ -140,9 +171,14 @@ jobs:
             exit 0
           fi
 
+          # Bare atom — always build (version unknown until container resolves it)
+          if [[ "$TARGET" != =* ]]; then
+            echo "skip_compile=false" >> "$GITHUB_OUTPUT"
+            exit 0
+          fi
+
           FORCE="${{ github.event.inputs.force_rebuild }}"
           if [[ "$FORCE" == "true" || "$FORCE" == *"${CPV%%/*}"* ]]; then
-            # Purge old binaries for this cat/pn
             CAT="${CPV%%/*}"
             PN_VER="${CPV#*/}"
             PN="${PN_VER%%-[0-9]*}"
@@ -168,7 +204,7 @@ jobs:
           #!/bin/bash
           set -euo pipefail
 
-          TARGET="$1"
+          RAW_TARGET="$1"
 
           echo ">>> Syncing Gentoo ebuild repository..."
           mkdir -p /var/db/repos/gentoo /etc/portage/repos.conf
@@ -251,6 +287,21 @@ jobs:
               ebuild "$ebuild_file" manifest >/dev/null 2>&1 || true
           done < <(find /var/db/repos/gentoo-nexus -mindepth 2 -maxdepth 3 -name "*.ebuild" -print0)
 
+          # ── Resolve "always latest" bare atoms via the portage tree ──────────────
+          # This queries the LIVE portage tree (post emerge-webrsync), not the stale
+          # official binhost index. So app-editors/zed resolves to 1.3.5, not 0.230.1.
+          TARGET="$RAW_TARGET"
+          if [[ "$TARGET" != =* && "$TARGET" != *"-9999" ]]; then
+            echo ">>> Bare atom detected: $TARGET — resolving latest ~amd64 version..."
+            RESOLVED=$(portageq best_visible / "$TARGET" 2>/dev/null || true)
+            if [ -n "$RESOLVED" ] && [[ "$RESOLVED" == */* ]]; then
+              TARGET="=${RESOLVED}"
+              echo ">>> Resolved to: $TARGET"
+            else
+              echo ">>> WARNING: portageq could not resolve $TARGET — using as-is"
+            fi
+          fi
+
           echo ">>> Pre-resolving common soft blocks..."
           emerge --oneshot --getbinpkg --backtrack=30 --quiet-build=y \
             '>=dev-libs/gobject-introspection-1.86.0' 2>/dev/null || true
@@ -260,14 +311,13 @@ jobs:
           # ── STEP 1: Binary-only fast path ────────────────────────────────────────
           echo ">>> Attempting binary-only install of: ${TARGET}"
           if emerge --usepkgonly --getbinpkg --backtrack=30 --binpkg-respect-use=n "${TARGET}" 2>&1; then
-              echo ">>> SUCCESS: Installed entirely from binary cache."
-              emaint binhost --fix
-              exit 0
+            echo ">>> SUCCESS: Installed entirely from binary cache."
+            emaint binhost --fix
+            exit 0
           fi
-          echo ">>> Binary-only path failed — falling back to full build..."
+          echo ">>> Binary-only path failed — falling back to full source build..."
 
           # ── STEP 2: Full build with circular-dep detection ───────────────────────
-          # Capture exit code from emerge side of the pipe correctly via PIPESTATUS[0]
           set +e
           emerge --oneshot --usepkg --getbinpkg --buildpkg --backtrack=30 \
             --binpkg-respect-use=n --quiet-build=y --keep-going \
@@ -277,25 +327,24 @@ jobs:
           set -e
 
           if [ "$BUILD_EXIT" -ne 0 ]; then
-              if grep -q "circular dependencies" /tmp/emerge.log; then
-                  echo ">>> Circular dependency detected — applying 4-step multimedia bootstrap..."
-                  USE="-pipewire" emerge --oneshot --usepkg --getbinpkg --buildpkg \
-                    --backtrack=30 --quiet-build=y media-libs/libsdl2 || true
-                  emerge --oneshot --usepkg --getbinpkg --buildpkg \
-                    --backtrack=30 --quiet-build=y media-video/ffmpeg || true
-                  emerge --oneshot --usepkg --getbinpkg --buildpkg \
-                    --backtrack=30 --quiet-build=y media-video/pipewire || true
-                  emerge --oneshot --usepkg --getbinpkg --buildpkg \
-                    --backtrack=30 --quiet-build=y media-libs/libsdl2 || true
-
-                  echo ">>> Retrying target after bootstrap..."
-                  emerge --oneshot --usepkg --getbinpkg --buildpkg --backtrack=30 \
-                    --binpkg-respect-use=n --quiet-build=y --keep-going \
-                    --autounmask=y --autounmask-write --autounmask-continue=y \
-                    "${TARGET}" || echo ">>> WARNING: Build failed after bootstrap. Saving partial binaries."
-              else
-                  echo ">>> WARNING: emerge exited ${BUILD_EXIT}. Saving any partial binaries."
-              fi
+            if grep -q "circular dependencies" /tmp/emerge.log; then
+              echo ">>> Circular dependency detected — applying multimedia bootstrap..."
+              USE="-pipewire" emerge --oneshot --usepkg --getbinpkg --buildpkg \
+                --backtrack=30 --quiet-build=y media-libs/libsdl2 || true
+              emerge --oneshot --usepkg --getbinpkg --buildpkg \
+                --backtrack=30 --quiet-build=y media-video/ffmpeg || true
+              emerge --oneshot --usepkg --getbinpkg --buildpkg \
+                --backtrack=30 --quiet-build=y media-video/pipewire || true
+              emerge --oneshot --usepkg --getbinpkg --buildpkg \
+                --backtrack=30 --quiet-build=y media-libs/libsdl2 || true
+              echo ">>> Retrying target after bootstrap..."
+              emerge --oneshot --usepkg --getbinpkg --buildpkg --backtrack=30 \
+                --binpkg-respect-use=n --quiet-build=y --keep-going \
+                --autounmask=y --autounmask-write --autounmask-continue=y \
+                "${TARGET}" || echo ">>> WARNING: Build failed after bootstrap. Saving partial binaries."
+            else
+              echo ">>> WARNING: emerge exited ${BUILD_EXIT}. Saving any partial binaries."
+            fi
           fi
 
           echo ">>> Finalising Packages index..."
