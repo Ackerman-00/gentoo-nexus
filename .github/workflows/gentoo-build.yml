@@ -119,13 +119,13 @@ jobs:
           CFLAGS="${COMMON_FLAGS}"
           CXXFLAGS="${COMMON_FLAGS}"
           USE="vaapi vdpau vulkan amdgpu ffmpeg encode nvenc elogind egl -systemd -cups abi_x86_32"
-          FEATURES="buildpkg parallel-install -binpkg-verify-signature -sandbox -usersandbox -ipc-sandbox -network-sandbox -pid-sandbox"
+          FEATURES="getbinpkg buildpkg parallel-install -binpkg-verify-signature -sandbox -usersandbox -ipc-sandbox -network-sandbox -pid-sandbox"
           BINPKG_FORMAT="gpkg"
           PKGDIR="/var/cache/binpkgs"
           DISTDIR="/var/cache/distfiles"
           ACCEPT_LICENSE="*"
           ACCEPT_KEYWORDS="~amd64"
-          EMERGE_DEFAULT_OPTS="--usepkg --buildpkg --binpkg-respect-use=y --quiet-build=y --jobs=4 --load-average=4 --keep-going"
+          EMERGE_DEFAULT_OPTS="--usepkg --buildpkg --getbinpkg --binpkg-respect-use=y --quiet-build=y --jobs=4 --load-average=4 --keep-going"
           MAKEOPTS="-j4"
           MAKECONF
 
@@ -136,6 +136,14 @@ jobs:
           priority = 9999
           auto-sync = no
           REPOCONF
+
+          mkdir -p /etc/portage/binrepos.conf
+          cat > /etc/portage/binrepos.conf/gentoobinhost.conf << 'BINHOST'
+          [gentoobinhost]
+          priority = 1
+          sync-uri = https://distfiles.gentoo.org/releases/amd64/binpackages/23.0/x86-64/
+          verify-signature = false
+          BINHOST
 
           cat > /etc/portage/package.accept_keywords/nexus << 'KEYS'
           */*::gentoo-nexus **
@@ -158,24 +166,35 @@ jobs:
 
           echo '>=dev-libs/libgit2-1.9.3' > /etc/portage/package.mask/libgit2
 
-          if ! ls /var/cache/binpkgs/*/webkit-gtk/*.gpkg.tar >/dev/null 2>&1; then
-              mkdir -p /etc/portage/binrepos.conf
-              cat > /etc/portage/binrepos.conf/gentoo.conf << 'BINHOST'
-          [gentoo]
-          priority = 1
-          sync-uri = https://distfiles.gentoo.org/releases/amd64/binpackages/23.0/x86-64/
-          BINHOST
-              emerge --getbinpkgonly --quiet-build=y net-libs/webkit-gtk || true
-              rm -f /etc/portage/binrepos.conf/gentoo.conf
-          fi
-
           emaint binhost --fix
 
           for e in $(find /var/db/repos/gentoo-nexus -mindepth 2 -maxdepth 3 -name "*.ebuild"); do
               ebuild "$e" manifest >/dev/null 2>&1 || true
           done
 
-          emerge --oneshot --autounmask=y --autounmask-write --autounmask-continue=y "$1" || true
+          if [[ "$1" == *"mesa"* || "$1" == *"wayland"* || "$1" == *"vulkan"* ]]; then
+              emerge --oneshot --usepkg --buildpkg --quiet-build=y '>=dev-libs/wayland-1.25.0' '>=dev-util/wayland-scanner-1.25.0' || true
+          fi
+
+          if [[ "$1" == *"zlib-ng"* ]]; then
+              emerge --oneshot --usepkg --buildpkg --quiet-build=y 'sys-libs/zlib-ng' || true
+          fi
+
+          if [[ "$1" == *"glib"* || "$1" == *"gobject-introspection"* || "$1" == *"gdbus-codegen"* ]]; then
+              emerge --oneshot --usepkg --buildpkg --quiet-build=y dev-libs/glib dev-libs/gobject-introspection dev-util/gdbus-codegen || true
+          fi
+
+          if [[ "$1" == *"libsdl2"* || "$1" == *"ffmpeg"* || "$1" == *"pipewire"* ]]; then
+              if ! emerge --usepkgonly --quiet media-video/pipewire media-video/ffmpeg >/dev/null 2>&1; then
+                  USE="-pipewire" emerge --oneshot --usepkg --buildpkg --quiet-build=y media-libs/libsdl2 || true
+                  emerge --oneshot --usepkg --buildpkg --quiet-build=y media-video/ffmpeg || true
+                  emerge --oneshot --usepkg --buildpkg --quiet-build=y media-video/pipewire || true
+                  emerge --oneshot --usepkg --buildpkg --quiet-build=y media-libs/libsdl2 || true
+              fi
+          fi
+
+          emerge --oneshot --usepkg --getbinpkg --buildpkg --binpkg-respect-use=y --quiet-build=y --keep-going \
+            --autounmask=y --autounmask-write --autounmask-continue=y "$1" || true
 
           emaint binhost --fix
           EOF
