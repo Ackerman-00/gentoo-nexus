@@ -138,20 +138,21 @@ jobs:
 
           getuto 2>/dev/null || emerge -q --oneshot app-crypt/gentoo-keys 2>/dev/null || true
 
-          # ── make.conf ───────────────────────────────────────────
+          # ── make.conf (ACCEPT_CHOSTS replaces the nonexistent binpkg-ignore-chost) ──
           cat > /etc/portage/make.conf << 'MAKECONF'
           COMMON_FLAGS="-O2 -march=x86-64-v3 -mtune=znver3 -pipe"
           VIDEO_CARDS="amdgpu radeonsi nvidia nouveau"
           CFLAGS="${COMMON_FLAGS}"
           CXXFLAGS="${COMMON_FLAGS}"
           USE="vaapi vdpau vulkan amdgpu ffmpeg encode nvenc elogind egl -systemd -cups abi_x86_32"
-          FEATURES="getbinpkg buildpkg parallel-install binpkg-ignore-chost -binpkg-verify-signature -sandbox -usersandbox -ipc-sandbox -network-sandbox -pid-sandbox"
+          FEATURES="getbinpkg buildpkg parallel-install -binpkg-verify-signature -sandbox -usersandbox -ipc-sandbox -network-sandbox -pid-sandbox"
           BINPKG_FORMAT="gpkg"
           PKGDIR="/var/cache/binpkgs"
           DISTDIR="/var/cache/distfiles"
           ACCEPT_LICENSE="*"
           ACCEPT_KEYWORDS="~amd64"
-          EMERGE_DEFAULT_OPTS="--usepkg --getbinpkg --buildpkg --binpkg-respect-use=n --quiet-build=y --jobs=4 --load-average=4 --keep-going"
+          ACCEPT_CHOSTS="x86_64-pc-linux-gnu"
+          EMERGE_DEFAULT_OPTS="--usepkg --getbinpkg --buildpkg --binpkg-respect-use=n --quiet-build=y --jobs=4 --load-average=4 --keep-going --backtrack=30"
           MAKEOPTS="-j4"
           MAKECONF
 
@@ -213,7 +214,17 @@ jobs:
           done
 
           # ═══════════════════════════════════════════════════════
-          #  STEP 1 — Binary-only fast path
+          #  STEP 0 — Pre-resolve common soft blocks (glib/gobject-introspection)
+          #           by upgrading the blocking package first.
+          # ═══════════════════════════════════════════════════════
+          echo ">>> Pre-resolving common blocks..."
+          emerge --oneshot --getbinpkg --quiet-build=y \
+            '>=dev-libs/gobject-introspection-1.86.0' 2>/dev/null || true
+          emerge --oneshot --getbinpkg --quiet-build=y \
+            '>=dev-util/gdbus-codegen-2.88.1' 2>/dev/null || true
+
+          # ═══════════════════════════════════════════════════════
+          #  STEP 1 — Binary-only fast path (after pre-resolving blockers)
           # ═══════════════════════════════════════════════════════
           echo ">>> Attempting binary-only install of: $1"
           if emerge --usepkgonly --getbinpkg --binpkg-respect-use=n "$1" 2>&1; then
@@ -224,7 +235,7 @@ jobs:
           echo ">>> Binary-only failed. Attempting full build..."
 
           # ═══════════════════════════════════════════════════════
-          #  STEP 2 — Try full build, catch circular deps
+          #  STEP 2 — Try full build with fallback, catch circular deps
           # ═══════════════════════════════════════════════════════
           EMERGE_ERR=$(mktemp)
           emerge --oneshot --usepkg --getbinpkg --buildpkg --binpkg-respect-use=n \
@@ -236,34 +247,25 @@ jobs:
           if [ $BUILD_EXIT -ne 0 ] && grep -q "circular dependencies" "$EMERGE_ERR"; then
               echo ">>> Circular dependency detected — applying 4-step bootstrap..."
 
-              # Step 1: libsdl2 WITHOUT pipewire
-              echo ">>> [BOOTSTRAP 1/4] libsdl2 without pipewire..."
               USE="-pipewire" emerge --oneshot --usepkg --getbinpkg --buildpkg --quiet-build=y \
                 media-libs/libsdl2 || true
 
-              # Step 2: ffmpeg with SDL (pipewire not in libsdl2 yet)
-              echo ">>> [BOOTSTRAP 2/4] ffmpeg with SDL..."
               emerge --oneshot --usepkg --getbinpkg --buildpkg --quiet-build=y \
                 media-video/ffmpeg || true
 
-              # Step 3: pipewire with ffmpeg (cycle broken)
-              echo ">>> [BOOTSTRAP 3/4] pipewire with ffmpeg..."
               emerge --oneshot --usepkg --getbinpkg --buildpkg --quiet-build=y \
                 media-video/pipewire || true
 
-              # Step 4: libsdl2 WITH pipewire restored
-              echo ">>> [BOOTSTRAP 4/4] libsdl2 with pipewire..."
               emerge --oneshot --usepkg --getbinpkg --buildpkg --quiet-build=y \
                 media-libs/libsdl2 || true
 
-              # Retry build after bootstrap
               echo ">>> Retrying target build after bootstrap..."
               emerge --oneshot --usepkg --getbinpkg --buildpkg --binpkg-respect-use=n \
                 --quiet-build=y --keep-going \
                 --autounmask=y --autounmask-write --autounmask-continue=y \
                 "$1" || echo ">>> WARNING: Build failed even after bootstrap. Saving partial binaries..."
           elif [ $BUILD_EXIT -ne 0 ]; then
-              echo ">>> WARNING: emerge exited with code $BUILD_EXIT (not circular deps). Saving partial binaries..."
+              echo ">>> WARNING: emerge exited with code $BUILD_EXIT. Saving partial binaries..."
           fi
 
           rm -f "$EMERGE_ERR"
