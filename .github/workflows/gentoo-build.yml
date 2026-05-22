@@ -108,14 +108,14 @@ jobs:
               path = os.path.join(pkgdir, f)
               base = f[:-9]
               
-              # Append to extract the string from the list returned by rsplit
+              # CRITICAL FIX: Append to extract the string from the list returned by rsplit
               if '-' in base: base = base.rsplit('-', 1)
               
               split_res = pkgsplit(base)
               if not split_res: split_res = pkgsplit(f[:-9])
               
               if split_res:
-                  # pkgsplit returns a tuple; extract the first element (the package name)
+                  # CRITICAL FIX: pkgsplit returns a tuple; extract the first element
                   pn = split_res
                   if pn in pn_to_cat:
                       cat = pn_to_cat[pn]
@@ -156,7 +156,7 @@ jobs:
             NORMALIZED+=("$(normalize_target "$raw")")
           done
 
-          # Use array index to prevent bash splitting errors
+          # Use array index explicitly to prevent bash splitting errors
           TARGET="${NORMALIZED:-}"
           REMAINING="${NORMALIZED[*]:1}"
 
