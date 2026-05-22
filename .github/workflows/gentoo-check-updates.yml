@@ -54,18 +54,13 @@ jobs:
 
           updated_atoms = set()
 
-          # ── Version comparison ────────────────────────────────────────────────────
-          # Many upstream projects use non-PEP-440 version tags (Gentoo _p suffix,
-          # ProtonPlus _N suffix, Obsidian -eN electron suffix). We try PEP-440
-          # first, then fall back to an extended tuple comparison that understands
-          # Gentoo suffix ordering: _alpha < _beta < _pre < _rc < (base) < _p/_N
           _SUFFIX_WEIGHT = {'alpha':-40,'beta':-30,'pre':-20,'rc':-10,'p':10}
 
           def _to_tuple_extended(v):
               v = v.lstrip('v')
-              v_clean = re.sub(r'-e\d+$', '', v)          # strip obsidian -eN
+              v_clean = re.sub(r'-e\d+$', '', v)
               sm = re.search(r'[_-](alpha|beta|pre|rc|p)(\d*)$', v_clean, re.I)
-              nm = re.search(r'_(\d+)$', v_clean)         # ProtonPlus _N style
+              nm = re.search(r'_(\d+)$', v_clean)
               if sm:
                   base = v_clean[:sm.start()]
                   w = _SUFFIX_WEIGHT.get(sm.group(1).lower(), 0)
@@ -78,7 +73,6 @@ jobs:
               return (tuple(int(x) for x in re.findall(r'\d+', base)), w, n)
 
           def ver_gt(a, b):
-              """Return True if version a is strictly greater than b."""
               a, b = a.lstrip('v'), b.lstrip('v')
               try:
                   return parse_version(a) > parse_version(b)
@@ -89,7 +83,6 @@ jobs:
                       return a > b
 
           def ver_eq(a, b):
-              """Return True if version a equals b."""
               a, b = a.lstrip('v'), b.lstrip('v')
               try:
                   return parse_version(a) == parse_version(b)
@@ -99,7 +92,6 @@ jobs:
                   except Exception:
                       return a == b
 
-          # ── GitHub helpers ────────────────────────────────────────────────────────
           def get_latest_github_release(repo):
               best_ver = None
               try:
@@ -146,7 +138,6 @@ jobs:
               except: pass
               return None
 
-          # ── Main scan loop ────────────────────────────────────────────────────────
           for ebuild_path in Path('.').rglob('*.ebuild'):
               if any(x in ebuild_path.parts for x in ['cache','job_out','binpkgs','distfiles','ccache','.github','.git']):
                   continue
@@ -155,7 +146,6 @@ jobs:
               pkg_cat_name = f"{pkg_dir.parts[-2]}/{pkg_dir.parts[-1]}"
               content = ebuild_path.read_text(encoding="utf-8")
 
-              # ── AppImage special case ─────────────────────────────────────────
               if pkg_dir.parts[-1] == "rootapp-bin":
                   print(f"--- Scanning {pkg_cat_name} (AppImage) ---")
                   curr_m = re.search(rf'{re.escape(pkg_dir.parts[-1])}-(\S+?)\.ebuild$', ebuild_path.name)
@@ -177,14 +167,12 @@ jobs:
                       print("  [-] Already up to date.")
                   continue
 
-              # ── GitHub-sourced packages ───────────────────────────────────────
               repo_m = re.search(r'github\.com/([A-Za-z0-9_.-]+/[A-Za-z0-9_.-]+?)(?:\.git|/archive|/releases|/tarball|["\s\'])', content)
               if not repo_m: continue
               repo = repo_m.group(1).rstrip('.')
               print(f"--- Scanning {pkg_cat_name} ({repo}) ---")
 
               if ebuild_path.name.endswith('9999.ebuild'):
-                  # Live ebuild — track latest commit
                   branch_m = re.search(r'^EGIT_BRANCH=["\']?([^"\']+)["\']?', content, re.MULTILINE)
                   branch = branch_m.group(1) if branch_m else "HEAD"
                   new_commit = get_latest_commit(f"https://github.com/{repo}.git", branch)
@@ -198,7 +186,6 @@ jobs:
                       else:
                           print("  [-] Commit hash already up to date.")
               else:
-                  # Tagged release — compare versions
                   curr_m = re.search(rf'{re.escape(pkg_dir.parts[-1])}-(\S+?)\.ebuild$', ebuild_path.name)
                   if not curr_m:
                       print("  [!] Could not extract current version.")
@@ -208,11 +195,8 @@ jobs:
                   if not latest_ver:
                       print("  [!] Failed to pull latest version from API.")
                       continue
-
-                  # Package-specific fixups
                   if pkg_dir.parts[-1] == "mangowc" and latest_ver.startswith("12."):
                       latest_ver = "0." + latest_ver
-
                   if ver_gt(latest_ver, curr_ver):
                       new_path = pkg_dir / f"{pkg_dir.parts[-1]}-{latest_ver}.ebuild"
                       ebuild_path.rename(new_path)
@@ -313,14 +297,30 @@ jobs:
           games-util/heroic-bin ~amd64
           app-editors/zed ~amd64
           dev-util/rustup ~amd64
-          llvm-core/llvm ~amd64
-          llvm-core/clang ~amd64
-          llvm-runtimes/compiler-rt ~amd64
-          llvm-runtimes/compiler-rt-sanitizers ~amd64
+          net-libs/webkit-gtk ~amd64
           KEYW
 
+          # ── LLVM slot policy ──────────────────────────────────────────────────────
+          # Track ONLY the current stable major slot (22.x).
+          # Point releases within slot 22 (22.1.5 → 22.1.6) are NOT rebuilt —
+          # the first compiled version per slot is enough for consumers like Zed.
+          # A NEW slot (23.x) triggers a fresh compile run automatically because
+          # portageq best_visible will resolve to the new slot and the binary
+          # won't exist in our release yet.
+          # webkit-gtk is intentionally excluded from UPSTREAM_PKGS — we always
+          # pull it binary-only from the official Gentoo binhost (stable amd64).
+          # ─────────────────────────────────────────────────────────────────────────
+
+          # Resolve the current stable LLVM major slot from the portage tree
+          LLVM_SLOT=$(emerge -pqO --color=n llvm-core/llvm 2>/dev/null \
+            | awk '/^\[ebuild/ {for(i=1;i<=NF;i++) if($i ~ /llvm-core\/llvm-[0-9]/) {match($i,/[0-9]+/); print substr($i,RSTART,RLENGTH); break}}' \
+            | head -1 || echo "22")
+
           LOCAL_PKGS=$(find /overlay -mindepth 2 -maxdepth 3 -name "*.ebuild" | awk -F/ '{print $(NF-2)"/"$(NF-1)}' | sort -u || true)
-          UPSTREAM_PKGS="llvm-core/llvm llvm-core/clang llvm-runtimes/compiler-rt media-libs/mesa media-libs/vulkan-loader sys-kernel/gentoo-kernel virtual/dist-kernel games-util/heroic-bin app-editors/zed dev-util/rustup"
+
+          # LLVM components: only the current major slot, never point-release rebuilds.
+          # webkit-gtk is deliberately absent — binary-only from official binhost.
+          UPSTREAM_PKGS="llvm-core/llvm:${LLVM_SLOT} llvm-core/clang:${LLVM_SLOT} llvm-runtimes/compiler-rt:${LLVM_SLOT} media-libs/mesa media-libs/vulkan-loader sys-kernel/gentoo-kernel virtual/dist-kernel games-util/heroic-bin app-editors/zed dev-util/rustup"
 
           ALL_PKGS=$(echo -e "${LOCAL_PKGS}\n${UPSTREAM_PKGS}" | tr ' ' '\n' | sort -u | grep -v '^$')
 
@@ -346,10 +346,30 @@ jobs:
           CHANGED=$(cat changed_packages.txt 2>/dev/null || echo "")
           > packages_to_build.txt
           CHANGED_ATOMS=""
+
           while IFS= read -r CPV; do
              [ -z "$CPV" ] && continue
              PN_PV="${CPV#*/}"
              ATOM=$(echo "$CPV" | sed -E 's/-[0-9]+(\.[0-9]+)*(_[a-z0-9]+)?(-r[0-9]+)?$//')
+
+             # ── LLVM slot policy: skip if we already have ANY binary for this slot ──
+             # Extract the major version number from the CPV (e.g. 22 from llvm-core/llvm-22.1.6)
+             LLVM_PKGS="llvm-core/llvm llvm-core/clang llvm-runtimes/compiler-rt llvm-runtimes/compiler-rt-sanitizers"
+             IS_LLVM=false
+             for lp in $LLVM_PKGS; do
+               if echo "$ATOM" | grep -q "^${lp}$"; then IS_LLVM=true; break; fi
+             done
+
+             if [ "$IS_LLVM" = "true" ]; then
+               MAJOR=$(echo "$PN_PV" | grep -oE '^[a-zA-Z0-9_+-]+-[0-9]+' | grep -oE '[0-9]+$' || echo "0")
+               PN_BARE=$(echo "$PN_PV" | sed -E 's/-[0-9]+.*//')
+               # If any binary for this pn with this major slot already exists in the release, skip
+               if echo "$EXISTING_ASSETS" | grep -qE "^${PN_BARE}-${MAJOR}\.[0-9].*\.gpkg\.tar$"; then
+                 echo "✓ LLVM slot ${MAJOR} binary already exists for ${ATOM}, skipping minor bump."
+                 continue
+               fi
+             fi
+
              if echo "$CHANGED" | grep -q "^${ATOM}$"; then
                 echo "=$CPV" >> packages_to_build.txt
                 CHANGED_ATOMS="$CHANGED_ATOMS =$CPV"
