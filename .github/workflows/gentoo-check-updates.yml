@@ -47,7 +47,7 @@ jobs:
           import requests
 
           session = requests.Session()
-          session.mount('https://', HTTPAdapter(max_retries=Retry(total=3, backoff_factor=1, status_forcelist=)))
+          session.mount('https://', HTTPAdapter(max_retries=Retry(total=3, backoff_factor=1, status_forcelist=[429,500,502,503,504])))
           gh_token = os.environ.get('GITHUB_TOKEN')
           if gh_token:
               session.headers.update({"Authorization": f"Bearer {gh_token}", "Accept": "application/vnd.github.v3+json"})
@@ -300,19 +300,26 @@ jobs:
           net-libs/webkit-gtk ~amd64
           KEYW
 
-          # ── LLVM tracking ─────────────────────────────────────────────────────────
-          # Track the current stable major slot (e.g. 22.x) to ensure we always have
-          # the latest point release binaries for consumers like Zed.
+          # ── LLVM slot policy ──────────────────────────────────────────────────────
+          # Track ONLY the current stable major slot (22.x).
+          # Point releases within slot 22 (22.1.5 → 22.1.6) are NOT rebuilt —
+          # the first compiled version per slot is enough for consumers like Zed.
+          # A NEW slot (23.x) triggers a fresh compile run automatically because
+          # portageq best_visible will resolve to the new slot and the binary
+          # won't exist in our release yet.
           # webkit-gtk is intentionally excluded from UPSTREAM_PKGS — we always
           # pull it binary-only from the official Gentoo binhost (stable amd64).
           # ─────────────────────────────────────────────────────────────────────────
 
+          # Resolve the current stable LLVM major slot from the portage tree
           LLVM_SLOT=$(emerge -pqO --color=n llvm-core/llvm 2>/dev/null \
             | awk '/^\[ebuild/ {for(i=1;i<=NF;i++) if($i ~ /llvm-core\/llvm-[0-9]/) {match($i,/[0-9]+/); print substr($i,RSTART,RLENGTH); break}}' \
             | head -1 || echo "22")
 
           LOCAL_PKGS=$(find /overlay -mindepth 2 -maxdepth 3 -name "*.ebuild" | awk -F/ '{print $(NF-2)"/"$(NF-1)}' | sort -u || true)
 
+          # LLVM components: only the current major slot, never point-release rebuilds.
+          # webkit-gtk is deliberately absent — binary-only from official binhost.
           UPSTREAM_PKGS="llvm-core/llvm:${LLVM_SLOT} llvm-core/clang:${LLVM_SLOT} llvm-runtimes/compiler-rt:${LLVM_SLOT} media-libs/mesa media-libs/vulkan-loader sys-kernel/gentoo-kernel virtual/dist-kernel games-util/heroic-bin app-editors/zed dev-util/rustup"
 
           ALL_PKGS=$(echo -e "${LOCAL_PKGS}\n${UPSTREAM_PKGS}" | tr ' ' '\n' | sort -u | grep -v '^$')
@@ -344,6 +351,24 @@ jobs:
              [ -z "$CPV" ] && continue
              PN_PV="${CPV#*/}"
              ATOM=$(echo "$CPV" | sed -E 's/-[0-9]+(\.[0-9]+)*(_[a-z0-9]+)?(-r[0-9]+)?$//')
+
+             # ── LLVM slot policy: skip if we already have ANY binary for this slot ──
+             # Extract the major version number from the CPV (e.g. 22 from llvm-core/llvm-22.1.6)
+             LLVM_PKGS="llvm-core/llvm llvm-core/clang llvm-runtimes/compiler-rt llvm-runtimes/compiler-rt-sanitizers"
+             IS_LLVM=false
+             for lp in $LLVM_PKGS; do
+               if echo "$ATOM" | grep -q "^${lp}$"; then IS_LLVM=true; break; fi
+             done
+
+             if [ "$IS_LLVM" = "true" ]; then
+               MAJOR=$(echo "$PN_PV" | grep -oE '^[a-zA-Z0-9_+-]+-[0-9]+' | grep -oE '[0-9]+$' || echo "0")
+               PN_BARE=$(echo "$PN_PV" | sed -E 's/-[0-9]+.*//')
+               # If any binary for this pn with this major slot already exists in the release, skip
+               if echo "$EXISTING_ASSETS" | grep -qE "^${PN_BARE}-${MAJOR}\.[0-9].*\.gpkg\.tar$"; then
+                 echo "✓ LLVM slot ${MAJOR} binary already exists for ${ATOM}, skipping minor bump."
+                 continue
+               fi
+             fi
 
              if echo "$CHANGED" | grep -q "^${ATOM}$"; then
                 echo "=$CPV" >> packages_to_build.txt
