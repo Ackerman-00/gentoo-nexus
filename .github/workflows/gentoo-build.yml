@@ -6,9 +6,9 @@ on:
       package_list:
         description: |
           Space-separated package atoms. Accepts any of:
-            app-editors/zed                    → latest ~amd64 from portage tree
-            =app-editors/zed-1.3.5            → exact version
-            sys-devel/gcc-16.1.0              → cat/pn-ver shorthand (= is added)
+            app-editors/zed                     → latest ~amd64 from portage tree
+            =app-editors/zed-1.3.5              → exact version
+            sys-devel/gcc-16.1.0               → cat/pn-ver shorthand (= added)
             https://gitweb.gentoo.org/...ebuild → full gitweb URL
         required: true
       force_rebuild:
@@ -69,6 +69,10 @@ jobs:
 
       - name: Restore GPKG Layout from Packages Index
         run: |
+          # Parse CPV and URI from the Packages index to restore cat/pn/ subdirs.
+          # The downloaded flat .gpkg.tar files sit at binpkgs/*.gpkg.tar.
+          # We must NOT rely on the URI field (which was flattened on upload) —
+          # instead match the filename against each CPV to derive the path.
           python3 << 'PYEOF'
           import os, shutil, re
 
@@ -80,27 +84,46 @@ jobs:
           with open(pkg_index, 'r') as f:
               content = f.read()
 
-          moved = 0
+          # Build a map: bare_filename → (cat, pn)
+          file_to_dest = {}
           for block in content.split('\n\n'):
               cpv_m = re.search(r'^CPV: (.+)$', block, re.MULTILINE)
-              uri_m = re.search(r'^URI: ([^\s/]+\.gpkg\.tar)$', block, re.MULTILINE)
+              # URI may be flat (just filename) or a full path — handle both
+              uri_m = re.search(r'^URI: (?:.*/)?([^\s/]+\.gpkg\.tar)$', block, re.MULTILINE)
               if not (cpv_m and uri_m):
                   continue
               cpv = cpv_m.group(1).strip()
-              uri = uri_m.group(1).strip()
+              filename = uri_m.group(1).strip()
               if '/' not in cpv:
                   continue
               cat, pn_ver = cpv.split('/', 1)
               pn_m = re.match(r'^([a-zA-Z0-9_+.-]+?)(?:-\d)', pn_ver)
               pn = pn_m.group(1) if pn_m else pn_ver
-              src = os.path.join('binpkgs', uri)
+              file_to_dest[filename] = (cat, pn)
+
+          moved = 0
+          # Only process flat files at the top of binpkgs/ — already-nested ones are fine
+          for fname in os.listdir('binpkgs'):
+              if not fname.endswith('.gpkg.tar'):
+                  continue
+              src = os.path.join('binpkgs', fname)
+              if not os.path.isfile(src):
+                  continue
+              if fname in file_to_dest:
+                  cat, pn = file_to_dest[fname]
+              else:
+                  # Fallback: derive cat/pn from the filename itself using regex
+                  # gpkg filename format: pn-ver-buildid.gpkg.tar
+                  # We can't know cat without the index, so skip unknown files
+                  print(f"  Warning: {fname} not in Packages index, skipping")
+                  continue
               dest_dir = os.path.join('binpkgs', cat, pn)
-              dest = os.path.join(dest_dir, uri)
-              if not os.path.exists(src) or src == dest:
+              dest = os.path.join(dest_dir, fname)
+              if src == dest:
                   continue
               os.makedirs(dest_dir, exist_ok=True)
               shutil.move(src, dest)
-              print(f"  Restored: {cat}/{pn}/{uri}")
+              print(f"  Restored: {cat}/{pn}/{fname}")
               moved += 1
 
           print(f"Layout restore: {moved} files repositioned.")
@@ -117,39 +140,20 @@ jobs:
 
           normalize_target() {
             local t="$1"
-
-            # Form 1: Full gitweb URL
-            # https://gitweb.gentoo.org/repo/gentoo.git/tree/cat/pn/pn-ver.ebuild
             if [[ "$t" == https://gitweb.gentoo.org/*/tree/* ]]; then
-              t=$(echo "$t" | sed -E 's|.*/tree/([^/]+)/([^/]+)/\2-([^/]+)\.ebuild$|=\1/\2-\3|')
-              echo "$t"
+              echo "$t" | sed -E 's|.*/tree/([^/]+)/([^/]+)/\2-([^/]+)\.ebuild$|=\1/\2-\3|'
               return
             fi
-
-            # Form 2: Already prefixed with =
-            if [[ "$t" == =* ]]; then
-              echo "$t"
-              return
-            fi
-
-            # Form 3: cat/pn-version shorthand (has a version number, no =)
-            # e.g. sys-devel/gcc-16.1.0  or  app-editors/zed-1.3.5
+            if [[ "$t" == =* ]]; then echo "$t"; return; fi
             if echo "$t" | grep -qE '^[a-z][a-z0-9_+-]+/[a-zA-Z0-9_+.-]+-[0-9]'; then
-              echo "=${t}"
-              return
+              echo "=${t}"; return
             fi
-
-            # Form 4: Bare category/package — "always latest" mode
-            # e.g. app-editors/zed, dev-util/rustup
-            # Pass as-is; the build container will resolve via portageq best_visible
-            # using the full ~amd64 portage tree (not the stale official binhost index)
             echo "$t"
           }
 
           NORMALIZED=()
           for raw in "${RAW_PKGS[@]}"; do
-            norm=$(normalize_target "$raw")
-            NORMALIZED+=("$norm")
+            NORMALIZED+=("$(normalize_target "$raw")")
           done
 
           TARGET="${NORMALIZED[0]:-}"
@@ -165,13 +169,11 @@ jobs:
 
           CPV="${TARGET#=}"
 
-          # Live ebuilds always rebuild
           if [[ "$CPV" == *"-9999" ]]; then
             echo "skip_compile=false" >> "$GITHUB_OUTPUT"
             exit 0
           fi
 
-          # Bare atom — always build (version unknown until container resolves it)
           if [[ "$TARGET" != =* ]]; then
             echo "skip_compile=false" >> "$GITHUB_OUTPUT"
             exit 0
@@ -279,7 +281,12 @@ jobs:
           mkdir -p /etc/portage/package.mask
           echo '>=dev-libs/libgit2-1.9.3' > /etc/portage/package.mask/libgit2
 
-          echo ">>> Regenerating Packages index..."
+          # ── Critical: rebuild the Packages index from what's actually on disk ──
+          # pkgdir-index-trusted (default since portage-3.0.52) means Portage ONLY
+          # reads the index — files on disk that aren't indexed are invisible.
+          # We must run emaint AFTER the volumes are mounted so it scans our
+          # pre-built binaries from GitHub Releases and registers them properly.
+          echo ">>> Rebuilding Packages index from mounted binaries..."
           emaint binhost --fix
 
           echo ">>> Generating Manifests for overlay ebuilds..."
@@ -287,12 +294,10 @@ jobs:
               ebuild "$ebuild_file" manifest >/dev/null 2>&1 || true
           done < <(find /var/db/repos/gentoo-nexus -mindepth 2 -maxdepth 3 -name "*.ebuild" -print0)
 
-          # ── Resolve "always latest" bare atoms via the portage tree ──────────────
-          # This queries the LIVE portage tree (post emerge-webrsync), not the stale
-          # official binhost index. So app-editors/zed resolves to 1.3.5, not 0.230.1.
+          # ── Resolve bare atoms via live portage tree ──────────────────────────
           TARGET="$RAW_TARGET"
           if [[ "$TARGET" != =* && "$TARGET" != *"-9999" ]]; then
-            echo ">>> Bare atom detected: $TARGET — resolving latest ~amd64 version..."
+            echo ">>> Bare atom: $TARGET — resolving latest ~amd64 via portageq..."
             RESOLVED=$(portageq best_visible / "$TARGET" 2>/dev/null || true)
             if [ -n "$RESOLVED" ] && [[ "$RESOLVED" == */* ]]; then
               TARGET="=${RESOLVED}"
@@ -308,7 +313,7 @@ jobs:
           emerge --oneshot --getbinpkg --backtrack=30 --quiet-build=y \
             '>=dev-util/gdbus-codegen-2.88.1' 2>/dev/null || true
 
-          # ── STEP 1: Binary-only fast path ────────────────────────────────────────
+          # ── STEP 1: Binary-only fast path ─────────────────────────────────────
           echo ">>> Attempting binary-only install of: ${TARGET}"
           if emerge --usepkgonly --getbinpkg --backtrack=30 --binpkg-respect-use=n "${TARGET}" 2>&1; then
             echo ">>> SUCCESS: Installed entirely from binary cache."
@@ -317,7 +322,7 @@ jobs:
           fi
           echo ">>> Binary-only path failed — falling back to full source build..."
 
-          # ── STEP 2: Full build with circular-dep detection ───────────────────────
+          # ── STEP 2: Full build with circular-dep detection ────────────────────
           set +e
           emerge --oneshot --usepkg --getbinpkg --buildpkg --backtrack=30 \
             --binpkg-respect-use=n --quiet-build=y --keep-going \
@@ -328,7 +333,7 @@ jobs:
 
           if [ "$BUILD_EXIT" -ne 0 ]; then
             if grep -q "circular dependencies" /tmp/emerge.log; then
-              echo ">>> Circular dependency detected — applying multimedia bootstrap..."
+              echo ">>> Circular dependency — applying multimedia bootstrap..."
               USE="-pipewire" emerge --oneshot --usepkg --getbinpkg --buildpkg \
                 --backtrack=30 --quiet-build=y media-libs/libsdl2 || true
               emerge --oneshot --usepkg --getbinpkg --buildpkg \
