@@ -132,7 +132,6 @@ jobs:
       - name: Fix Workspace Permissions
         run: sudo chown -R "$(id -u):$(id -g)" "${{ github.workspace }}"
 
-      # ── CORE: Parse Queue with LLVM Slot‑Skip Logic ──────────────────────
       - name: Parse Queue & Normalize Targets
         id: queue
         run: |
@@ -170,28 +169,6 @@ jobs:
 
           CPV="${TARGET#=}"
 
-          # ── LLVM Major‑Slot Skip Logic ──────────────────────────────────
-          PN_PV="${CPV#*/}"                              # e.g. "llvm-22.1.6"
-          ATOM=$(echo "$CPV" | sed -E 's/-[0-9]+(\.[0-9]+)*(_[a-z0-9]+)?(-r[0-9]+)?$//')
-          
-          LLVM_PKGS="llvm-core/llvm llvm-core/clang llvm-runtimes/compiler-rt llvm-runtimes/compiler-rt-sanitizers"
-          IS_LLVM=false
-          for lp in $LLVM_PKGS; do
-            if [ "$ATOM" = "$lp" ]; then IS_LLVM=true; break; fi
-          done
-
-          if [ "$IS_LLVM" = "true" ]; then
-            MAJOR=$(echo "$PN_PV" | grep -oE '^[a-zA-Z0-9_+-]+-[0-9]+' | grep -oE '[0-9]+$' || echo "0")
-            PN_BARE=$(echo "$PN_PV" | sed -E 's/-[0-9]+.*//')
-            # Check if ANY gpkg.tar for this pn + major slot already exists
-            if ls binpkgs/${PN_BARE}-${MAJOR}.*.gpkg.tar >/dev/null 2>&1 || \
-               grep -q "^CPV: ${ATOM}-${MAJOR}\." binpkgs/Packages 2>/dev/null; then
-              echo "LLVM slot ${MAJOR} binary already exists for ${ATOM}, skipping point-release rebuild."
-              echo "skip_compile=true" >> "$GITHUB_OUTPUT"
-              exit 0
-            fi
-          fi
-
           # Live ebuilds or unresolvable atoms always trigger a build
           if [[ "$CPV" == *"-9999" ]] || [[ "$TARGET" != =* ]]; then
             echo "skip_compile=false" >> "$GITHUB_OUTPUT"
@@ -205,7 +182,7 @@ jobs:
             exit 0
           fi
 
-          # Exact CPV check (final fallback)
+          # Exact CPV check — no slot skip, just exact match
           if grep -q "^CPV: ${CPV}$" binpkgs/Packages 2>/dev/null; then
             echo "Binary ${CPV} exists in Packages. Skipping compile."
             echo "skip_compile=true" >> "$GITHUB_OUTPUT"
@@ -214,7 +191,6 @@ jobs:
             echo "skip_compile=false" >> "$GITHUB_OUTPUT"
           fi
 
-      # ── Docker Build Script (unchanged but shown for completeness) ─────
       - name: Write Monolithic Docker Build Script
         if: steps.queue.outputs.skip_compile != 'true'
         run: |
