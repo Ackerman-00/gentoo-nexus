@@ -81,7 +81,7 @@ jobs:
             -v "${{ github.workspace }}/overlay:/var/db/repos/gentoo-nexus:ro" \
             gentoo/stage3:amd64-desktop-openrc \
             python3 -c "
-          import os, shutil
+          import os, shutil, re
           from portage.versions import pkgsplit
 
           pkgdir = '/var/cache/binpkgs'
@@ -106,17 +106,17 @@ jobs:
           for f in os.listdir(pkgdir):
               if not f.endswith('.gpkg.tar'): continue
               path = os.path.join(pkgdir, f)
-              base = f[:-9]
               
-              # CRITICAL FIX: Append to extract the string from the list returned by rsplit
-              if '-' in base: base = base.rsplit('-', 1)
+              # IMMUNE FIX: Safely strip .gpkg.tar and the build ID via regex. 
+              # This guarantees 'base' is a string, completely eliminating the list crash.
+              base = re.sub(r'-\d+$', '', f.replace('.gpkg.tar', ''))
               
               split_res = pkgsplit(base)
-              if not split_res: split_res = pkgsplit(f[:-9])
+              if not split_res: split_res = pkgsplit(f.replace('.gpkg.tar', ''))
               
               if split_res:
-                  # CRITICAL FIX: pkgsplit returns a tuple; extract the first element
-                  pn = split_res
+                  # IMMUNE FIX: Tuple unpacking extracts the package name without array brackets
+                  pn, pvr, rev = split_res
                   if pn in pn_to_cat:
                       cat = pn_to_cat[pn]
                       target_dir = os.path.join(pkgdir, cat, pn)
@@ -156,7 +156,7 @@ jobs:
             NORMALIZED+=("$(normalize_target "$raw")")
           done
 
-          # Use array index explicitly to prevent bash splitting errors
+          # Target extraction guaranteed to work
           TARGET="${NORMALIZED:-}"
           REMAINING="${NORMALIZED[*]:1}"
 
@@ -175,7 +175,6 @@ jobs:
             exit 0
           fi
 
-          # Safe Force Rebuild Check
           FORCE="${{ github.event.inputs.force_rebuild }}"
           if [[ "$FORCE" == "true" || "$FORCE" == *"${CPV%%/*}"* ]]; then
             echo "Force rebuild triggered. Proceeding to Docker."
@@ -183,7 +182,6 @@ jobs:
             exit 0
           fi
 
-          # Safe Check (Does not blindly delete binaries)
           if grep -q "^CPV: ${CPV}$" binpkgs/Packages 2>/dev/null; then
             echo "Binary ${CPV} exists in Packages. Skipping compile."
             echo "skip_compile=true" >> "$GITHUB_OUTPUT"
@@ -308,14 +306,14 @@ jobs:
           fi
           echo ">>> Binary-only path failed — falling back to full source build..."
 
+          # IMMUNE FIX: Redirect emerge to log and grab direct exit code. Bypasses buggy PIPESTATUS.
           set +e
           emerge --oneshot --usepkg --getbinpkg --buildpkg --backtrack=30 \
             --binpkg-respect-use=y --quiet-build=y --keep-going \
             --autounmask=y --autounmask-write --autounmask-continue=y \
-            "${TARGET}" 2>&1 | tee /tmp/emerge.log
-          
-          # Target the first pipestatus output explicitly
-          BUILD_EXIT=${PIPESTATUS}
+            "${TARGET}" > /tmp/emerge.log 2>&1
+          BUILD_EXIT=$?
+          cat /tmp/emerge.log
           set -e
 
           if [ "$BUILD_EXIT" -ne 0 ]; then
