@@ -58,76 +58,69 @@ jobs:
         env:
           GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
         run: |
+          echo ">>> Downloading existing .gpkg.tar and Packages from rolling release..."
           gh release download rolling \
             -p "*.gpkg.tar" -p "Packages*" \
             --repo ${{ github.repository }} \
             --dir binpkgs --clobber 2>/dev/null || true
+          
+          echo ">>> Scanning for and removing corrupted/incomplete downloads..."
           for f in binpkgs/*.gpkg.tar; do
             [ -e "$f" ] || continue
-            tar -tf "$f" >/dev/null 2>&1 || { echo "Removing corrupt: $f"; rm -f "$f"; }
+            if ! tar -tf "$f" >/dev/null 2>&1; then
+              echo "Removed corrupted file to protect indexer: $f"
+              rm -f "$f"
+            fi
           done
 
-      - name: Restore GPKG Layout from Packages Index
+      - name: Restore GPKG Layout using Portage Tree Mapping
         run: |
-          # Parse CPV and URI from the Packages index to restore cat/pn/ subdirs.
-          # The downloaded flat .gpkg.tar files sit at binpkgs/*.gpkg.tar.
-          # We must NOT rely on the URI field (which was flattened on upload) —
-          # instead match the filename against each CPV to derive the path.
-          python3 << 'PYEOF'
-          import os, shutil, re
+          echo ">>> Restoring GPKG folder strict-layout via Gentoo native tree mapping..."
+          docker run --rm \
+            -v "${{ github.workspace }}/binpkgs:/var/cache/binpkgs:rw" \
+            -v "${{ github.workspace }}/overlay:/var/db/repos/gentoo-nexus:ro" \
+            gentoo/stage3:amd64-desktop-openrc \
+            python3 -c "
+          import os, shutil
+          from portage.versions import pkgsplit
 
-          pkg_index = 'binpkgs/Packages'
-          if not os.path.exists(pkg_index):
-              print("No Packages index found, skipping layout restore.")
-              exit(0)
+          pkgdir = '/var/cache/binpkgs'
+          os.system('emerge-webrsync -q')
 
-          with open(pkg_index, 'r') as f:
-              content = f.read()
+          repos = ['/var/db/repos/gentoo-nexus', '/var/db/repos/gentoo']
+          pn_to_cat = {}
 
-          # Build a map: bare_filename → (cat, pn)
-          file_to_dest = {}
-          for block in content.split('\n\n'):
-              cpv_m = re.search(r'^CPV: (.+)$', block, re.MULTILINE)
-              # URI may be flat (just filename) or a full path — handle both
-              uri_m = re.search(r'^URI: (?:.*/)?([^\s/]+\.gpkg\.tar)$', block, re.MULTILINE)
-              if not (cpv_m and uri_m):
-                  continue
-              cpv = cpv_m.group(1).strip()
-              filename = uri_m.group(1).strip()
-              if '/' not in cpv:
-                  continue
-              cat, pn_ver = cpv.split('/', 1)
-              pn_m = re.match(r'^([a-zA-Z0-9_+.-]+?)(?:-\d)', pn_ver)
-              pn = pn_m.group(1) if pn_m else pn_ver
-              file_to_dest[filename] = (cat, pn)
+          for repo in repos:
+              if not os.path.exists(repo): continue
+              for cat in os.listdir(repo):
+                  if cat.startswith('.') or cat in ['metadata', 'profiles', 'eclass', 'scripts']: continue
+                  cat_path = os.path.join(repo, cat)
+                  if not os.path.isdir(cat_path): continue
+                  for pn in os.listdir(cat_path):
+                      if pn not in pn_to_cat:
+                          pn_to_cat[pn] = cat
 
-          moved = 0
-          # Only process flat files at the top of binpkgs/ — already-nested ones are fine
-          for fname in os.listdir('binpkgs'):
-              if not fname.endswith('.gpkg.tar'):
-                  continue
-              src = os.path.join('binpkgs', fname)
-              if not os.path.isfile(src):
-                  continue
-              if fname in file_to_dest:
-                  cat, pn = file_to_dest[fname]
-              else:
-                  # Fallback: derive cat/pn from the filename itself using regex
-                  # gpkg filename format: pn-ver-buildid.gpkg.tar
-                  # We can't know cat without the index, so skip unknown files
-                  print(f"  Warning: {fname} not in Packages index, skipping")
-                  continue
-              dest_dir = os.path.join('binpkgs', cat, pn)
-              dest = os.path.join(dest_dir, fname)
-              if src == dest:
-                  continue
-              os.makedirs(dest_dir, exist_ok=True)
-              shutil.move(src, dest)
-              print(f"  Restored: {cat}/{pn}/{fname}")
-              moved += 1
-
-          print(f"Layout restore: {moved} files repositioned.")
-          PYEOF
+          for f in os.listdir(pkgdir):
+              if not f.endswith('.gpkg.tar'): continue
+              path = os.path.join(pkgdir, f)
+              base = f[:-9]
+              if '-' in base: base = base.rsplit('-', 1)
+              split_res = pkgsplit(base)
+              if not split_res: split_res = pkgsplit(f[:-9])
+              
+              if split_res:
+                  pn = split_res
+                  if pn in pn_to_cat:
+                      cat = pn_to_cat[pn]
+                      target_dir = os.path.join(pkgdir, cat, pn)
+                      target_path = os.path.join(target_dir, f)
+                      if path != target_path:
+                          os.makedirs(target_dir, exist_ok=True)
+                          shutil.move(path, target_path)
+                          print(f'Restored: {cat}/{pn}/{f}')
+                  else:
+                      print(f'Warning: Could not resolve category for {pn}')
+          "
 
       - name: Fix Workspace Permissions
         run: sudo chown -R "$(id -u):$(id -g)" "${{ github.workspace }}"
@@ -156,7 +149,7 @@ jobs:
             NORMALIZED+=("$(normalize_target "$raw")")
           done
 
-          TARGET="${NORMALIZED[0]:-}"
+          TARGET="${NORMALIZED:-}"
           REMAINING="${NORMALIZED[*]:1}"
 
           echo "TARGET_PKG=$TARGET" >> "$GITHUB_OUTPUT"
@@ -169,33 +162,25 @@ jobs:
 
           CPV="${TARGET#=}"
 
-          if [[ "$CPV" == *"-9999" ]]; then
+          if [[ "$CPV" == *"-9999" ]] || [[ "$TARGET" != =* ]]; then
             echo "skip_compile=false" >> "$GITHUB_OUTPUT"
             exit 0
           fi
 
-          if [[ "$TARGET" != =* ]]; then
-            echo "skip_compile=false" >> "$GITHUB_OUTPUT"
-            exit 0
-          fi
-
+          # Safe Force Rebuild Check
           FORCE="${{ github.event.inputs.force_rebuild }}"
           if [[ "$FORCE" == "true" || "$FORCE" == *"${CPV%%/*}"* ]]; then
-            CAT="${CPV%%/*}"
-            PN_VER="${CPV#*/}"
-            PN="${PN_VER%%-[0-9]*}"
-            rm -rf "binpkgs/${CAT}/${PN}" 2>/dev/null || true
+            echo "Force rebuild triggered. Proceeding to Docker."
             echo "skip_compile=false" >> "$GITHUB_OUTPUT"
             exit 0
           fi
 
+          # Safe Check (Does not blindly delete binaries)
           if grep -q "^CPV: ${CPV}$" binpkgs/Packages 2>/dev/null; then
+            echo "Binary ${CPV} exists in Packages. Skipping compile."
             echo "skip_compile=true" >> "$GITHUB_OUTPUT"
           else
-            CAT="${CPV%%/*}"
-            PN_VER="${CPV#*/}"
-            PN="${PN_VER%%-[0-9]*}"
-            rm -rf "binpkgs/${CAT}/${PN}" 2>/dev/null || true
+            echo "Binary ${CPV} not found. Compiling."
             echo "skip_compile=false" >> "$GITHUB_OUTPUT"
           fi
 
@@ -234,7 +219,7 @@ jobs:
           ACCEPT_RESTRICT="*"
           ACCEPT_CHOSTS="x86_64-pc-linux-gnu"
           CONFIG_PROTECT_MASK="/etc"
-          EMERGE_DEFAULT_OPTS="--usepkg --getbinpkg --buildpkg --binpkg-respect-use=n --quiet-build=y --jobs=4 --load-average=4 --keep-going"
+          EMERGE_DEFAULT_OPTS="--usepkg --getbinpkg --buildpkg --binpkg-respect-use=y --quiet-build=y --jobs=4 --load-average=4 --keep-going"
           MAKEOPTS="-j4"
           MAKECONF
 
@@ -281,11 +266,6 @@ jobs:
           mkdir -p /etc/portage/package.mask
           echo '>=dev-libs/libgit2-1.9.3' > /etc/portage/package.mask/libgit2
 
-          # ── Critical: rebuild the Packages index from what's actually on disk ──
-          # pkgdir-index-trusted (default since portage-3.0.52) means Portage ONLY
-          # reads the index — files on disk that aren't indexed are invisible.
-          # We must run emaint AFTER the volumes are mounted so it scans our
-          # pre-built binaries from GitHub Releases and registers them properly.
           echo ">>> Rebuilding Packages index from mounted binaries..."
           emaint binhost --fix
 
@@ -294,7 +274,6 @@ jobs:
               ebuild "$ebuild_file" manifest >/dev/null 2>&1 || true
           done < <(find /var/db/repos/gentoo-nexus -mindepth 2 -maxdepth 3 -name "*.ebuild" -print0)
 
-          # ── Resolve bare atoms via live portage tree ──────────────────────────
           TARGET="$RAW_TARGET"
           if [[ "$TARGET" != =* && "$TARGET" != *"-9999" ]]; then
             echo ">>> Bare atom: $TARGET — resolving latest ~amd64 via portageq..."
@@ -313,22 +292,20 @@ jobs:
           emerge --oneshot --getbinpkg --backtrack=30 --quiet-build=y \
             '>=dev-util/gdbus-codegen-2.88.1' 2>/dev/null || true
 
-          # ── STEP 1: Binary-only fast path ─────────────────────────────────────
           echo ">>> Attempting binary-only install of: ${TARGET}"
-          if emerge --usepkgonly --getbinpkg --backtrack=30 --binpkg-respect-use=n "${TARGET}" 2>&1; then
+          if emerge --usepkgonly --getbinpkg --backtrack=30 --binpkg-respect-use=y "${TARGET}" 2>&1; then
             echo ">>> SUCCESS: Installed entirely from binary cache."
             emaint binhost --fix
             exit 0
           fi
           echo ">>> Binary-only path failed — falling back to full source build..."
 
-          # ── STEP 2: Full build with circular-dep detection ────────────────────
           set +e
           emerge --oneshot --usepkg --getbinpkg --buildpkg --backtrack=30 \
-            --binpkg-respect-use=n --quiet-build=y --keep-going \
+            --binpkg-respect-use=y --quiet-build=y --keep-going \
             --autounmask=y --autounmask-write --autounmask-continue=y \
             "${TARGET}" 2>&1 | tee /tmp/emerge.log
-          BUILD_EXIT=${PIPESTATUS[0]}
+          BUILD_EXIT=${PIPESTATUS}
           set -e
 
           if [ "$BUILD_EXIT" -ne 0 ]; then
@@ -342,9 +319,10 @@ jobs:
                 --backtrack=30 --quiet-build=y media-video/pipewire || true
               emerge --oneshot --usepkg --getbinpkg --buildpkg \
                 --backtrack=30 --quiet-build=y media-libs/libsdl2 || true
+              
               echo ">>> Retrying target after bootstrap..."
               emerge --oneshot --usepkg --getbinpkg --buildpkg --backtrack=30 \
-                --binpkg-respect-use=n --quiet-build=y --keep-going \
+                --binpkg-respect-use=y --quiet-build=y --keep-going \
                 --autounmask=y --autounmask-write --autounmask-continue=y \
                 "${TARGET}" || echo ">>> WARNING: Build failed after bootstrap. Saving partial binaries."
             else
