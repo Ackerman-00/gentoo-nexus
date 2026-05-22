@@ -39,11 +39,12 @@ jobs:
           GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
         run: |
           cat > scan.py << 'EOF'
-          import os, re, requests, subprocess, shutil, tempfile
+          import os, re, subprocess, tempfile
           from pathlib import Path
-          from packaging.version import parse as parse_version
+          from packaging.version import parse as parse_version, InvalidVersion
           from requests.adapters import HTTPAdapter
           from urllib3.util.retry import Retry
+          import requests
 
           session = requests.Session()
           session.mount('https://', HTTPAdapter(max_retries=Retry(total=3, backoff_factor=1, status_forcelist=[429,500,502,503,504])))
@@ -53,19 +54,66 @@ jobs:
 
           updated_atoms = set()
 
+          # ── Version comparison ────────────────────────────────────────────────────
+          # Many upstream projects use non-PEP-440 version tags (Gentoo _p suffix,
+          # ProtonPlus _N suffix, Obsidian -eN electron suffix). We try PEP-440
+          # first, then fall back to an extended tuple comparison that understands
+          # Gentoo suffix ordering: _alpha < _beta < _pre < _rc < (base) < _p/_N
+          _SUFFIX_WEIGHT = {'alpha':-40,'beta':-30,'pre':-20,'rc':-10,'p':10}
+
+          def _to_tuple_extended(v):
+              v = v.lstrip('v')
+              v_clean = re.sub(r'-e\d+$', '', v)          # strip obsidian -eN
+              sm = re.search(r'[_-](alpha|beta|pre|rc|p)(\d*)$', v_clean, re.I)
+              nm = re.search(r'_(\d+)$', v_clean)         # ProtonPlus _N style
+              if sm:
+                  base = v_clean[:sm.start()]
+                  w = _SUFFIX_WEIGHT.get(sm.group(1).lower(), 0)
+                  n = int(sm.group(2)) if sm.group(2) else 0
+              elif nm:
+                  base = v_clean[:nm.start()]
+                  w, n = _SUFFIX_WEIGHT['p'], int(nm.group(1))
+              else:
+                  base, w, n = v_clean, 0, 0
+              return (tuple(int(x) for x in re.findall(r'\d+', base)), w, n)
+
+          def ver_gt(a, b):
+              """Return True if version a is strictly greater than b."""
+              a, b = a.lstrip('v'), b.lstrip('v')
+              try:
+                  return parse_version(a) > parse_version(b)
+              except InvalidVersion:
+                  try:
+                      return _to_tuple_extended(a) > _to_tuple_extended(b)
+                  except Exception:
+                      return a > b
+
+          def ver_eq(a, b):
+              """Return True if version a equals b."""
+              a, b = a.lstrip('v'), b.lstrip('v')
+              try:
+                  return parse_version(a) == parse_version(b)
+              except InvalidVersion:
+                  try:
+                      return _to_tuple_extended(a) == _to_tuple_extended(b)
+                  except Exception:
+                      return a == b
+
+          # ── GitHub helpers ────────────────────────────────────────────────────────
           def get_latest_github_release(repo):
               best_ver = None
               try:
                   r = session.get(f"https://api.github.com/repos/{repo}/releases/latest", timeout=15)
                   if r.status_code == 200:
                       tag = r.json().get("tag_name", "").lstrip("v")
-                      if tag and re.match(r'^[0-9]', tag): best_ver = tag
+                      if tag and re.match(r'^[0-9]', tag):
+                          best_ver = tag
                   r2 = session.get(f"https://api.github.com/repos/{repo}/tags?per_page=100", timeout=15)
                   if r2.status_code == 200 and r2.json():
                       for tag_obj in r2.json():
                           name = tag_obj.get("name", "").lstrip("v")
                           if re.match(r'^[0-9]', name):
-                              if not best_ver or parse_version(name) > parse_version(best_ver):
+                              if not best_ver or ver_gt(name, best_ver):
                                   best_ver = name
               except Exception as e:
                   print(f"  [!] API Error for {repo}: {e}")
@@ -73,7 +121,7 @@ jobs:
 
           def get_latest_commit(repo_url, branch="HEAD"):
               try:
-                  out = subprocess.check_output(["git", "ls-remote", repo_url, branch], timeout=30, stderr=subprocess.DEVNULL).decode()
+                  out = subprocess.check_output(["git","ls-remote",repo_url,branch], timeout=30, stderr=subprocess.DEVNULL).decode()
                   m = re.search(r"([a-f0-9]{40})", out)
                   if m: return m.group(1)[:12]
               except: pass
@@ -81,41 +129,46 @@ jobs:
 
           def extract_appimage_version(appimage_path):
               try:
-                  subprocess.run(['chmod', '+x', appimage_path], check=True)
-                  res = subprocess.run([appimage_path, '--appimage-version'], capture_output=True, text=True, timeout=30)
+                  subprocess.run(['chmod','+x',appimage_path], check=True)
+                  res = subprocess.run([appimage_path,'--appimage-version'], capture_output=True, text=True, timeout=30)
                   if res.returncode == 0 and res.stdout.strip(): return res.stdout.strip()
               except: pass
               try:
                   with tempfile.TemporaryDirectory() as tmpdir:
-                      subprocess.run([appimage_path, '--appimage-extract'], cwd=tmpdir, capture_output=True, timeout=120)
+                      subprocess.run([appimage_path,'--appimage-extract'], cwd=tmpdir, capture_output=True, timeout=120)
                       extracted_dir = Path(tmpdir) / 'squashfs-root'
                       if extracted_dir.is_dir():
                           for d_file in extracted_dir.glob('*.desktop'):
                               content = d_file.read_text(encoding='utf-8', errors='ignore')
-                              match = re.search(r'^X-AppImage-Version=(.+)', content, re.MULTILINE) or re.search(r'^Version=(.+)', content, re.MULTILINE)
-                              if match: return match.group(1).strip()
+                              m = re.search(r'^X-AppImage-Version=(.+)', content, re.MULTILINE) or \
+                                  re.search(r'^Version=(.+)', content, re.MULTILINE)
+                              if m: return m.group(1).strip()
               except: pass
               return None
 
+          # ── Main scan loop ────────────────────────────────────────────────────────
           for ebuild_path in Path('.').rglob('*.ebuild'):
-              if any(x in ebuild_path.parts for x in ['cache','job_out','binpkgs','distfiles','ccache','.github','.git']): continue
+              if any(x in ebuild_path.parts for x in ['cache','job_out','binpkgs','distfiles','ccache','.github','.git']):
+                  continue
               pkg_dir = ebuild_path.parent
               if len(pkg_dir.parts) < 2: continue
               pkg_cat_name = f"{pkg_dir.parts[-2]}/{pkg_dir.parts[-1]}"
               content = ebuild_path.read_text(encoding="utf-8")
 
+              # ── AppImage special case ─────────────────────────────────────────
               if pkg_dir.parts[-1] == "rootapp-bin":
                   print(f"--- Scanning {pkg_cat_name} (AppImage) ---")
-                  curr_ver_m = re.search(rf'{re.escape(pkg_dir.parts[-1])}-(\d+(?:\.\d+)*[a-z]?(?:_(?:alpha|beta|pre|rc|p)\d*)?(?:-r\d+)?)\.ebuild$', ebuild_path.name)
-                  if not curr_ver_m: continue
-                  curr_ver = curr_ver_m.group(1)
-                  with tempfile.NamedTemporaryFile(delete=False, suffix=".AppImage") as tmp: tmp_path = tmp.name
+                  curr_m = re.search(rf'{re.escape(pkg_dir.parts[-1])}-(\S+?)\.ebuild$', ebuild_path.name)
+                  if not curr_m: continue
+                  curr_ver = curr_m.group(1)
+                  with tempfile.NamedTemporaryFile(delete=False, suffix=".AppImage") as tmp:
+                      tmp_path = tmp.name
                   try:
                       subprocess.run(['curl','-sSL','-o',tmp_path,"https://installer.rootapp.com/installer/Linux/X64/Root.AppImage"], timeout=120)
                       new_ver = extract_appimage_version(tmp_path)
                   finally:
                       if os.path.exists(tmp_path): os.unlink(tmp_path)
-                  if new_ver and parse_version(new_ver) > parse_version(curr_ver):
+                  if new_ver and ver_gt(new_ver, curr_ver):
                       new_path = pkg_dir / f"{pkg_dir.parts[-1]}-{new_ver}.ebuild"
                       ebuild_path.rename(new_path)
                       updated_atoms.add(pkg_cat_name)
@@ -124,17 +177,20 @@ jobs:
                       print("  [-] Already up to date.")
                   continue
 
+              # ── GitHub-sourced packages ───────────────────────────────────────
               repo_m = re.search(r'github\.com/([A-Za-z0-9_.-]+/[A-Za-z0-9_.-]+?)(?:\.git|/archive|/releases|/tarball|["\s\'])', content)
               if not repo_m: continue
               repo = repo_m.group(1).rstrip('.')
               print(f"--- Scanning {pkg_cat_name} ({repo}) ---")
 
               if ebuild_path.name.endswith('9999.ebuild'):
+                  # Live ebuild — track latest commit
                   branch_m = re.search(r'^EGIT_BRANCH=["\']?([^"\']+)["\']?', content, re.MULTILINE)
                   branch = branch_m.group(1) if branch_m else "HEAD"
                   new_commit = get_latest_commit(f"https://github.com/{repo}.git", branch)
                   if new_commit:
-                      new_content = re.sub(r'(EGIT_COMMIT=["\']?)[a-fA-F0-9]{7,40}(["\']?)', r"\g<1>" + new_commit + r"\2", content)
+                      new_content = re.sub(r'(EGIT_COMMIT=["\']?)[a-fA-F0-9]{7,40}(["\']?)',
+                                           r"\g<1>" + new_commit + r"\2", content)
                       if new_content != content:
                           ebuild_path.write_text(new_content, encoding="utf-8")
                           updated_atoms.add(pkg_cat_name)
@@ -142,21 +198,30 @@ jobs:
                       else:
                           print("  [-] Commit hash already up to date.")
               else:
-                  curr_ver_m = re.search(rf'{re.escape(pkg_dir.parts[-1])}-(\d+(?:\.\d+)*[a-z]?(?:_(?:alpha|beta|pre|rc|p)\d*)?(?:-r\d+)?)\.ebuild$', ebuild_path.name)
-                  if not curr_ver_m: print("  [!] Could not extract current version."); continue
-                  curr_ver = curr_ver_m.group(1)
+                  # Tagged release — compare versions
+                  curr_m = re.search(rf'{re.escape(pkg_dir.parts[-1])}-(\S+?)\.ebuild$', ebuild_path.name)
+                  if not curr_m:
+                      print("  [!] Could not extract current version.")
+                      continue
+                  curr_ver = curr_m.group(1)
                   latest_ver = get_latest_github_release(repo)
-                  if latest_ver:
-                      if pkg_dir.parts[-1] == "mangowc" and latest_ver.startswith("12."): latest_ver = "0." + latest_ver
-                      if parse_version(latest_ver) > parse_version(curr_ver):
-                          new_path = pkg_dir / f"{pkg_dir.parts[-1]}-{latest_ver}.ebuild"
-                          ebuild_path.rename(new_path)
-                          updated_atoms.add(pkg_cat_name)
-                          print(f"  [+] Renamed to: {new_path.name}")
-                      else:
-                          print("  [-] Already up to date.")
-                  else:
+                  if not latest_ver:
                       print("  [!] Failed to pull latest version from API.")
+                      continue
+
+                  # Package-specific fixups
+                  if pkg_dir.parts[-1] == "mangowc" and latest_ver.startswith("12."):
+                      latest_ver = "0." + latest_ver
+
+                  if ver_gt(latest_ver, curr_ver):
+                      new_path = pkg_dir / f"{pkg_dir.parts[-1]}-{latest_ver}.ebuild"
+                      ebuild_path.rename(new_path)
+                      updated_atoms.add(pkg_cat_name)
+                      print(f"  [+] Renamed to: {new_path.name}")
+                  elif ver_eq(latest_ver, curr_ver):
+                      print("  [-] Already up to date.")
+                  else:
+                      print(f"  [-] Already up to date (ebuild {curr_ver} >= upstream {latest_ver}).")
 
           changed_list = sorted(updated_atoms)
           if changed_list:
@@ -255,9 +320,6 @@ jobs:
           KEYW
 
           LOCAL_PKGS=$(find /overlay -mindepth 2 -maxdepth 3 -name "*.ebuild" | awk -F/ '{print $(NF-2)"/"$(NF-1)}' | sort -u || true)
-          # Upstream packages tracked separately from overlay.
-          # LLVM slots are listed explicitly so they pre-populate the binhost
-          # before heavy consumers (zed, mesa) are compiled.
           UPSTREAM_PKGS="llvm-core/llvm llvm-core/clang llvm-runtimes/compiler-rt media-libs/mesa media-libs/vulkan-loader sys-kernel/gentoo-kernel virtual/dist-kernel games-util/heroic-bin app-editors/zed dev-util/rustup"
 
           ALL_PKGS=$(echo -e "${LOCAL_PKGS}\n${UPSTREAM_PKGS}" | tr ' ' '\n' | sort -u | grep -v '^$')
@@ -306,9 +368,6 @@ jobs:
         env:
           GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
         run: |
-          # Priority order: LLVM stack FIRST so it's in the binhost cache
-          # before zed/mesa/kernel try to use it. Each package is a separate
-          # relay invocation = separate 6-hour budget.
           PRIORITY_ORDER=(
             "llvm-core/llvm"
             "llvm-core/clang"
