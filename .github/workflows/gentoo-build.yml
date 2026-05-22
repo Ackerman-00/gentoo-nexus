@@ -226,7 +226,7 @@ jobs:
           ACCEPT_RESTRICT="*"
           ACCEPT_CHOSTS="x86_64-pc-linux-gnu"
           CONFIG_PROTECT_MASK="/etc"
-          EMERGE_DEFAULT_OPTS="--usepkg --getbinpkg --buildpkg --binpkg-respect-use=y --quiet-build=y --jobs=4 --load-average=4 --keep-going"
+          EMERGE_DEFAULT_OPTS="--usepkg --getbinpkg --buildpkg --binpkg-respect-use=y --quiet-build=n --jobs=4 --load-average=4 --keep-going"
           MAKEOPTS="-j4"
           MAKECONF
 
