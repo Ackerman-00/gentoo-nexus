@@ -2,7 +2,7 @@ name: Gentoo Check Updates
 
 on:
   schedule:
-    - cron: '0 */8 * * *'
+    - cron: '0 */12 * * *'
   workflow_dispatch:
 
 concurrency:
@@ -34,7 +34,7 @@ jobs:
         run: pip install requests packaging
 
       # ═══════════════════════════════════════════════════════════════════
-      # Phase 1 – Scan & Bump Ebuilds (with immediate Manifest regeneration)
+      # Phase 1 – Scan & Bump Ebuilds (NO manifest regeneration here)
       # ═══════════════════════════════════════════════════════════════════
       - name: Phase 1 - Scan Local Ebuilds & Bump Versions
         id: scan
@@ -141,19 +141,6 @@ jobs:
               except: pass
               return None
 
-          # ── Helper: regenerate Manifest for a newly renamed ebuild ────
-          def regenerate_manifest(ebuild_file):
-              """Force‑regenerate the Manifest for a single ebuild."""
-              try:
-                  subprocess.run(
-                      ['ebuild', str(ebuild_file), 'manifest', '--force'],
-                      check=True, timeout=300,
-                      capture_output=True, text=True
-                  )
-                  print(f"     [✓] Manifest regenerated for {ebuild_file.name}")
-              except subprocess.CalledProcessError as e:
-                  print(f"     [!] Manifest regeneration failed for {ebuild_file.name}: {e.stderr}")
-
           for ebuild_path in Path('.').rglob('*.ebuild'):
               if any(x in ebuild_path.parts for x in ['cache','job_out','binpkgs','distfiles','ccache','.github','.git']):
                   continue
@@ -177,7 +164,6 @@ jobs:
                   if new_ver and ver_gt(new_ver, curr_ver):
                       new_path = pkg_dir / f"{pkg_dir.parts[-1]}-{new_ver}.ebuild"
                       ebuild_path.rename(new_path)
-                      regenerate_manifest(new_path)
                       updated_atoms.add(pkg_cat_name)
                       print(f"  [+] Renamed to: {new_path.name}")
                   else:
@@ -217,8 +203,6 @@ jobs:
                   if ver_gt(latest_ver, curr_ver):
                       new_path = pkg_dir / f"{pkg_dir.parts[-1]}-{latest_ver}.ebuild"
                       ebuild_path.rename(new_path)
-                      # ── REGENERATE MANIFEST IMMEDIATELY AFTER RENAME ─
-                      regenerate_manifest(new_path)
                       updated_atoms.add(pkg_cat_name)
                       print(f"  [+] Renamed to: {new_path.name}")
                   elif ver_eq(latest_ver, curr_ver):
