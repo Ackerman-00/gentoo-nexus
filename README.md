@@ -6,7 +6,7 @@
 
 # gentoo-nexus
 
-*A bleeding-edge Gentoo overlay & binary host — built for the niri Wayland desktop.*
+*A bleeding-edge Gentoo overlay & binary host — built for the Wayland desktop.*
 
 <br/>
 
