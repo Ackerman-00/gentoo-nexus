@@ -63,7 +63,7 @@ jobs:
             -p "*.gpkg.tar" -p "Packages*" \
             --repo ${{ github.repository }} \
             --dir binpkgs --clobber 2>/dev/null || true
-          
+
           echo ">>> Scanning for and removing corrupted/incomplete downloads..."
           for f in binpkgs/*.gpkg.tar; do
             [ -e "$f" ] || continue
@@ -85,8 +85,7 @@ jobs:
           from portage.versions import pkgsplit
 
           pkgdir = '/var/cache/binpkgs'
-          
-          # Pre-create the repo directory to silence Portage warnings
+
           os.makedirs('/var/db/repos/gentoo', exist_ok=True)
           os.system('emerge-webrsync -q')
 
@@ -106,16 +105,13 @@ jobs:
           for f in os.listdir(pkgdir):
               if not f.endswith('.gpkg.tar'): continue
               path = os.path.join(pkgdir, f)
-              
-              # IMMUNE FIX: Safely strip .gpkg.tar and the build ID via regex. 
-              # This guarantees 'base' is a string, completely eliminating the list crash.
+
               base = re.sub(r'-\d+$', '', f.replace('.gpkg.tar', ''))
-              
+
               split_res = pkgsplit(base)
               if not split_res: split_res = pkgsplit(f.replace('.gpkg.tar', ''))
-              
+
               if split_res:
-                  # IMMUNE FIX: Tuple unpacking extracts the package name without array brackets
                   pn, pvr, rev = split_res
                   if pn in pn_to_cat:
                       cat = pn_to_cat[pn]
@@ -169,7 +165,6 @@ jobs:
 
           CPV="${TARGET#=}"
 
-          # Live ebuilds or unresolvable atoms always trigger a build
           if [[ "$CPV" == *"-9999" ]] || [[ "$TARGET" != =* ]]; then
             echo "skip_compile=false" >> "$GITHUB_OUTPUT"
             exit 0
@@ -182,7 +177,6 @@ jobs:
             exit 0
           fi
 
-          # Exact CPV check — no slot skip, just exact match
           if grep -q "^CPV: ${CPV}$" binpkgs/Packages 2>/dev/null; then
             echo "Binary ${CPV} exists in Packages. Skipping compile."
             echo "skip_compile=true" >> "$GITHUB_OUTPUT"
@@ -226,7 +220,7 @@ jobs:
           ACCEPT_RESTRICT="*"
           ACCEPT_CHOSTS="x86_64-pc-linux-gnu"
           CONFIG_PROTECT_MASK="/etc"
-          EMERGE_DEFAULT_OPTS="--usepkg --getbinpkg --buildpkg --binpkg-respect-use=y --quiet-build=n --jobs=4 --load-average=4 --keep-going"
+          EMERGE_DEFAULT_OPTS="--usepkg --getbinpkg --buildpkg --binpkg-respect-use=y --jobs=4 --load-average=4 --keep-going"
           MAKEOPTS="-j4"
           MAKECONF
 
@@ -299,16 +293,16 @@ jobs:
           emerge --oneshot --getbinpkg --backtrack=30 --quiet-build=y \
             '>=dev-util/gdbus-codegen-2.88.1' 2>/dev/null || true
 
-          # ── Mesa‑only pre‑install: ensure wayland-scanner meets the version requirement ──
-          if echo "${TARGET}" | grep -q "media-libs/mesa"; then
-            echo ">>> Mesa target detected — pre-installing dev-util/wayland-scanner..."
-            emerge --oneshot --getbinpkg --backtrack=30 --quiet-build=y \
+          # ── UNCONDITIONAL: ensure wayland-scanner meets Mesa's version requirement ──
+          echo ">>> Ensuring wayland-scanner >= 1.25.0 is available..."
+          emerge --oneshot --getbinpkg --backtrack=30 --quiet-build=y \
+            ">=dev-util/wayland-scanner-1.25.0" 2>/dev/null || {
+            echo ">>> wayland-scanner binary not found; building from source..."
+            emerge --oneshot --usepkg --getbinpkg --buildpkg --backtrack=30 --quiet-build=y \
               ">=dev-util/wayland-scanner-1.25.0" || {
-              echo ">>> wayland-scanner binary not found; compiling from source..."
-              emerge --oneshot --usepkg --getbinpkg --buildpkg --backtrack=30 --quiet-build=y \
-                ">=dev-util/wayland-scanner-1.25.0"
+              echo ">>> WARNING: wayland-scanner build failed, continuing anyway..."
             }
-          fi
+          }
 
           echo ">>> Attempting binary-only install of: ${TARGET}"
           if emerge --usepkgonly --getbinpkg --backtrack=30 --binpkg-respect-use=y "${TARGET}" 2>&1; then
@@ -318,7 +312,6 @@ jobs:
           fi
           echo ">>> Binary-only path failed — falling back to full source build..."
 
-          # IMMUNE FIX: Redirect emerge to log and grab direct exit code. Bypasses buggy PIPESTATUS.
           set +e
           emerge --oneshot --usepkg --getbinpkg --buildpkg --backtrack=30 \
             --binpkg-respect-use=y --quiet-build=y --keep-going \
@@ -330,16 +323,36 @@ jobs:
 
           if [ "$BUILD_EXIT" -ne 0 ]; then
             if grep -q "circular dependencies" /tmp/emerge.log; then
-              echo ">>> Circular dependency — applying multimedia bootstrap..."
+              echo ">>> Circular dependency detected — applying bootstrap..."
+
+              # Step 1: Build libsdl2 WITHOUT pipewire
+              echo "  [1/4] Building libsdl2 without pipewire..."
               USE="-pipewire" emerge --oneshot --usepkg --getbinpkg --buildpkg \
-                --backtrack=30 --quiet-build=y media-libs/libsdl2 || true
+                --backtrack=30 --quiet-build=y media-libs/libsdl2 || {
+                echo "  [!] libsdl2 (no pipewire) failed"
+              }
+
+              # Step 2: Build ffmpeg (now that libsdl2 exists)
+              echo "  [2/4] Building ffmpeg..."
               emerge --oneshot --usepkg --getbinpkg --buildpkg \
-                --backtrack=30 --quiet-build=y media-video/ffmpeg || true
+                --backtrack=30 --quiet-build=y media-video/ffmpeg || {
+                echo "  [!] ffmpeg failed"
+              }
+
+              # Step 3: Build pipewire with ffmpeg support
+              echo "  [3/4] Building pipewire with ffmpeg..."
               emerge --oneshot --usepkg --getbinpkg --buildpkg \
-                --backtrack=30 --quiet-build=y media-video/pipewire || true
-              emerge --oneshot --usepkg --getbinpkg --buildpkg \
-                --backtrack=30 --quiet-build=y media-libs/libsdl2 || true
-              
+                --backtrack=30 --quiet-build=y media-video/pipewire || {
+                echo "  [!] pipewire failed"
+              }
+
+              # Step 4: Rebuild libsdl2 WITH pipewire
+              echo "  [4/4] Rebuilding libsdl2 with pipewire..."
+              USE="pipewire" emerge --oneshot --usepkg --getbinpkg --buildpkg \
+                --backtrack=30 --quiet-build=y media-libs/libsdl2 || {
+                echo "  [!] libsdl2 (pipewire) failed"
+              }
+
               echo ">>> Retrying target after bootstrap..."
               emerge --oneshot --usepkg --getbinpkg --buildpkg --backtrack=30 \
                 --binpkg-respect-use=y --quiet-build=y --keep-going \
