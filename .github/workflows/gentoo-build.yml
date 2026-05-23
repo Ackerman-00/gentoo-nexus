@@ -299,6 +299,17 @@ jobs:
           emerge --oneshot --getbinpkg --backtrack=30 --quiet-build=y \
             '>=dev-util/gdbus-codegen-2.88.1' 2>/dev/null || true
 
+          # ── Mesa‑only pre‑install: ensure wayland-scanner meets the version requirement ──
+          if echo "${TARGET}" | grep -q "media-libs/mesa"; then
+            echo ">>> Mesa target detected — pre-installing dev-util/wayland-scanner..."
+            emerge --oneshot --getbinpkg --backtrack=30 --quiet-build=y \
+              ">=dev-util/wayland-scanner-1.25.0" || {
+              echo ">>> wayland-scanner binary not found; compiling from source..."
+              emerge --oneshot --usepkg --getbinpkg --buildpkg --backtrack=30 --quiet-build=y \
+                ">=dev-util/wayland-scanner-1.25.0"
+            }
+          fi
+
           echo ">>> Attempting binary-only install of: ${TARGET}"
           if emerge --usepkgonly --getbinpkg --backtrack=30 --binpkg-respect-use=y "${TARGET}" 2>&1; then
             echo ">>> SUCCESS: Installed entirely from binary cache."
