@@ -293,16 +293,18 @@ jobs:
           emerge --oneshot --getbinpkg --backtrack=30 --quiet-build=y \
             '>=dev-util/gdbus-codegen-2.88.1' 2>/dev/null || true
 
-          # ── UNCONDITIONAL: ensure wayland-scanner meets Mesa's version requirement ──
-          echo ">>> Ensuring wayland-scanner >= 1.25.0 is available..."
-          emerge --oneshot --getbinpkg --backtrack=30 --quiet-build=y \
-            ">=dev-util/wayland-scanner-1.25.0" 2>/dev/null || {
-            echo ">>> wayland-scanner binary not found; building from source..."
-            emerge --oneshot --usepkg --getbinpkg --buildpkg --backtrack=30 --quiet-build=y \
-              ">=dev-util/wayland-scanner-1.25.0" || {
-              echo ">>> WARNING: wayland-scanner build failed, continuing anyway..."
-            }
-          }
+          # ── Conditional: only upgrade wayland-scanner when Mesa is likely to be needed ──
+          if echo "${TARGET}" | grep -qE "media-libs/mesa|media-libs/libsdl2|media-video/ffmpeg|media-video/pipewire|x11-libs/gtk|gui-libs/libdecor|gui-wm/"; then
+              echo ">>> Target may require Mesa — ensuring wayland-scanner >= 1.25.0..."
+              emerge --oneshot --getbinpkg --backtrack=30 --quiet-build=y \
+                  ">=dev-util/wayland-scanner-1.25.0" 2>/dev/null || {
+                  echo ">>> wayland-scanner binary not found; building from source..."
+                  emerge --oneshot --usepkg --getbinpkg --buildpkg --backtrack=30 --quiet-build=y \
+                      ">=dev-util/wayland-scanner-1.25.0" || {
+                      echo ">>> WARNING: wayland-scanner build failed, continuing anyway..."
+                  }
+              }
+          fi
 
           echo ">>> Attempting binary-only install of: ${TARGET}"
           if emerge --usepkgonly --getbinpkg --backtrack=30 --binpkg-respect-use=y "${TARGET}" 2>&1; then
