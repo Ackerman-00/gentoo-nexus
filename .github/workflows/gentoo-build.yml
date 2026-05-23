@@ -293,15 +293,15 @@ jobs:
           emerge --oneshot --getbinpkg --backtrack=30 --quiet-build=y \
             '>=dev-util/gdbus-codegen-2.88.1' 2>/dev/null || true
 
-          # ── Conditional: only upgrade wayland-scanner when Mesa is likely to be needed ──
+          # ── Conditional: upgrade wayland + wayland-scanner (block-safe) ──
           if echo "${TARGET}" | grep -qE "media-libs/mesa|media-libs/libsdl2|media-video/ffmpeg|media-video/pipewire|x11-libs/gtk|gui-libs/libdecor|gui-wm/"; then
-              echo ">>> Target may require Mesa — ensuring wayland-scanner >= 1.25.0..."
+              echo ">>> Target may require Mesa — upgrading wayland + wayland-scanner together..."
               emerge --oneshot --getbinpkg --backtrack=30 --quiet-build=y \
-                  ">=dev-util/wayland-scanner-1.25.0" 2>/dev/null || {
-                  echo ">>> wayland-scanner binary not found; building from source..."
+                  "dev-libs/wayland" "dev-util/wayland-scanner" 2>/dev/null || {
+                  echo ">>> Binary upgrade failed; building from source..."
                   emerge --oneshot --usepkg --getbinpkg --buildpkg --backtrack=30 --quiet-build=y \
-                      ">=dev-util/wayland-scanner-1.25.0" || {
-                      echo ">>> WARNING: wayland-scanner build failed, continuing anyway..."
+                      "dev-libs/wayland" "dev-util/wayland-scanner" || {
+                      echo ">>> WARNING: wayland/wayland-scanner upgrade failed, continuing anyway..."
                   }
               }
           fi
