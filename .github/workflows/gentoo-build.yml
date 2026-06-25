@@ -4,12 +4,7 @@ on:
   workflow_dispatch:
     inputs:
       package_list:
-        description: |
-          Space-separated package atoms. Accepts any of:
-            app-editors/zed                     → latest ~amd64 from portage tree
-            =app-editors/zed-1.3.5              → exact version
-            sys-devel/gcc-16.1.0               → cat/pn-ver shorthand (= added)
-            https://gitweb.gentoo.org/...ebuild → full gitweb URL
+        description: 'Space-separated package atoms to compile'
         required: true
       force_rebuild:
         description: 'Packages to force rebuild (or "true" for all)'
@@ -33,18 +28,26 @@ jobs:
           token: ${{ secrets.GITHUB_TOKEN }}
           fetch-depth: 0
 
-      - name: Allocate Swap Space (OOM Prevention)
+      - name: Allocate ZRAM Swap (OOM Prevention & Speed Optimization)
         run: |
-          sudo fallocate -l 10G /mnt/10g.swap || sudo dd if=/dev/zero of=/mnt/10g.swap bs=1G count=10 status=none
-          sudo chmod 600 /mnt/10g.swap
-          sudo mkswap /mnt/10g.swap
-          sudo swapon /mnt/10g.swap
+          sudo modprobe zram
+          sudo zramctl --find --size 12G --algorithm lz4
+          sudo mkswap /dev/zram0
+          sudo swapon /dev/zram0 --priority 100
           free -h
 
       - name: Free Disk Space for Docker
         run: |
           sudo rm -rf /usr/share/dotnet /usr/local/lib/android /opt/ghc /opt/hostedtoolcache/CodeQL || true
           df -h /
+
+      - name: Persistent CCache Setup
+        uses: actions/cache@v4
+        with:
+          path: ccache
+          key: gentoo-ccache-${{ runner.os }}-${{ github.sha }}
+          restore-keys: |
+            gentoo-ccache-${{ runner.os }}-
 
       - name: Prepare Workspace & Overlay
         run: |
@@ -64,18 +67,15 @@ jobs:
             --repo ${{ github.repository }} \
             --dir binpkgs --clobber 2>/dev/null || true
 
-          echo ">>> Scanning for and removing corrupted/incomplete downloads..."
           for f in binpkgs/*.gpkg.tar; do
             [ -e "$f" ] || continue
             if ! tar -tf "$f" >/dev/null 2>&1; then
-              echo "Removed corrupted file to protect indexer: $f"
               rm -f "$f"
             fi
           done
 
       - name: Restore GPKG Layout using Portage Tree Mapping
         run: |
-          echo ">>> Restoring GPKG folder strict-layout via Gentoo native tree mapping..."
           docker run --rm \
             -v "${{ github.workspace }}/binpkgs:/var/cache/binpkgs:rw" \
             -v "${{ github.workspace }}/overlay:/var/db/repos/gentoo-nexus:ro" \
@@ -85,7 +85,6 @@ jobs:
           from portage.versions import pkgsplit
 
           pkgdir = '/var/cache/binpkgs'
-
           os.makedirs('/var/db/repos/gentoo', exist_ok=True)
           os.system('emerge-webrsync -q')
 
@@ -105,9 +104,7 @@ jobs:
           for f in os.listdir(pkgdir):
               if not f.endswith('.gpkg.tar'): continue
               path = os.path.join(pkgdir, f)
-
               base = re.sub(r'-\d+$', '', f.replace('.gpkg.tar', ''))
-
               split_res = pkgsplit(base)
               if not split_res: split_res = pkgsplit(f.replace('.gpkg.tar', ''))
 
@@ -120,9 +117,6 @@ jobs:
                       if path != target_path:
                           os.makedirs(target_dir, exist_ok=True)
                           shutil.move(path, target_path)
-                          print(f'Restored: {cat}/{pn}/{f}')
-                  else:
-                      print(f'Warning: Could not resolve category for {pn}')
           "
 
       - name: Fix Workspace Permissions
@@ -172,16 +166,13 @@ jobs:
 
           FORCE="${{ github.event.inputs.force_rebuild }}"
           if [[ "$FORCE" == "true" || "$FORCE" == *"${CPV%%/*}"* ]]; then
-            echo "Force rebuild triggered. Proceeding to Docker."
             echo "skip_compile=false" >> "$GITHUB_OUTPUT"
             exit 0
           fi
 
           if grep -q "^CPV: ${CPV}$" binpkgs/Packages 2>/dev/null; then
-            echo "Binary ${CPV} exists in Packages. Skipping compile."
             echo "skip_compile=true" >> "$GITHUB_OUTPUT"
           else
-            echo "Binary ${CPV} not found. Compiling."
             echo "skip_compile=false" >> "$GITHUB_OUTPUT"
           fi
 
@@ -204,16 +195,24 @@ jobs:
 
           getuto 2>/dev/null || emerge -q --oneshot app-crypt/gentoo-keys 2>/dev/null || true
 
+          # ── STRICT 1:1 DESKTOP FLAG MATCHING ──
           cat > /etc/portage/make.conf << 'MAKECONF'
-          COMMON_FLAGS="-O2 -march=x86-64-v3 -mtune=znver3 -pipe"
-          VIDEO_CARDS="amdgpu radeonsi nvidia nouveau"
+          COMMON_FLAGS="-O2 -march=x86-64 -pipe"
           CFLAGS="${COMMON_FLAGS}"
           CXXFLAGS="${COMMON_FLAGS}"
-          USE="vaapi vdpau vulkan amdgpu ffmpeg encode nvenc elogind egl -systemd -cups abi_x86_32"
-          FEATURES="getbinpkg buildpkg parallel-install -binpkg-verify-signature -sandbox -usersandbox -ipc-sandbox -network-sandbox -pid-sandbox"
+          FCFLAGS="${COMMON_FLAGS}"
+          FFLAGS="${COMMON_FLAGS}"
+          VIDEO_CARDS="amdgpu radeonsi"
+          USE="elogind -systemd dbus wayland egl vaapi vdpau vulkan amdgpu ffmpeg encode"
+          
+          # Build-specific features required for CI execution & caching
+          FEATURES="getbinpkg buildpkg parallel-install ccache -binpkg-verify-signature -sandbox -usersandbox -ipc-sandbox -network-sandbox -pid-sandbox"
+          CCACHE_DIR="/var/cache/ccache"
           BINPKG_FORMAT="gpkg"
+          PORTAGE_BINPKG_SIGVERIFY="0"
           PKGDIR="/var/cache/binpkgs"
           DISTDIR="/var/cache/distfiles"
+          
           ACCEPT_LICENSE="*"
           ACCEPT_KEYWORDS="~amd64"
           ACCEPT_PROPERTIES="*"
@@ -222,6 +221,7 @@ jobs:
           CONFIG_PROTECT_MASK="/etc"
           EMERGE_DEFAULT_OPTS="--usepkg --getbinpkg --buildpkg --binpkg-respect-use=y --jobs=4 --load-average=4 --keep-going"
           MAKEOPTS="-j4"
+          LC_MESSAGES=C.UTF-8
           MAKECONF
 
           cat > /etc/portage/repos.conf/gentoo-nexus.conf << 'REPO'
@@ -264,55 +264,48 @@ jobs:
           sys-libs/zlib-ng abi_x86_32 abi_x86_64 compat
           USES
 
+          # 32-bit Multilib stack critical for Proton/Wine gaming
+          cat > /etc/portage/package.use/gaming << 'GAMING'
+          media-libs/mesa abi_x86_32
+          media-libs/vulkan-loader abi_x86_32
+          media-libs/alsa-lib abi_x86_32
+          x11-libs/libX11 abi_x86_32
+          x11-libs/libxcb abi_x86_32
+          x11-libs/libXext abi_x86_32
+          virtual/opengl abi_x86_32
+          sys-libs/zlib abi_x86_32
+          GAMING
+
           mkdir -p /etc/portage/package.mask
           echo '>=dev-libs/libgit2-1.9.3' > /etc/portage/package.mask/libgit2
 
-          echo ">>> Rebuilding Packages index from mounted binaries..."
           emaint binhost --fix
 
-          echo ">>> Generating Manifests for overlay ebuilds..."
           while IFS= read -r -d '' ebuild_file; do
               ebuild "$ebuild_file" manifest >/dev/null 2>&1 || true
           done < <(find /var/db/repos/gentoo-nexus -mindepth 2 -maxdepth 3 -name "*.ebuild" -print0)
 
           TARGET="$RAW_TARGET"
           if [[ "$TARGET" != =* && "$TARGET" != *"-9999" ]]; then
-            echo ">>> Bare atom: $TARGET — resolving latest ~amd64 via portageq..."
             RESOLVED=$(portageq best_visible / "$TARGET" 2>/dev/null || true)
             if [ -n "$RESOLVED" ] && [[ "$RESOLVED" == */* ]]; then
               TARGET="=${RESOLVED}"
-              echo ">>> Resolved to: $TARGET"
-            else
-              echo ">>> WARNING: portageq could not resolve $TARGET — using as-is"
             fi
           fi
 
-          echo ">>> Pre-resolving common soft blocks..."
-          emerge --oneshot --getbinpkg --backtrack=30 --quiet-build=y \
-            '>=dev-libs/gobject-introspection-1.86.0' 2>/dev/null || true
-          emerge --oneshot --getbinpkg --backtrack=30 --quiet-build=y \
-            '>=dev-util/gdbus-codegen-2.88.1' 2>/dev/null || true
+          emerge --oneshot --getbinpkg --backtrack=30 --quiet-build=y '>=dev-libs/gobject-introspection-1.86.0' 2>/dev/null || true
+          emerge --oneshot --getbinpkg --backtrack=30 --quiet-build=y '>=dev-util/gdbus-codegen-2.88.1' 2>/dev/null || true
 
-          # ── Conditional: upgrade wayland + wayland-scanner (block-safe) ──
           if echo "${TARGET}" | grep -qE "media-libs/mesa|media-libs/libsdl2|media-video/ffmpeg|media-video/pipewire|x11-libs/gtk|gui-libs/libdecor|gui-wm/"; then
-              echo ">>> Target may require Mesa — upgrading wayland + wayland-scanner together..."
-              emerge --oneshot --getbinpkg --backtrack=30 --quiet-build=y \
-                  "dev-libs/wayland" "dev-util/wayland-scanner" 2>/dev/null || {
-                  echo ">>> Binary upgrade failed; building from source..."
-                  emerge --oneshot --usepkg --getbinpkg --buildpkg --backtrack=30 --quiet-build=y \
-                      "dev-libs/wayland" "dev-util/wayland-scanner" || {
-                      echo ">>> WARNING: wayland/wayland-scanner upgrade failed, continuing anyway..."
-                  }
+              emerge --oneshot --getbinpkg --backtrack=30 --quiet-build=y "dev-libs/wayland" "dev-util/wayland-scanner" 2>/dev/null || {
+                  emerge --oneshot --usepkg --getbinpkg --buildpkg --backtrack=30 --quiet-build=y "dev-libs/wayland" "dev-util/wayland-scanner" || true
               }
           fi
 
-          echo ">>> Attempting binary-only install of: ${TARGET}"
           if emerge --usepkgonly --getbinpkg --backtrack=30 --binpkg-respect-use=y "${TARGET}" 2>&1; then
-            echo ">>> SUCCESS: Installed entirely from binary cache."
             emaint binhost --fix
             exit 0
           fi
-          echo ">>> Binary-only path failed — falling back to full source build..."
 
           set +e
           emerge --oneshot --usepkg --getbinpkg --buildpkg --backtrack=30 \
@@ -325,47 +318,18 @@ jobs:
 
           if [ "$BUILD_EXIT" -ne 0 ]; then
             if grep -q "circular dependencies" /tmp/emerge.log; then
-              echo ">>> Circular dependency detected — applying bootstrap..."
+              USE="-pipewire" emerge --oneshot --usepkg --getbinpkg --buildpkg --backtrack=30 --quiet-build=y media-libs/libsdl2 || true
+              emerge --oneshot --usepkg --getbinpkg --buildpkg --backtrack=30 --quiet-build=y media-video/ffmpeg || true
+              emerge --oneshot --usepkg --getbinpkg --buildpkg --backtrack=30 --quiet-build=y media-video/pipewire || true
+              USE="pipewire" emerge --oneshot --usepkg --getbinpkg --buildpkg --backtrack=30 --quiet-build=y media-libs/libsdl2 || true
 
-              # Step 1: Build libsdl2 WITHOUT pipewire
-              echo "  [1/4] Building libsdl2 without pipewire..."
-              USE="-pipewire" emerge --oneshot --usepkg --getbinpkg --buildpkg \
-                --backtrack=30 --quiet-build=y media-libs/libsdl2 || {
-                echo "  [!] libsdl2 (no pipewire) failed"
-              }
-
-              # Step 2: Build ffmpeg (now that libsdl2 exists)
-              echo "  [2/4] Building ffmpeg..."
-              emerge --oneshot --usepkg --getbinpkg --buildpkg \
-                --backtrack=30 --quiet-build=y media-video/ffmpeg || {
-                echo "  [!] ffmpeg failed"
-              }
-
-              # Step 3: Build pipewire with ffmpeg support
-              echo "  [3/4] Building pipewire with ffmpeg..."
-              emerge --oneshot --usepkg --getbinpkg --buildpkg \
-                --backtrack=30 --quiet-build=y media-video/pipewire || {
-                echo "  [!] pipewire failed"
-              }
-
-              # Step 4: Rebuild libsdl2 WITH pipewire
-              echo "  [4/4] Rebuilding libsdl2 with pipewire..."
-              USE="pipewire" emerge --oneshot --usepkg --getbinpkg --buildpkg \
-                --backtrack=30 --quiet-build=y media-libs/libsdl2 || {
-                echo "  [!] libsdl2 (pipewire) failed"
-              }
-
-              echo ">>> Retrying target after bootstrap..."
               emerge --oneshot --usepkg --getbinpkg --buildpkg --backtrack=30 \
                 --binpkg-respect-use=y --quiet-build=y --keep-going \
                 --autounmask=y --autounmask-write --autounmask-continue=y \
-                "${TARGET}" || echo ">>> WARNING: Build failed after bootstrap. Saving partial binaries."
-            else
-              echo ">>> WARNING: emerge exited ${BUILD_EXIT}. Saving any partial binaries."
+                "${TARGET}" || true
             fi
           fi
 
-          echo ">>> Finalising Packages index..."
           emaint binhost --fix
           BUILDSCRIPT
 
@@ -406,7 +370,6 @@ jobs:
               gh release upload rolling "$1" --repo "$REPO" --clobber 2>&1 && return 0
               sleep 5
             done
-            echo "::error::Upload failed after 3 attempts: $1"
             return 1
           }
 
