@@ -28,13 +28,13 @@ jobs:
       - name: Set up Python
         uses: actions/setup-python@v5
         with:
-          python-version: '3.11'
+          python-version: '3.13'
 
       - name: Install Dependencies
         run: pip install requests packaging
 
       # ═══════════════════════════════════════════════════════════════════
-      # Phase 1 – Scan & Bump Ebuilds (NO manifest regeneration here)
+      # Phase 1 – Scan & Bump Ebuilds (NO manifest regeneration here)
       # ═══════════════════════════════════════════════════════════════════
       - name: Phase 1 - Scan Local Ebuilds & Bump Versions
         id: scan
@@ -50,7 +50,7 @@ jobs:
           import requests
 
           session = requests.Session()
-          session.mount('https://', HTTPAdapter(max_retries=Retry(total=3, backoff_factor=1, status_forcelist=[429,500,502,503,504])))
+          session.mount('https://', HTTPAdapter(max_retries=Retry(total=3, backoff_factor=1, status_forcelist=)))
           gh_token = os.environ.get('GITHUB_TOKEN')
           if gh_token:
               session.headers.update({"Authorization": f"Bearer {gh_token}", "Accept": "application/vnd.github.v3+json"})
@@ -219,7 +219,7 @@ jobs:
           python3 -u scan.py
 
       # ═══════════════════════════════════════════════════════════════════
-      # Phase 2 – Robust Manifest Generation (fetches distfiles first)
+      # Phase 2 – Robust Manifest Generation (fetches distfiles first)
       # ═══════════════════════════════════════════════════════════════════
       - name: Phase 2 - Generate Manifests and Cache
         run: |
@@ -245,28 +245,19 @@ jobs:
           auto-sync = no
           REPOEOF
 
-          # ── Robust Manifest Generation ─────────────────────────────────
           echo ">>> Generating Manifests (force‑fetching distfiles)..."
           for e in $(find /overlay -mindepth 2 -maxdepth 3 -name "*.ebuild" | sort); do
             pkg_dir=$(dirname "$e")
             ebuild_name=$(basename "$e")
 
-            # 1) Fetch the distfile for this ebuild into /var/cache/distfiles
-            GENTOO_MIRRORS="" \
-            DISTDIR="/var/cache/distfiles" \
-              ebuild "$e" fetch >/dev/null 2>&1 || true
+            GENTOO_MIRRORS="" DISTDIR="/var/cache/distfiles" ebuild "$e" fetch >/dev/null 2>&1 || true
 
-            # 2) Force‑regenerate the Manifest from scratch
-            #    (--force ensures DIST entries are replaced even if incomplete)
-            GENTOO_MIRRORS="" \
-            DISTDIR="/var/cache/distfiles" \
-              ebuild "$e" manifest --force >/dev/null 2>&1 || {
-                echo "  [!] Manifest generation failed for ${ebuild_name} — retrying with pkgdev"
-                # Fallback to pkgdev if available
-                if command -v pkgdev >/dev/null 2>&1; then
-                  pkgdev manifest -m "$e" >/dev/null 2>&1 || true
-                fi
-              }
+            GENTOO_MIRRORS="" DISTDIR="/var/cache/distfiles" ebuild "$e" manifest --force >/dev/null 2>&1 || {
+              echo "  [!] Manifest generation failed for ${ebuild_name} — retrying with pkgdev"
+              if command -v pkgdev >/dev/null 2>&1; then
+                pkgdev manifest -m "$e" >/dev/null 2>&1 || true
+              fi
+            }
           done
           echo ">>> Done generating manifests."
 
@@ -276,7 +267,7 @@ jobs:
           docker run --rm -v "${{ github.workspace }}:/overlay" gentoo/stage3:amd64-desktop-openrc bash /overlay/gen_manifests.sh
 
       # ═══════════════════════════════════════════════════════════════════
-      # Phase 3 – Commit All Changes
+      # Phase 3 – Commit All Changes
       # ═══════════════════════════════════════════════════════════════════
       - name: Phase 3 - Commit All Changes
         run: |
@@ -294,7 +285,7 @@ jobs:
           fi
 
       # ═══════════════════════════════════════════════════════════════════
-      # Phase 4 – Resolve Latest State (with Manifest verification pass)
+      # Phase 4 – Resolve Latest State (with Manifest verification pass)
       # ═══════════════════════════════════════════════════════════════════
       - name: Phase 4 - Resolve Latest State via Portage
         run: |
@@ -327,7 +318,7 @@ jobs:
           */*::gentoo-nexus **
           media-libs/mesa ~amd64
           media-libs/vulkan-loader ~amd64
-          sys-kernel/gentoo-kernel ~amd64
+          sys-kernel/zen-sources ~amd64
           virtual/dist-kernel ~amd64
           games-util/heroic-bin ~amd64
           app-editors/zed ~amd64
@@ -335,17 +326,14 @@ jobs:
           net-libs/webkit-gtk ~amd64
           KEYW
 
-          # ── Pre‑flight: Validate all Manifests ─────────────────────────
           echo ">>> Validating overlay Manifests..."
           MANIFEST_FAILS=0
           for e in $(find /overlay -mindepth 2 -maxdepth 3 -name "*.ebuild" | sort); do
-            # Check if Manifest has at least one DIST entry for this ebuild
             DISTFILE=$(grep -oP 'SRC_URI="?\K[^"]+' "$e" 2>/dev/null | head -1 || true)
             if [ -n "$DISTFILE" ]; then
               if ! grep -q "DIST ${DISTFILE}" "${e%/*}/Manifest" 2>/dev/null; then
                 echo "  [!] Missing DIST entry for ${DISTFILE} — regenerating manifest for $(basename "$e")"
-                GENTOO_MIRRORS="" DISTDIR="/var/cache/distfiles" \
-                  ebuild "$e" manifest --force >/dev/null 2>&1 || {
+                GENTOO_MIRRORS="" DISTDIR="/var/cache/distfiles" ebuild "$e" manifest --force >/dev/null 2>&1 || {
                   echo "  [!!] FAILED to regenerate manifest for $(basename "$e")"
                   MANIFEST_FAILS=$((MANIFEST_FAILS + 1))
                 }
@@ -359,8 +347,7 @@ jobs:
 
           LOCAL_PKGS=$(find /overlay -mindepth 2 -maxdepth 3 -name "*.ebuild" | awk -F/ '{print $(NF-2)"/"$(NF-1)}' | sort -u || true)
 
-          # No slot restriction — always track the latest LLVM/Clang
-          UPSTREAM_PKGS="llvm-core/llvm llvm-core/clang llvm-runtimes/compiler-rt media-libs/mesa media-libs/vulkan-loader sys-kernel/gentoo-kernel virtual/dist-kernel games-util/heroic-bin app-editors/zed dev-util/rustup"
+          UPSTREAM_PKGS="llvm-core/llvm llvm-core/clang llvm-runtimes/compiler-rt media-libs/mesa media-libs/vulkan-loader sys-kernel/zen-sources virtual/dist-kernel games-util/heroic-bin app-editors/zed dev-util/rustup"
 
           ALL_PKGS=$(echo -e "${LOCAL_PKGS}\n${UPSTREAM_PKGS}" | tr ' ' '\n' | sort -u | grep -v '^$')
 
@@ -377,7 +364,7 @@ jobs:
           docker run --rm -v "${{ github.workspace }}:/overlay" gentoo/stage3:amd64-desktop-openrc bash /overlay/resolve_state.sh
 
       # ═══════════════════════════════════════════════════════════════════
-      # Phase 5 – Binhost Audit
+      # Phase 5 – Binhost Audit
       # ═══════════════════════════════════════════════════════════════════
       - name: Phase 5 - Binhost Audit
         id: audit
@@ -395,7 +382,6 @@ jobs:
              PN_PV="${CPV#*/}"
              ATOM=$(echo "$CPV" | sed -E 's/-[0-9]+(\.[0-9]+)*(_[a-z0-9]+)?(-r[0-9]+)?$//')
 
-             # No LLVM slot skip — every missing CPV is queued
              if echo "$CHANGED" | grep -q "^${ATOM}$"; then
                 echo "=$CPV" >> packages_to_build.txt
                 CHANGED_ATOMS="$CHANGED_ATOMS =$CPV"
@@ -410,7 +396,7 @@ jobs:
           echo "force_required=$UNIQUE_CHANGED_ATOMS" >> "$GITHUB_OUTPUT"
 
       # ═══════════════════════════════════════════════════════════════════
-      # Phase 6 – Trigger Relay (packages removed as requested)
+      # Phase 6 – Trigger Relay
       # ═══════════════════════════════════════════════════════════════════
       - name: Phase 6 - Trigger Relay
         if: steps.audit.outputs.build_list != ''
@@ -423,7 +409,7 @@ jobs:
             "llvm-runtimes/compiler-rt"
             "media-libs/mesa"
             "media-libs/vulkan-loader"
-            "sys-kernel/gentoo-kernel"
+            "sys-kernel/zen-sources"
             "virtual/dist-kernel"
             "dev-util/rustup"
             "app-editors/zed"
