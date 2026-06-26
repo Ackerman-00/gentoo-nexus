@@ -236,6 +236,10 @@ jobs:
           auto-sync = no
           REPO
 
+          echo ">>> Updating Portage to latest version..."
+          emerge --oneshot sys-apps/portage
+          quickpkg sys-apps/portage 2>/dev/null || true
+
           mkdir -p /etc/portage/binrepos.conf
           cat > /etc/portage/binrepos.conf/gentoo-official.conf << 'BINHOST'
           [gentoo-official-v3]
@@ -248,10 +252,6 @@ jobs:
           sync-uri = https://distfiles.gentoo.org/releases/amd64/binpackages/23.0/x86-64/
           verify-signature = true
           BINHOST
-
-          echo ">>> Updating Portage to latest version..."
-          emerge --oneshot sys-apps/portage
-          quickpkg sys-apps/portage 2>/dev/null || true
 
           mkdir -p /etc/portage/package.accept_keywords
           echo '*/*::gentoo-nexus **' > /etc/portage/package.accept_keywords/nexus
