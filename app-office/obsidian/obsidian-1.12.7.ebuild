@@ -15,7 +15,6 @@ inherit chromium-2 desktop linux-info unpacker xdg
 DESCRIPTION="A second brain, for you, forever."
 HOMEPAGE="https://obsidian.md/"
 
-# The .deb is downloaded purely to extract the .desktop file and app icon.
 SRC_URI="
     https://github.com/obsidianmd/obsidian-releases/releases/download/v${PV}/${P/-/_}_amd64.deb -> ${P}.gh.deb
     amd64? ( https://github.com/obsidianmd/obsidian-releases/releases/download/v${PV}/${P}.tar.gz -> ${P}-amd64.tar.gz )
@@ -88,13 +87,10 @@ src_prepare() {
     
     set_obsidian_src_dir
     
-    # Cleanup languages
-    pushd "${S_OBSIDIAN}/locales/" >/dev/null || die "location change for language cleanup failed"
+    pushd "${S_OBSIDIAN}/locales/" >/dev/null || die
     chromium_remove_language_paks
-    popd >/dev/null || die "location reset for language cleanup failed"
+    popd >/dev/null || die
 
-    # Inject modern Electron Wayland flags directly into the primary desktop file.
-    # We drop the sloppy dual-desktop file approach. 'auto' handles fallback gracefully.
     if use wayland; then
         sed -i \
             '/Exec/s/obsidian /obsidian --ozone-platform-hint=auto /' \
@@ -109,14 +105,12 @@ src_install() {
     dodir "${destdir}"
     set_obsidian_src_dir
 
-    pushd "${S_OBSIDIAN}" >/dev/null || die "location change for main install failed"
+    pushd "${S_OBSIDIAN}" >/dev/null || die
     
-    # Dynamically copy payload to survive upstream Electron layout changes
-    cp -pPR * "${ED}${destdir}/" || die "failed to copy obsidian files"
+    cp -pPR * "${ED}${destdir}/" || die
     
-    popd >/dev/null || die "location reset for main install failed"
+    popd >/dev/null || die
 
-    # Chrome-sandbox requires the setuid bit to be specifically set.
     fowners root "${destdir}/chrome-sandbox"
     fperms 4711 "${destdir}/chrome-sandbox"
 
@@ -126,7 +120,6 @@ src_install() {
         dosym ../../usr/lib64/libayatana-appindicator3.so "${destdir}/libappindicator3.so"
     fi
 
-    # Install the single unified desktop file
     domenu usr/share/applications/obsidian.desktop
 
     local size

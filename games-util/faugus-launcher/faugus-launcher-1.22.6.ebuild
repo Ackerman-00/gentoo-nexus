@@ -13,7 +13,6 @@ KEYWORDS="~amd64"
 IUSE=""
 REQUIRED_USE="${PYTHON_REQUIRED_USE}"
 
-# Mapping all the Arch dependencies to Gentoo atoms
 DEPEND="${PYTHON_DEPS}
 	$(python_gen_cond_dep '
 		dev-python/pygobject:3[${PYTHON_USEDEP}]
@@ -35,14 +34,11 @@ BDEPEND="
 "
 
 pkg_setup() {
-	# Ensure the Python environment is set up before Meson runs
 	python-single-r1_pkg_setup
 }
 
 src_install() {
 	meson_src_install
 	
-	# Faugus installs a python executable to /usr/bin. 
-	# We must force it to use Gentoo's specific Python wrapper.
 	python_fix_shebang "${ED}/usr/bin"
 }

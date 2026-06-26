@@ -53,23 +53,18 @@ RDEPEND="${DEPEND}"
 src_install() {
 	local destdir="/opt/zen"
 	
-	# 1. Use dodir and cp to preserve upstream executable bits
 	dodir "${destdir}"
 	cp -pPR * "${ED}${destdir}/" || die
 	
-	# 2. Create a symlink to the WRAPPER script, not the raw binary
 	dosym -r "${destdir}/zen" "/usr/bin/zen"
 	
-	# 3. Add icons
 	local size
 	for size in 16 32 48 64 128; do
 		newicon -s ${size} "browser/chrome/icons/default/default${size}.png" zen.png
 	done
 	
-	# 4. Create desktop file (Notice the %U added to the command)
 	make_desktop_entry "/usr/bin/zen %U" "Zen Browser" zen "Network;WebBrowser" "$(cat "${FILESDIR}"/desktop_options)"
 	
-	# 5. Disable auto-updates (policies.json is flawless)
 	insinto "${destdir}/distribution"
 	doins "${FILESDIR}/policies.json"
 }

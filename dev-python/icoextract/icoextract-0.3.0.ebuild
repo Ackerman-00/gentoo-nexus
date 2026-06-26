@@ -11,7 +11,6 @@ LICENSE="MIT"
 SLOT="0"
 KEYWORDS="~amd64"
 
-# It relies on pefile to read the Windows binaries
 RDEPEND="
 	dev-python/pefile[${PYTHON_USEDEP}]
 "

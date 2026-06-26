@@ -13,7 +13,6 @@ LICENSE="MIT"
 SLOT="0"
 KEYWORDS="~amd64"
 
-# ⚠️ THE MAGIC BYPASS: Allows Go to download modules natively during compile
 RESTRICT="network-sandbox"
 
 DEPEND="
@@ -32,7 +31,6 @@ RDEPEND="${DEPEND}"
 BDEPEND="dev-lang/go"
 
 src_compile() {
-    # Set a temporary GOPATH so it doesn't pollute your system
     export GOPATH="${T}/go"
     emake build
 }

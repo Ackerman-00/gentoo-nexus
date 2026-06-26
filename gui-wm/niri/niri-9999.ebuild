@@ -23,7 +23,6 @@ REQUIRED_USE="
     systemd? ( dbus )
 "
 
-# Bypasses the Portage compile-phase network sandbox. 
 RESTRICT="network-sandbox"
 
 DEPEND="
@@ -67,9 +66,6 @@ src_unpack() {
 src_prepare() {
     default
 
-    # Create an explicit OpenRC desktop file so the binary package remains init-agnostic.
-    # The default niri.desktop uses `niri-session` (which expects systemd).
-    # Providing both ensures the .gpkg.tar works perfectly for all init systems.
     cp resources/niri.desktop resources/niri-openrc.desktop || die
     
     local cmd="niri --session"
@@ -80,10 +76,8 @@ src_prepare() {
 }
 
 src_configure() {
-    # Dynamically inject the commit hash for the `niri --version` string
     export NIRI_BUILD_COMMIT="${EGIT_VERSION:0:7}"
 
-    # cargo.eclass automatically parses this specific array name and applies it as Cargo features
     local myfeatures=(
         $(usev dbus)
         $(usev screencast xdp-gnome-screencast)
@@ -104,7 +98,6 @@ src_install() {
     cargo_src_install
     dobin resources/niri-session
     
-    # Installed unconditionally to guarantee binary package compatibility across environments
     systemd_douserunit resources/niri{.service,-shutdown.target}
     
     insinto /usr/share/wayland-sessions

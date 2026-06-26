@@ -16,13 +16,11 @@ inherit chromium-2 desktop linux-info optfeature unpacker xdg
 DESCRIPTION="All-in-one voice and text chat for gamers with Vencord Preinstalled"
 HOMEPAGE="https://github.com/Vencord/Vesktop/"
 
-# Adopting the Void Linux strategy: Use the .deb to natively acquire all icons and desktop files
 SRC_URI="
     amd64? ( https://github.com/Vencord/Vesktop/releases/download/v${PV}/${MY_PN}_${PV}_amd64.deb -> ${P}-amd64.deb )
     arm64? ( https://github.com/Vencord/Vesktop/releases/download/v${PV}/${MY_PN}_${PV}_arm64.deb -> ${P}-arm64.deb )
 "
 
-# The unpacker eclass extracts the .deb data payload directly into the root WORKDIR
 S="${WORKDIR}"
 
 LICENSE="GPL-3+"
@@ -57,7 +55,6 @@ DEPEND="
     x11-misc/xdg-utils
 "
 
-# The .deb natively installs to /opt/Vesktop
 DESTDIR="/opt/Vesktop"
 
 QA_PREBUILT="*"
@@ -65,16 +62,13 @@ QA_PREBUILT="*"
 CONFIG_CHECK="~USER_NS"
 
 src_unpack() {
-    # This single command natively cracks open the .deb and data.tar payloads
     unpack_deb ${A}
 }
 
 src_prepare() {
     default
     
-    # The official .deb desktop file expects the binary to be named "vesktop".
-    # Since we symlink it to "vesktop-bin" to match your package name, we patch the Exec line.
-    sed -i 's/Exec=vesktop/Exec=vesktop-bin/g' usr/share/applications/vesktop.desktop || die "failed to patch desktop file"
+    sed -i 's/Exec=vesktop/Exec=vesktop-bin/g' usr/share/applications/vesktop.desktop || die
 }
 
 src_configure() {
@@ -85,22 +79,18 @@ src_configure() {
 src_install() {
     local destdir="${DESTDIR}"
 
-    # 1. Install the main app payload (preserving executable bits for Node modules)
     dodir "${destdir}"
-    cp -pPR opt/Vesktop/* "${ED}${destdir}/" || die "failed to copy vesktop files"
+    cp -pPR opt/Vesktop/* "${ED}${destdir}/" || die
 
-    # 2. Install Desktop entries and Icons directly from the .deb
     insinto /usr/share/applications
     doins usr/share/applications/*.desktop
 
     dodir /usr/share/icons
-    cp -pPR usr/share/icons/* "${ED}/usr/share/icons/" || die "failed to copy icons"
+    cp -pPR usr/share/icons/* "${ED}/usr/share/icons/" || die
 
-    # 3. Fix the chrome-sandbox permissions for the Electron sandbox
     fowners root "${destdir}/chrome-sandbox"
     fperms 4711 "${destdir}/chrome-sandbox"
 
-    # 4. Create the execution symlink targeting the wrapper
     dosym "${destdir}/vesktop" "/usr/bin/vesktop-bin"
 }
 

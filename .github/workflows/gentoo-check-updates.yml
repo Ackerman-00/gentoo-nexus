@@ -33,10 +33,7 @@ jobs:
       - name: Install Dependencies
         run: pip install requests packaging
 
-      # ═══════════════════════════════════════════════════════════════════
-      # Phase 1 – Scan & Bump Ebuilds (NO manifest regeneration here)
-      # ═══════════════════════════════════════════════════════════════════
-      - name: Phase 1 - Scan Local Ebuilds & Bump Versions
+      - name: Scan & Bump
         id: scan
         env:
           GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
@@ -198,7 +195,7 @@ jobs:
                   if not latest_ver:
                       print("  [!] Failed to pull latest version from API.")
                       continue
-                  if pkg_dir.parts[-1] == "mangowc" and latest_ver.count('.') == 1 and not latest_ver.startswith("0."):
+                  if pkg_dir.parts[-1] == "mangowm" and latest_ver.count('.') == 1 and not latest_ver.startswith("0."):
                       latest_ver = "0." + latest_ver
                   if ver_gt(latest_ver, curr_ver):
                       new_path = pkg_dir / f"{pkg_dir.parts[-1]}-{latest_ver}.ebuild"
@@ -218,10 +215,7 @@ jobs:
           EOF
           python3 -u scan.py
 
-      # ═══════════════════════════════════════════════════════════════════
-      # Phase 2 – Robust Manifest Generation (fetches distfiles first)
-      # ═══════════════════════════════════════════════════════════════════
-      - name: Phase 2 - Generate Manifests and Cache
+      - name: Generate Manifests
         run: |
           cat > gen_manifests.sh << 'EOF'
           #!/bin/bash
@@ -266,10 +260,7 @@ jobs:
           chmod +x gen_manifests.sh
           docker run --rm -v "${{ github.workspace }}:/overlay" gentoo/stage3:amd64-desktop-openrc bash /overlay/gen_manifests.sh
 
-      # ═══════════════════════════════════════════════════════════════════
-      # Phase 3 – Commit All Changes
-      # ═══════════════════════════════════════════════════════════════════
-      - name: Phase 3 - Commit All Changes
+      - name: Commit Changes
         run: |
           git config user.name "github-actions[bot]"
           git config user.email "github-actions[bot]@users.noreply.github.com"
@@ -284,10 +275,7 @@ jobs:
             git push origin HEAD:${{ github.ref_name }}
           fi
 
-      # ═══════════════════════════════════════════════════════════════════
-      # Phase 4 – Resolve Latest State (with Manifest verification pass)
-      # ═══════════════════════════════════════════════════════════════════
-      - name: Phase 4 - Resolve Latest State via Portage
+      - name: Resolve Latest State
         run: |
           cat > resolve_state.sh << 'EOF'
           #!/bin/bash
@@ -357,7 +345,7 @@ jobs:
 
           LOCAL_PKGS=$(find /overlay -mindepth 2 -maxdepth 3 -name "*.ebuild" | awk -F/ '{print $(NF-2)"/"$(NF-1)}' | sort -u || true)
 
-          UPSTREAM_PKGS="llvm-core/llvm llvm-core/clang llvm-runtimes/compiler-rt media-libs/mesa media-libs/vulkan-loader sys-kernel/zen-sources virtual/dist-kernel games-util/heroic-bin app-editors/zed dev-util/rustup"
+          UPSTREAM_PKGS="llvm-core/llvm llvm-core/clang llvm-runtimes/compiler-rt media-libs/mesa media-libs/vulkan-loader sys-kernel/zen-sources virtual/dist-kernel sys-apps/portage games-util/heroic-bin app-editors/zed dev-util/rustup"
 
           ALL_PKGS=$(echo -e "${LOCAL_PKGS}\n${UPSTREAM_PKGS}" | tr ' ' '\n' | sort -u | grep -v '^$')
 
@@ -373,10 +361,7 @@ jobs:
           chmod +x resolve_state.sh
           docker run --rm -v "${{ github.workspace }}:/overlay" gentoo/stage3:amd64-desktop-openrc bash /overlay/resolve_state.sh
 
-      # ═══════════════════════════════════════════════════════════════════
-      # Phase 5 – Binhost Audit
-      # ═══════════════════════════════════════════════════════════════════
-      - name: Phase 5 - Binhost Audit
+      - name: Binhost Audit
         id: audit
         env:
           GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
@@ -405,15 +390,13 @@ jobs:
           UNIQUE_CHANGED_ATOMS=$(echo $CHANGED_ATOMS | tr ' ' '\n' | sort -u | xargs)
           echo "force_required=$UNIQUE_CHANGED_ATOMS" >> "$GITHUB_OUTPUT"
 
-      # ═══════════════════════════════════════════════════════════════════
-      # Phase 6 – Trigger Relay
-      # ═══════════════════════════════════════════════════════════════════
-      - name: Phase 6 - Trigger Relay
+      - name: Trigger Relay
         if: steps.audit.outputs.build_list != ''
         env:
           GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
         run: |
           PRIORITY_ORDER=(
+            "sys-apps/portage"
             "llvm-core/llvm"
             "llvm-core/clang"
             "llvm-runtimes/compiler-rt"
@@ -431,7 +414,7 @@ jobs:
             "x11-misc/matugen"
             "gui-wm/niri"
             "gui-wm/noctalia-v5"
-            "gui-wm/mangowc"
+            "gui-wm/mangowm"
             "app-misc/brightnessctl"
             "app-misc/cliphist"
             "x11-base/xwayland-satellite"

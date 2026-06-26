@@ -3,8 +3,8 @@ EAPI=8
 inherit git-r3 meson
 
 DESCRIPTION="A lightweight Wayland shell built directly on Wayland and OpenGL ES"
-HOMEPAGE="https://github.com/noctalia-dev/noctalia-shell"
-EGIT_REPO_URI="https://github.com/noctalia-dev/noctalia-shell.git"
+HOMEPAGE="https://github.com/noctalia-dev/noctalia"
+EGIT_REPO_URI="https://github.com/noctalia-dev/noctalia.git"
 EGIT_BRANCH="main"
 
 LICENSE="MIT"

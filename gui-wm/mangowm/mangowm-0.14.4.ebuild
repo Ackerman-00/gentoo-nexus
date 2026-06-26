@@ -45,6 +45,6 @@ src_configure() {
 }
 
 pkg_postinst() {
-    elog "MangoWC is a dynamic tiling Wayland compositor."
+    elog "mangowm is a dynamic tiling Wayland compositor."
     elog "Configuration is done by editing config.h and recompiling."
 }

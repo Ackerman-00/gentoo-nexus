@@ -28,7 +28,7 @@ jobs:
           token: ${{ secrets.GITHUB_TOKEN }}
           fetch-depth: 0
 
-      - name: Allocate ZRAM Swap (OOM Prevention & Speed Optimization)
+      - name: Allocate ZRAM Swap
         run: |
           sudo modprobe zram
           sudo zramctl --find --size 12G --algorithm lz4
@@ -165,10 +165,17 @@ jobs:
           fi
 
           FORCE="${{ github.event.inputs.force_rebuild }}"
-          if [[ "$FORCE" == "true" || "$FORCE" == *"${CPV%%/*}"* ]]; then
+          if [[ "$FORCE" == "true" ]]; then
             echo "skip_compile=false" >> "$GITHUB_OUTPUT"
             exit 0
           fi
+          for atom in $FORCE; do
+            atom="${atom#=}"
+            if [[ "$CPV" == "$atom"* ]]; then
+              echo "skip_compile=false" >> "$GITHUB_OUTPUT"
+              exit 0
+            fi
+          done
 
           if grep -qF "CPV: ${CPV}" binpkgs/Packages 2>/dev/null; then
             echo "skip_compile=true" >> "$GITHUB_OUTPUT"
@@ -195,7 +202,6 @@ jobs:
 
           getuto 2>/dev/null || emerge -q --oneshot app-crypt/gentoo-keys 2>/dev/null || true
 
-          # ── STRICT 1:1 DESKTOP FLAG MATCHING ──
           cat > /etc/portage/make.conf << 'MAKECONF'
           COMMON_FLAGS="-O2 -march=x86-64 -pipe"
           CFLAGS="${COMMON_FLAGS}"
@@ -205,11 +211,9 @@ jobs:
           VIDEO_CARDS="amdgpu radeonsi"
           USE="elogind -systemd dbus wayland egl vaapi vdpau vulkan amdgpu ffmpeg encode"
           
-          # Build-specific features required for CI execution & caching
           FEATURES="getbinpkg buildpkg parallel-install ccache binpkg-ignore-signature -sandbox -usersandbox -ipc-sandbox -network-sandbox -pid-sandbox"
           CCACHE_DIR="/var/cache/ccache"
           BINPKG_FORMAT="gpkg"
-          PORTAGE_BINPKG_SIGVERIFY="0"
           PKGDIR="/var/cache/binpkgs"
           DISTDIR="/var/cache/distfiles"
           
@@ -237,13 +241,17 @@ jobs:
           [gentoo-official-v3]
           priority = 5
           sync-uri = https://distfiles.gentoo.org/releases/amd64/binpackages/23.0/x86-64-v3/
-          verify-signature = false
+          verify-signature = true
 
           [gentoo-official]
           priority = 1
           sync-uri = https://distfiles.gentoo.org/releases/amd64/binpackages/23.0/x86-64/
-          verify-signature = false
+          verify-signature = true
           BINHOST
+
+          echo ">>> Updating Portage to latest version..."
+          emerge --oneshot --getbinpkg --usepkg sys-apps/portage
+          quickpkg sys-apps/portage 2>/dev/null || true
 
           mkdir -p /etc/portage/package.accept_keywords
           echo '*/*::gentoo-nexus **' > /etc/portage/package.accept_keywords/nexus
@@ -264,7 +272,6 @@ jobs:
           sys-libs/zlib-ng abi_x86_32 abi_x86_64 compat
           USES
 
-          # 32-bit Multilib stack critical for Proton/Wine gaming
           cat > /etc/portage/package.use/gaming << 'GAMING'
           media-libs/mesa abi_x86_32
           media-libs/vulkan-loader abi_x86_32
@@ -300,11 +307,6 @@ jobs:
               emerge --oneshot --getbinpkg --backtrack=30 --quiet-build=y "dev-libs/wayland" "dev-util/wayland-scanner" 2>/dev/null || {
                   emerge --oneshot --usepkg --getbinpkg --buildpkg --backtrack=30 --quiet-build=y "dev-libs/wayland" "dev-util/wayland-scanner" || true
               }
-          fi
-
-          if emerge --usepkgonly --getbinpkg --backtrack=30 --binpkg-respect-use=y "${TARGET}" 2>&1; then
-            emaint binhost --fix
-            exit 0
           fi
 
           set +e
