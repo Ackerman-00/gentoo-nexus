@@ -337,13 +337,16 @@ jobs:
           shopt -s nullglob
           while IFS= read -r -d '' file; do
             ASSET_NAME=$(basename "$file")
-            echo "  Processing: $ASSET_NAME"
+            PN=$(echo "$file" | awk -F'/' '{print $3}')
+            echo "  Processing: $ASSET_NAME (PN=$PN)"
 
-            # Delete only exact duplicate filename (not other versions)
-            if gh release view rolling --json assets --jq '.assets[].name' --repo "$REPO" 2>/dev/null | grep -qxF "$ASSET_NAME"; then
-              echo "    Deleting exact duplicate: $ASSET_NAME"
-              gh release delete-asset rolling "$ASSET_NAME" --repo "$REPO" -y 2>&1 || true
-            fi
+            # Delete old versions of the same package name
+            for old_asset in $(gh release view rolling --json assets --jq '.assets[].name' --repo "$REPO" 2>/dev/null); do
+              if [[ "$old_asset" == ${PN}-[0-9]*.gpkg.tar ]]; then
+                echo "    Deleting old version: $old_asset"
+                gh release delete-asset rolling "$old_asset" --repo "$REPO" -y 2>&1 || true
+              fi
+            done
 
             if retry_upload "$file"; then
               echo "    OK: $ASSET_NAME uploaded"
