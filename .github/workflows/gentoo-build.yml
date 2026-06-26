@@ -21,6 +21,9 @@ jobs:
     name: Build and Deploy
     runs-on: ubuntu-latest
     timeout-minutes: 360
+    outputs:
+      remaining: ${{ steps.queue.outputs.REMAINING_PKGS }}
+      force_rebuild: ${{ github.event.inputs.force_rebuild }}
     steps:
       - name: Checkout Repository
         uses: actions/checkout@v5
@@ -446,17 +449,24 @@ jobs:
             echo ">>> All uploads completed successfully."
           fi
 
-      - name: Trigger Relay for Next Package
-        if: always() && steps.queue.outputs.REMAINING_PKGS != ''
-        env:
-          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
-        run: |
+  relay:
+    if: ${{ always() && needs.build.outputs.remaining != '' }}
+    needs: [build]
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    permissions:
+      actions: write
+    env:
+      GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+    steps:
+      - run: |
+          echo ">>> Triggering relay for: ${{ needs.build.outputs.remaining }}"
           for i in 1 2 3; do
             gh workflow run "${{ github.workflow }}" \
-              --ref "${GITHUB_REF_NAME}" \
+              --ref "${{ github.ref_name }}" \
               --repo ${{ github.repository }} \
-              -f package_list="${{ steps.queue.outputs.REMAINING_PKGS }}" \
-              -f force_rebuild="${{ github.event.inputs.force_rebuild }}" && exit 0
+              -f package_list="${{ needs.build.outputs.remaining }}" \
+              -f force_rebuild="${{ needs.build.outputs.force_rebuild }}" && exit 0
             sleep 10
           done
           exit 1

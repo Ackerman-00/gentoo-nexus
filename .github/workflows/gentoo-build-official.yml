@@ -18,6 +18,8 @@ jobs:
     name: Build Official Gentoo Packages
     runs-on: ubuntu-latest
     timeout-minutes: 360
+    outputs:
+      remaining: ${{ steps.queue.outputs.REMAINING_PKGS }}
     steps:
       - uses: actions/checkout@v5
 
@@ -378,17 +380,23 @@ jobs:
             echo ">>> All uploads completed successfully."
           fi
 
-      - name: Trigger Relay for Next Package
-        if: always() && steps.queue.outputs.REMAINING_PKGS != ''
-        env:
-          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
-        run: |
-          echo ">>> Triggering relay for: ${{ steps.queue.outputs.REMAINING_PKGS }}"
+  relay:
+    if: ${{ always() && needs.official-build.outputs.remaining != '' }}
+    needs: [official-build]
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    permissions:
+      actions: write
+    env:
+      GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+    steps:
+      - run: |
+          echo ">>> Triggering relay for: ${{ needs.official-build.outputs.remaining }}"
           for i in 1 2 3; do
             gh workflow run "${{ github.workflow }}" \
-              --ref "${GITHUB_REF_NAME}" \
+              --ref "${{ github.ref_name }}" \
               --repo ${{ github.repository }} \
-              -f package_list="${{ steps.queue.outputs.REMAINING_PKGS }}" && exit 0
+              -f package_list="${{ needs.official-build.outputs.remaining }}" && exit 0
             sleep 10
           done
           exit 1
