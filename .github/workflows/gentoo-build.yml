@@ -244,6 +244,9 @@ jobs:
           FEATURES="-getbinpkg" emerge --oneshot --usepkg sys-apps/portage
           quickpkg sys-apps/portage 2>/dev/null || true
 
+          echo ">>> Installing ccache..."
+          FEATURES="-getbinpkg" emerge --oneshot --usepkg dev-util/ccache 2>/dev/null || true
+
           mkdir -p /etc/portage/binrepos.conf
           cat > /etc/portage/binrepos.conf/gentoo-official.conf << 'BINHOST'
           [gentoo-official-v3]
