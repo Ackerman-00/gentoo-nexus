@@ -215,22 +215,25 @@ jobs:
           EOF
           python3 -u scan.py
 
-      - name: Generate Manifests
+      - name: Sync Overlay
         run: |
-          cat > gen_manifests.sh << 'EOF'
+          cat > sync_overlay.sh << 'SYNCEOF'
           #!/bin/bash
           set -euo pipefail
+
+          OVERLAY="/overlay"
+
+          # === Repo Setup ===
           mkdir -p /var/db/repos/gentoo /etc/portage/repos.conf
           emerge-webrsync -q || true
+
           cat > /etc/portage/repos.conf/gentoo.conf << 'REPOEOF'
           [gentoo]
           location = /var/db/repos/gentoo
           auto-sync = yes
           priority = -1000
           REPOEOF
-          mkdir -p /overlay/metadata /overlay/profiles
-          echo "masters = gentoo" > /overlay/metadata/layout.conf
-          find /overlay -mindepth 1 -maxdepth 1 -type d | grep -v -E '\.git|\.github|metadata|profiles|binpkgs|distfiles|ccache|setup' | sed 's|/overlay/||' > /overlay/profiles/categories
+
           cat > /etc/portage/repos.conf/gentoo-nexus.conf << 'REPOEOF'
           [gentoo-nexus]
           location = /overlay
@@ -239,48 +242,24 @@ jobs:
           auto-sync = no
           REPOEOF
 
-          echo ">>> Generating Manifests (force‑fetching distfiles)..."
+          mkdir -p /overlay/metadata /overlay/profiles
+          echo "masters = gentoo" > /overlay/metadata/layout.conf
+          find /overlay -mindepth 1 -maxdepth 1 -type d | grep -v -E '\.git|\.github|metadata|profiles|binpkgs|distfiles|ccache|setup' | sed 's|/overlay/||' > /overlay/profiles/categories
+
+          # === Generate Manifests ===
+          echo ">>> Generating Manifests..."
           for e in $(find /overlay -mindepth 2 -maxdepth 3 -name "*.ebuild" | sort); do
-            pkg_dir=$(dirname "$e")
             ebuild_name=$(basename "$e")
-
             GENTOO_MIRRORS="" DISTDIR="/var/cache/distfiles" ebuild "$e" fetch >/dev/null 2>&1 || true
-
             GENTOO_MIRRORS="" DISTDIR="/var/cache/distfiles" ebuild "$e" manifest --force >/dev/null 2>&1 || {
-              echo "  [!] Manifest generation failed for ${ebuild_name} — retrying with pkgdev"
-              if command -v pkgdev >/dev/null 2>&1; then
-                pkgdev manifest -m "$e" >/dev/null 2>&1 || true
-              fi
+              echo "  [!] Manifest failed for ${ebuild_name} — retrying with pkgdev"
+              command -v pkgdev >/dev/null 2>&1 && pkgdev manifest -m "$e" >/dev/null 2>&1 || true
             }
           done
-          echo ">>> Done generating manifests."
-
           egencache --update --repo gentoo-nexus --jobs 4
-          EOF
-          chmod +x gen_manifests.sh
-          docker run --rm -v "${{ github.workspace }}:/overlay" gentoo/stage3:amd64-desktop-openrc bash /overlay/gen_manifests.sh
+          echo ">>> Manifests generated."
 
-      - name: Commit Changes
-        run: |
-          git config user.name "github-actions[bot]"
-          git config user.email "github-actions[bot]@users.noreply.github.com"
-          echo -e "scan.py\nchanged_packages.txt\npackages_to_build.txt\ngen_manifests.sh\nresolve_state.sh\ndesired_state.txt" > .gitignore
-          git rm --cached scan.py changed_packages.txt packages_to_build.txt desired_state.txt 2>/dev/null || true
-          git add -A
-          if ! git diff --cached --quiet; then
-            MSG="auto-update: ebuild refresh, manifests, and cache $(date -u '+%Y-%m-%d')"
-            [ -f changed_packages.txt ] && MSG="auto-update: ebuild bumps ($(tr '\n' ' ' < changed_packages.txt)) $(date -u '+%Y-%m-%d')"
-            git commit -m "$MSG"
-            git pull --rebase origin ${{ github.ref_name }}
-            git push origin HEAD:${{ github.ref_name }}
-          fi
-
-      - name: Resolve Latest State
-        run: |
-          cat > resolve_state.sh << 'EOF'
-          #!/bin/bash
-          set -euo pipefail
-          mkdir -p /etc/portage/repos.conf /var/db/repos/gentoo /etc/portage/package.{accept_keywords,use}
+          # === Validate Manifests & Resolve State ===
           cat > /etc/portage/make.conf << 'MAKECONF'
           COMMON_FLAGS="-O2 -march=x86-64 -pipe"
           CFLAGS="${COMMON_FLAGS}"
@@ -292,9 +271,10 @@ jobs:
           ACCEPT_PROPERTIES="*"
           ACCEPT_RESTRICT="*"
           MAKEOPTS="-j4"
-          USE="elogind -systemd dbus wayland egl vaapi vdpau vulkan amdgpu ffmpeg encode"
+          USE="elogind -systemd dbus wayland egl vaapi vdpau vulkan amdgpu ffmpeg encode opencl"
           VIDEO_CARDS="amdgpu radeonsi"
           MAKECONF
+
           cat > /etc/portage/package.use/global << 'USECONF'
           sys-libs/zlib minizip
           media-video/pipewire extra
@@ -303,15 +283,8 @@ jobs:
           dev-libs/openssl -bindist
           dev-libs/libdbusmenu gtk3
           USECONF
-          emerge-webrsync -q || true
-          mkdir -p /overlay/metadata
-          echo "masters = gentoo" > /overlay/metadata/layout.conf
-          cat > /etc/portage/repos.conf/gentoo-nexus.conf << 'REPOEOF'
-          [gentoo-nexus]
-          location = /overlay
-          masters = gentoo
-          priority = 9999
-          REPOEOF
+
+          mkdir -p /etc/portage/package.accept_keywords
           cat > /etc/portage/package.accept_keywords/nexus << 'KEYW'
           */*::gentoo-nexus **
           games-util/heroic-bin ~amd64
@@ -320,42 +293,54 @@ jobs:
           net-libs/webkit-gtk ~amd64
           KEYW
 
-          echo ">>> Validating overlay Manifests..."
+          echo ">>> Validating Manifests..."
           MANIFEST_FAILS=0
           for e in $(find /overlay -mindepth 2 -maxdepth 3 -name "*.ebuild" | sort); do
             DISTFILE=$(grep -oP 'SRC_URI="?\K[^"]+' "$e" 2>/dev/null | head -1 || true)
             if [ -n "$DISTFILE" ]; then
               if ! grep -q "DIST ${DISTFILE}" "${e%/*}/Manifest" 2>/dev/null; then
-                echo "  [!] Missing DIST entry for ${DISTFILE} — regenerating manifest for $(basename "$e")"
+                echo "  [!] Missing DIST entry — regenerating for $(basename "$e")"
                 GENTOO_MIRRORS="" DISTDIR="/var/cache/distfiles" ebuild "$e" manifest --force >/dev/null 2>&1 || {
-                  echo "  [!!] FAILED to regenerate manifest for $(basename "$e")"
+                  echo "  [!!] FAILED: $(basename "$e")"
                   MANIFEST_FAILS=$((MANIFEST_FAILS + 1))
                 }
               fi
             fi
           done
-          if [ "$MANIFEST_FAILS" -gt 0 ]; then
-            echo ">>> WARNING: ${MANIFEST_FAILS} manifests could not be regenerated"
-          fi
-          echo ">>> Manifest validation complete."
+          echo ">>> Manifest validation complete. Failures: $MANIFEST_FAILS"
 
+          echo ">>> Resolving package versions..."
           LOCAL_PKGS=$(find /overlay -mindepth 2 -maxdepth 3 -name "*.ebuild" | awk -F/ '{print $(NF-2)"/"$(NF-1)}' | sort -u || true)
-
           UPSTREAM_PKGS="games-util/heroic-bin app-editors/zed dev-util/rustup"
-
           ALL_PKGS=$(echo -e "${LOCAL_PKGS}\n${UPSTREAM_PKGS}" | tr ' ' '\n' | sort -u | grep -v '^$')
 
           > /overlay/desired_state.txt
           for pkg in $ALL_PKGS; do
-             RES=$(emerge -pqO --color=n "$pkg" 2>/dev/null | awk '/^\[ebuild/ {for(i=1;i<=NF;i++) if($i ~ /\//) {sub(/::.*/,"",$i); print $i; break}}' || true)
-             if [ -n "$RES" ]; then
-               echo "$RES" >> /overlay/desired_state.txt
-               echo "Target resolved: $RES"
-             fi
+            RES=$(emerge -pqO --color=n "$pkg" 2>/dev/null | awk '/^\[ebuild/ {for(i=1;i<=NF;i++) if($i ~ /\//) {sub(/::.*/,"",$i); print $i; break}}' || true)
+            if [ -n "$RES" ]; then
+              echo "$RES" >> /overlay/desired_state.txt
+              echo "  Target: $RES"
+            fi
           done
-          EOF
-          chmod +x resolve_state.sh
-          docker run --rm -v "${{ github.workspace }}:/overlay" gentoo/stage3:amd64-desktop-openrc bash /overlay/resolve_state.sh
+          echo ">>> State resolution complete."
+          SYNCEOF
+          chmod +x sync_overlay.sh
+          docker run --rm -v "${{ github.workspace }}:/overlay" gentoo/stage3:amd64-desktop-openrc bash /overlay/sync_overlay.sh
+
+      - name: Commit Changes
+        run: |
+          git config user.name "github-actions[bot]"
+          git config user.email "github-actions[bot]@users.noreply.github.com"
+          echo -e "scan.py\nchanged_packages.txt\npackages_to_build.txt\nsync_overlay.sh\ndesired_state.txt" > .gitignore
+          git rm --cached scan.py changed_packages.txt packages_to_build.txt desired_state.txt sync_overlay.sh 2>/dev/null || true
+          git add -A
+          if ! git diff --cached --quiet; then
+            MSG="auto-update: ebuild refresh, manifests, and cache $(date -u '+%Y-%m-%d')"
+            [ -f changed_packages.txt ] && MSG="auto-update: ebuild bumps ($(tr '\n' ' ' < changed_packages.txt)) $(date -u '+%Y-%m-%d')"
+            git commit -m "$MSG"
+            git pull --rebase origin ${{ github.ref_name }}
+            git push origin HEAD:${{ github.ref_name }}
+          fi
 
       - name: Binhost Audit
         id: audit

@@ -109,25 +109,48 @@ jobs:
       - name: Fix Workspace Permissions
         run: sudo chown -R "$(id -u):$(id -g)" "${{ github.workspace }}"
 
-      - name: Resolve Build List
-        id: resolve
+      - name: Parse Queue & Normalize Targets
+        id: queue
         run: |
-          TRACKED_PKGS="llvm-core/llvm llvm-core/clang llvm-runtimes/compiler-rt dev-libs/roct-thunk-interface dev-libs/rocr-runtime dev-libs/rocm-opencl-runtime sys-kernel/linux-firmware x11-drivers/xf86-video-amdgpu media-libs/vulkan-loader sys-kernel/gentoo-kernel virtual/dist-kernel sys-apps/portage =media-libs/mesa-26.1.3"
+          TRACKED_PKGS="llvm-core/llvm llvm-core/clang llvm-runtimes/compiler-rt dev-libs/roct-thunk-interface dev-libs/rocr-runtime dev-libs/rocm-opencl-runtime sys-kernel/linux-firmware x11-drivers/xf86-video-amdgpu media-libs/vulkan-loader sys-kernel/gentoo-kernel sys-apps/portage media-libs/mesa"
           INPUT="${{ github.event.inputs.package_list }}"
           if [ -n "$INPUT" ]; then
-            echo "build_list=$INPUT" >> "$GITHUB_OUTPUT"
+            FULL_LIST="$INPUT"
           else
-            echo "build_list=$TRACKED_PKGS" >> "$GITHUB_OUTPUT"
+            FULL_LIST="$TRACKED_PKGS"
           fi
 
+          read -r -a PKGS <<< "$FULL_LIST"
+          TARGET="${PKGS[0]:-}"
+          REMAINING=("${PKGS[@]:1}")
+
+          echo "TARGET_PKG=$TARGET" >> "$GITHUB_OUTPUT"
+          echo "REMAINING_PKGS=${REMAINING[*]:-}" >> "$GITHUB_OUTPUT"
+
+          if [ -z "$TARGET" ]; then
+            echo "skip_compile=true" >> "$GITHUB_OUTPUT"
+            exit 0
+          fi
+
+          # Skip check: only for version-pinned atoms
+          if [[ "$TARGET" == =* ]]; then
+            CPV="${TARGET#=}"
+            if grep -qF "CPV: ${CPV}" binpkgs/Packages 2>/dev/null; then
+              echo "skip_compile=true" >> "$GITHUB_OUTPUT"
+              exit 0
+            fi
+          fi
+
+          echo "skip_compile=false" >> "$GITHUB_OUTPUT"
+
       - name: Write Docker Build Script
+        if: steps.queue.outputs.skip_compile != 'true'
         run: |
           cat > build.sh << 'BUILDSCRIPT'
           #!/bin/bash
           set -euo pipefail
 
-          PACKAGES=("$@")
-          echo ">>> Will build ${#PACKAGES[@]} packages: ${PACKAGES[*]}"
+          echo ">>> Building single package: $*"
 
           echo ">>> Syncing Gentoo ebuild repository..."
           mkdir -p /var/db/repos/gentoo /etc/portage/repos.conf
@@ -224,53 +247,43 @@ jobs:
           set +e
           touch /var/cache/binpkgs/.build_start
 
-          for pkg in "${PACKAGES[@]}"; do
-            echo ""
-            echo "========================================================================"
-            echo ">>> BUILDING: $pkg"
-            echo "========================================================================"
+          TARGET="$1"
+          echo ""
+          echo "========================================================================"
+          echo ">>> BUILDING: $TARGET"
+          echo "========================================================================"
 
-            # Resolve to exact CPV
-            CPV=""
-            if [[ "$pkg" == =* ]]; then
-              CPV="${pkg#=}"
-            else
-              CPV=$(portageq best_visible / "$pkg" 2>/dev/null || true)
+          # Safety skip check inside Docker (defense-in-depth)
+          if [[ "$TARGET" == =* ]]; then
+            CPV="${TARGET#=}"
+            if grep -qF "CPV: ${CPV}" /var/cache/binpkgs/Packages 2>/dev/null; then
+              echo ">>> SKIPPING (already in Packages): $TARGET ($CPV)"
+              echo ">>> Build complete (skipped)."
+              exit 0
             fi
+          fi
 
-            if [ -n "$CPV" ]; then
-              # Resolve PN for Packages check
-              PN=$(echo "$CPV" | awk -F/ '{print $2}' | sed -E 's/-[0-9].*$//')
-              if grep -qF "CPV: ${CPV}" /var/cache/binpkgs/Packages 2>/dev/null; then
-                echo ">>> SKIPPING (already in Packages): $pkg ($CPV)"
-                continue
-              fi
-              echo ">>> Target: $pkg -> $CPV"
-            else
-              echo ">>> Target: $pkg (no version resolution)"
-            fi
-
-            emerge --oneshot --usepkg --getbinpkg --buildpkg --backtrack=30 \
-              --binpkg-respect-use=y --quiet-build=y --keep-going \
-              --autounmask=y --autounmask-write --autounmask-continue=y \
-              "$pkg" > /tmp/emerge.log 2>&1
-            BUILD_EXIT=$?
-            cat /tmp/emerge.log
-            if [ "$BUILD_EXIT" -ne 0 ]; then
-              echo ">>> WARNING: emerge failed for $pkg (exit $BUILD_EXIT)"
-            else
-              echo ">>> SUCCESS: $pkg built"
-            fi
-          done
+          emerge --oneshot --usepkg --getbinpkg --buildpkg --backtrack=30 \
+            --binpkg-respect-use=y --quiet-build=y --keep-going \
+            --autounmask=y --autounmask-write --autounmask-continue=y \
+            "$TARGET" > /tmp/emerge.log 2>&1
+          BUILD_EXIT=$?
+          cat /tmp/emerge.log
+          if [ "$BUILD_EXIT" -ne 0 ]; then
+            echo ">>> WARNING: emerge failed for $TARGET (exit $BUILD_EXIT)"
+          else
+            echo ">>> SUCCESS: $TARGET built"
+          fi
 
           set -e
           emaint binhost --fix
-          echo ">>> All builds complete."
+          echo ">>> Build complete."
           BUILDSCRIPT
 
           chmod +x build.sh
 
-      - name: Build Packages in Docker
+      - name: Build Package in Docker
+        if: steps.queue.outputs.skip_compile != 'true'
         run: |
           touch build_start_marker
           docker run --rm --privileged \
@@ -279,12 +292,14 @@ jobs:
             -v "${{ github.workspace }}/ccache:/var/cache/ccache:rw" \
             -v "${{ github.workspace }}/build.sh:/build.sh:ro" \
             gentoo/stage3:amd64-desktop-openrc \
-            bash /build.sh ${{ steps.resolve.outputs.build_list }}
+            bash /build.sh ${{ steps.queue.outputs.TARGET_PKG }}
 
       - name: Fix Permissions Post-Build
+        if: steps.queue.outputs.skip_compile != 'true'
         run: sudo chown -R "$(id -u):$(id -g)" "${{ github.workspace }}"
 
       - name: Upload to GitHub Release
+        if: steps.queue.outputs.skip_compile != 'true'
         env:
           GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
           REPO: ${{ github.repository }}
@@ -293,7 +308,7 @@ jobs:
           gh release view rolling --repo "$REPO" 2>/dev/null || \
             gh release create rolling \
               --repo "$REPO" \
-              --title "Nexus Official Binaries" \
+              --title "Nexus Rolling Binaries" \
               --prerelease
 
           retry_upload() {
@@ -362,3 +377,18 @@ jobs:
           else
             echo ">>> All uploads completed successfully."
           fi
+
+      - name: Trigger Relay for Next Package
+        if: always() && steps.queue.outputs.REMAINING_PKGS != ''
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+        run: |
+          echo ">>> Triggering relay for: ${{ steps.queue.outputs.REMAINING_PKGS }}"
+          for i in 1 2 3; do
+            gh workflow run "${{ github.workflow }}" \
+              --ref "${GITHUB_REF_NAME}" \
+              --repo ${{ github.repository }} \
+              -f package_list="${{ steps.queue.outputs.REMAINING_PKGS }}" && exit 0
+            sleep 10
+          done
+          exit 1

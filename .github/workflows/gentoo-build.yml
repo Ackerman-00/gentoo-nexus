@@ -209,7 +209,7 @@ jobs:
           FCFLAGS="${COMMON_FLAGS}"
           FFLAGS="${COMMON_FLAGS}"
           VIDEO_CARDS="amdgpu radeonsi"
-          USE="elogind -systemd dbus wayland egl vaapi vdpau vulkan amdgpu ffmpeg encode"
+          USE="elogind -systemd dbus wayland egl vaapi vdpau vulkan amdgpu ffmpeg encode opencl"
           
           FEATURES="getbinpkg buildpkg parallel-install ccache binpkg-ignore-signature -sandbox -usersandbox -ipc-sandbox -network-sandbox -pid-sandbox"
           CCACHE_DIR="/var/cache/ccache"
@@ -451,8 +451,12 @@ jobs:
         env:
           GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
         run: |
-          gh workflow run "${{ github.workflow }}" \
-            --ref "${GITHUB_REF_NAME}" \
-            --repo ${{ github.repository }} \
-            -f package_list="${{ steps.queue.outputs.REMAINING_PKGS }}" \
-            -f force_rebuild="${{ github.event.inputs.force_rebuild }}"
+          for i in 1 2 3; do
+            gh workflow run "${{ github.workflow }}" \
+              --ref "${GITHUB_REF_NAME}" \
+              --repo ${{ github.repository }} \
+              -f package_list="${{ steps.queue.outputs.REMAINING_PKGS }}" \
+              -f force_rebuild="${{ github.event.inputs.force_rebuild }}" && exit 0
+            sleep 10
+          done
+          exit 1
