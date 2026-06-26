@@ -287,9 +287,6 @@ jobs:
           mkdir -p /etc/portage/package.accept_keywords
           cat > /etc/portage/package.accept_keywords/nexus << 'KEYW'
           */*::gentoo-nexus **
-          games-util/heroic-bin ~amd64
-          app-editors/zed ~amd64
-          dev-util/rustup ~amd64
           net-libs/webkit-gtk ~amd64
           KEYW
 
@@ -310,9 +307,7 @@ jobs:
           echo ">>> Manifest validation complete. Failures: $MANIFEST_FAILS"
 
           echo ">>> Resolving package versions..."
-          LOCAL_PKGS=$(find /overlay -mindepth 2 -maxdepth 3 -name "*.ebuild" | awk -F/ '{print $(NF-2)"/"$(NF-1)}' | sort -u || true)
-          UPSTREAM_PKGS="games-util/heroic-bin app-editors/zed dev-util/rustup"
-          ALL_PKGS=$(echo -e "${LOCAL_PKGS}\n${UPSTREAM_PKGS}" | tr ' ' '\n' | sort -u | grep -v '^$')
+          ALL_PKGS=$(find /overlay -mindepth 2 -maxdepth 3 -name "*.ebuild" | awk -F/ '{print $(NF-2)"/"$(NF-1)}' | sort -u || true)
 
           > /overlay/desired_state.txt
           for pkg in $ALL_PKGS; do
@@ -331,7 +326,9 @@ jobs:
         run: |
           git config user.name "github-actions[bot]"
           git config user.email "github-actions[bot]@users.noreply.github.com"
-          echo -e "scan.py\nchanged_packages.txt\npackages_to_build.txt\nsync_overlay.sh\ndesired_state.txt" > .gitignore
+          for item in scan.py changed_packages.txt packages_to_build.txt sync_overlay.sh desired_state.txt; do
+            grep -qxF "$item" .gitignore 2>/dev/null || echo "$item" >> .gitignore
+          done
           git rm --cached scan.py changed_packages.txt packages_to_build.txt desired_state.txt sync_overlay.sh 2>/dev/null || true
           git add -A
           if ! git diff --cached --quiet; then
@@ -356,7 +353,7 @@ jobs:
           while IFS= read -r CPV; do
              [ -z "$CPV" ] && continue
              PN_PV="${CPV#*/}"
-             ATOM=$(echo "$CPV" | sed -E 's/-[0-9].*$//')
+             ATOM=$(python3 -c "import re,sys;cpv=sys.argv[1];m=re.match(r'^(.*?)-[0-9]',cpv);print(m.group(1)) if m else print(cpv)" "$CPV")
 
              if echo "$CHANGED" | grep -q "^${ATOM}$"; then
                 echo "=$CPV" >> packages_to_build.txt
@@ -377,10 +374,7 @@ jobs:
           GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
         run: |
           PRIORITY_ORDER=(
-            "dev-util/rustup"
-            "app-editors/zed"
             "dev-python/icoextract"
-            "games-util/heroic-bin"
             "games-util/faugus-launcher"
             "net-im/vesktop"
             "gui-libs/scenefx"

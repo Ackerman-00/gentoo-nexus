@@ -114,7 +114,7 @@ jobs:
       - name: Parse Queue & Normalize Targets
         id: queue
         run: |
-          TRACKED_PKGS="llvm-core/llvm llvm-core/clang llvm-runtimes/compiler-rt dev-libs/roct-thunk-interface dev-libs/rocr-runtime dev-libs/rocm-opencl-runtime sys-kernel/linux-firmware x11-drivers/xf86-video-amdgpu media-libs/vulkan-loader sys-kernel/gentoo-kernel sys-apps/portage media-libs/mesa"
+          TRACKED_PKGS="llvm-core/llvm llvm-core/clang llvm-runtimes/compiler-rt dev-libs/roct-thunk-interface dev-libs/rocr-runtime dev-libs/rocm-opencl-runtime sys-kernel/linux-firmware x11-drivers/xf86-video-amdgpu media-libs/vulkan-loader sys-kernel/gentoo-kernel sys-apps/portage media-libs/mesa games-util/heroic-bin app-editors/zed dev-util/rustup"
           INPUT="${{ github.event.inputs.package_list }}"
           if [ -n "$INPUT" ]; then
             FULL_LIST="$INPUT"
