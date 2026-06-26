@@ -274,7 +274,7 @@ jobs:
           USES
 
           cat > /etc/portage/package.use/gaming << 'GAMING'
-          media-libs/mesa abi_x86_32
+          <media-libs/mesa-26.1.3 abi_x86_32
           media-libs/vulkan-loader abi_x86_32
           media-libs/alsa-lib abi_x86_32
           x11-libs/libX11 abi_x86_32
@@ -311,6 +311,7 @@ jobs:
           fi
 
           set +e
+          touch /var/cache/binpkgs/.build_start
           emerge --oneshot --usepkg --getbinpkg --buildpkg --backtrack=30 \
             --binpkg-respect-use=y --quiet-build=y --keep-going \
             --autounmask=y --autounmask-write --autounmask-continue=y \
@@ -320,7 +321,9 @@ jobs:
           set -e
 
           if [ "$BUILD_EXIT" -ne 0 ]; then
+            echo ">>> BUILD FAILED with exit code $BUILD_EXIT"
             if grep -q "circular dependencies" /tmp/emerge.log; then
+              echo ">>> Circular dependencies detected, attempting workaround..."
               USE="-pipewire" emerge --oneshot --usepkg --getbinpkg --buildpkg --backtrack=30 --quiet-build=y media-libs/libsdl2 || true
               emerge --oneshot --usepkg --getbinpkg --buildpkg --backtrack=30 --quiet-build=y media-video/ffmpeg || true
               emerge --oneshot --usepkg --getbinpkg --buildpkg --backtrack=30 --quiet-build=y media-video/pipewire || true
@@ -329,7 +332,9 @@ jobs:
               emerge --oneshot --usepkg --getbinpkg --buildpkg --backtrack=30 \
                 --binpkg-respect-use=y --quiet-build=y --keep-going \
                 --autounmask=y --autounmask-write --autounmask-continue=y \
-                "${TARGET}" || true
+                "${TARGET}" || echo ">>> WARNING: Circular dependency workaround also failed"
+            else
+              echo ">>> WARNING: emerge failed for ${TARGET}. Check logs above."
             fi
           fi
 
@@ -362,6 +367,7 @@ jobs:
           GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
           REPO: ${{ github.repository }}
         run: |
+          echo ">>> Ensuring rolling release exists..."
           gh release view rolling --repo "$REPO" 2>/dev/null || \
             gh release create rolling \
               --repo "$REPO" \
@@ -370,38 +376,78 @@ jobs:
 
           retry_upload() {
             for i in 1 2 3; do
-              gh release upload rolling "$1" --repo "$REPO" --clobber 2>&1 && return 0
+              gh release upload rolling "$1" --repo "$REPO" 2>&1 && return 0
               sleep 5
             done
             return 1
           }
 
+          # Determine which reference file to use for -newer
+          if [ -f binpkgs/.build_start ]; then
+            REF_FILE="binpkgs/.build_start"
+          else
+            REF_FILE="build_start_marker"
+          fi
+          echo ">>> Using reference file: $REF_FILE"
+
+          UPLOAD_FAILED=0
+
+          # 1. Upload newly built .gpkg.tar files first (before Packages index)
+          echo ">>> Uploading new binary packages..."
+          shopt -s nullglob
+          while IFS= read -r -d '' file; do
+            PN=$(echo "$file" | awk -F'/' '{print $3}')
+            ASSET_NAME=$(basename "$file")
+            echo "  Processing: $ASSET_NAME (PN=$PN)"
+
+            # Delete old assets for this package name
+            OLD_ASSETS=$(gh release view rolling --json assets \
+              --jq ".assets[].name" --repo "$REPO" 2>/dev/null \
+              | grep -E "^${PN}-[0-9].*\.gpkg\.tar$" || true)
+            for asset in $OLD_ASSETS; do
+              echo "    Deleting old: $asset"
+              gh release delete-asset rolling "$asset" --repo "$REPO" -y 2>&1 || true
+            done
+
+            if retry_upload "$file"; then
+              echo "    OK: $ASSET_NAME uploaded"
+            else
+              echo "    ERROR: Failed to upload $ASSET_NAME after 3 retries" >&2
+              UPLOAD_FAILED=1
+            fi
+          done < <(find binpkgs -type f -name '*.gpkg.tar' -newer "$REF_FILE" -print0 2>/dev/null)
+
+          # 2. Sanitize and upload Packages index last (the "commit" step)
+          echo ">>> Processing Packages index..."
           sed -i -E \
             -e 's|^PATH: .*/([^/]+\.gpkg\.tar)$|PATH: \1|' \
             -e 's|^URI: .*/([^/]+\.gpkg\.tar)$|URI: \1|' \
-            binpkgs/Packages
+            binpkgs/Packages 2>/dev/null || true
 
           awk '/^CPV: acct-(group|user)\//{skip=1} /^$/{if(skip){skip=0; next}} !skip' \
-            binpkgs/Packages > binpkgs/Packages.tmp && mv binpkgs/Packages.tmp binpkgs/Packages
+            binpkgs/Packages > binpkgs/Packages.tmp && mv binpkgs/Packages.tmp binpkgs/Packages 2>/dev/null || true
 
           rm -f binpkgs/Packages.gz
-          gzip -c binpkgs/Packages > binpkgs/Packages.gz
+          gzip -c binpkgs/Packages 2>/dev/null > binpkgs/Packages.gz || true
 
-          shopt -s nullglob
           for file in binpkgs/Packages*; do
-            [ -f "$file" ] && retry_upload "$file"
+            [ -f "$file" ] || continue
+            BN=$(basename "$file")
+            echo "  Uploading: $BN"
+            if retry_upload "$file"; then
+              echo "    OK: $BN uploaded"
+            else
+              echo "    ERROR: Failed to upload $BN after 3 retries" >&2
+              UPLOAD_FAILED=1
+            fi
           done
 
-          while IFS= read -r -d '' file; do
-            PN=$(echo "$file" | awk -F'/' '{print $3}')
-            OLD_ASSETS=$(gh release view rolling --json assets \
-              --jq ".assets[].name" --repo "$REPO" \
-              | grep -E "^${PN}-[0-9].*\.gpkg\.tar$" || true)
-            for asset in $OLD_ASSETS; do
-              gh release delete-asset rolling "$asset" --repo "$REPO" -y || true
-            done
-            retry_upload "$file"
-          done < <(find binpkgs -type f -name '*.gpkg.tar' -newer build_start_marker -print0 2>/dev/null)
+          if [ "$UPLOAD_FAILED" -ne 0 ]; then
+            echo ">>> WARNING: One or more uploads failed. The rolling release may be incomplete."
+            echo ">>> Check the above logs for details."
+          else
+            echo ">>> All uploads completed successfully."
+          fi
 
       - name: Trigger Relay for Next Package
         if: always() && steps.queue.outputs.REMAINING_PKGS != ''
