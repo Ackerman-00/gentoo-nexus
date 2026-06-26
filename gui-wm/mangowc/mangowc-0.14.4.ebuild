@@ -12,13 +12,15 @@ KEYWORDS="~amd64"
 IUSE="X"
 
 DEPEND="
-    >=gui-libs/wlroots-0.18:=[libinput,session,X?]
-    dev-libs/libinput:=
-    dev-libs/wayland
+    >=gui-libs/wlroots-0.19:=[libinput,session,X?]
     >=gui-libs/scenefx-0.4.1
+    dev-libs/cjson
+    dev-libs/libinput:=
     dev-libs/libpcre2
+    dev-libs/wayland
+    x11-libs/libdrm
     x11-libs/libxkbcommon
-    sys-kernel/linux-headers
+    x11-libs/pixman
     X? (
         x11-libs/libxcb:=
         x11-libs/xcb-util-wm

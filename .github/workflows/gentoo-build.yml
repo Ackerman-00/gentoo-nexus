@@ -170,7 +170,7 @@ jobs:
             exit 0
           fi
 
-          if grep -q "^CPV: ${CPV}$" binpkgs/Packages 2>/dev/null; then
+          if grep -qF "CPV: ${CPV}" binpkgs/Packages 2>/dev/null; then
             echo "skip_compile=true" >> "$GITHUB_OUTPUT"
           else
             echo "skip_compile=false" >> "$GITHUB_OUTPUT"
@@ -206,7 +206,7 @@ jobs:
           USE="elogind -systemd dbus wayland egl vaapi vdpau vulkan amdgpu ffmpeg encode"
           
           # Build-specific features required for CI execution & caching
-          FEATURES="getbinpkg buildpkg parallel-install ccache -binpkg-verify-signature -sandbox -usersandbox -ipc-sandbox -network-sandbox -pid-sandbox"
+          FEATURES="getbinpkg buildpkg parallel-install ccache binpkg-ignore-signature -sandbox -usersandbox -ipc-sandbox -network-sandbox -pid-sandbox"
           CCACHE_DIR="/var/cache/ccache"
           BINPKG_FORMAT="gpkg"
           PORTAGE_BINPKG_SIGVERIFY="0"

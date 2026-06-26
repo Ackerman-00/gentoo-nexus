@@ -50,7 +50,7 @@ jobs:
           import requests
 
           session = requests.Session()
-          session.mount('https://', HTTPAdapter(max_retries=Retry(total=3, backoff_factor=1, status_forcelist=)))
+          session.mount('https://', HTTPAdapter(max_retries=Retry(total=3, backoff_factor=1, status_forcelist=[403, 429])))
           gh_token = os.environ.get('GITHUB_TOKEN')
           if gh_token:
               session.headers.update({"Authorization": f"Bearer {gh_token}", "Accept": "application/vnd.github.v3+json"})
@@ -198,7 +198,7 @@ jobs:
                   if not latest_ver:
                       print("  [!] Failed to pull latest version from API.")
                       continue
-                  if pkg_dir.parts[-1] == "mangowc" and latest_ver.startswith("12."):
+                  if pkg_dir.parts[-1] == "mangowc" and latest_ver.count('.') == 1 and not latest_ver.startswith("0."):
                       latest_ver = "0." + latest_ver
                   if ver_gt(latest_ver, curr_ver):
                       new_path = pkg_dir / f"{pkg_dir.parts[-1]}-{latest_ver}.ebuild"
@@ -236,7 +236,7 @@ jobs:
           REPOEOF
           mkdir -p /overlay/metadata /overlay/profiles
           echo "masters = gentoo" > /overlay/metadata/layout.conf
-          find /overlay -mindepth 1 -maxdepth 1 -type d | grep -v -E '\.git|\.github|metadata|profiles|binpkgs|distfiles|ccache' | sed 's|/overlay/||' > /overlay/profiles/categories
+          find /overlay -mindepth 1 -maxdepth 1 -type d | grep -v -E '\.git|\.github|metadata|profiles|binpkgs|distfiles|ccache|setup' | sed 's|/overlay/||' > /overlay/profiles/categories
           cat > /etc/portage/repos.conf/gentoo-nexus.conf << 'REPOEOF'
           [gentoo-nexus]
           location = /overlay
@@ -294,8 +294,18 @@ jobs:
           set -euo pipefail
           mkdir -p /etc/portage/repos.conf /var/db/repos/gentoo /etc/portage/package.{accept_keywords,use}
           cat > /etc/portage/make.conf << 'MAKECONF'
+          COMMON_FLAGS="-O2 -march=x86-64 -pipe"
+          CFLAGS="${COMMON_FLAGS}"
+          CXXFLAGS="${COMMON_FLAGS}"
+          FCFLAGS="${COMMON_FLAGS}"
+          FFLAGS="${COMMON_FLAGS}"
           ACCEPT_KEYWORDS="~amd64"
           ACCEPT_LICENSE="*"
+          ACCEPT_PROPERTIES="*"
+          ACCEPT_RESTRICT="*"
+          MAKEOPTS="-j4"
+          USE="elogind -systemd dbus wayland egl vaapi vdpau vulkan amdgpu ffmpeg encode"
+          VIDEO_CARDS="amdgpu radeonsi"
           MAKECONF
           cat > /etc/portage/package.use/global << 'USECONF'
           sys-libs/zlib minizip
@@ -353,7 +363,7 @@ jobs:
 
           > /overlay/desired_state.txt
           for pkg in $ALL_PKGS; do
-             RES=$(emerge -pqO --color=n "$pkg" 2>/dev/null | awk '/^\[ebuild/ {for(i=1;i<=NF;i++) if($i ~ /\//) {print $i; break}}' || true)
+             RES=$(emerge -pqO --color=n "$pkg" 2>/dev/null | awk '/^\[ebuild/ {for(i=1;i<=NF;i++) if($i ~ /\//) {sub(/::.*/,"",$i); print $i; break}}' || true)
              if [ -n "$RES" ]; then
                echo "$RES" >> /overlay/desired_state.txt
                echo "Target resolved: $RES"
@@ -380,7 +390,7 @@ jobs:
           while IFS= read -r CPV; do
              [ -z "$CPV" ] && continue
              PN_PV="${CPV#*/}"
-             ATOM=$(echo "$CPV" | sed -E 's/-[0-9]+(\.[0-9]+)*(_[a-z0-9]+)?(-r[0-9]+)?$//')
+             ATOM=$(echo "$CPV" | sed -E 's/-[0-9].*$//')
 
              if echo "$CHANGED" | grep -q "^${ATOM}$"; then
                 echo "=$CPV" >> packages_to_build.txt
@@ -416,7 +426,7 @@ jobs:
             "dev-python/icoextract"
             "games-util/heroic-bin"
             "games-util/faugus-launcher"
-            "net-im/vesktop-bin"
+            "net-im/vesktop"
             "gui-libs/scenefx"
             "x11-misc/matugen"
             "gui-wm/niri"

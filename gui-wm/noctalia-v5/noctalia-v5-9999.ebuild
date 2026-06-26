@@ -5,8 +5,7 @@ inherit git-r3 meson
 DESCRIPTION="A lightweight Wayland shell built directly on Wayland and OpenGL ES"
 HOMEPAGE="https://github.com/noctalia-dev/noctalia-shell"
 EGIT_REPO_URI="https://github.com/noctalia-dev/noctalia-shell.git"
-EGIT_BRANCH="v5"
-EGIT_COMMIT="5a416021ebfe"
+EGIT_BRANCH="main"
 
 LICENSE="MIT"
 SLOT="0"
@@ -17,14 +16,17 @@ DEPEND="
     dev-cpp/sdbus-c++
     dev-libs/glib:2
     dev-libs/jemalloc
+    dev-libs/libxml2
     dev-libs/wayland
     gnome-base/librsvg:2
     media-libs/fontconfig
     media-libs/freetype
+    media-libs/harfbuzz
     media-libs/libwebp
-    media-libs/mesa[egl(+)]
+    media-libs/mesa[egl(+),gles2(+)]
     media-video/pipewire
     net-misc/curl
+    sci-libs/libqalculate
     sys-auth/polkit
     sys-libs/pam
     x11-libs/cairo
