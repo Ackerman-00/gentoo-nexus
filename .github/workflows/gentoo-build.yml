@@ -419,6 +419,12 @@ jobs:
 
           # 2. Sanitize and upload Packages index last (the "commit" step)
           echo ">>> Processing Packages index..."
+          for existing in Packages Packages.gz; do
+            if gh release view rolling --json assets --jq '.assets[].name' --repo "$REPO" 2>/dev/null | grep -qxF "$existing"; then
+              echo "  Deleting existing: $existing"
+              gh release delete-asset rolling "$existing" --repo "$REPO" -y 2>&1 || true
+            fi
+          done
           sed -i -E \
             -e 's|^PATH: .*/([^/]+\.gpkg\.tar)$|PATH: \1|' \
             -e 's|^URI: .*/([^/]+\.gpkg\.tar)$|URI: \1|' \

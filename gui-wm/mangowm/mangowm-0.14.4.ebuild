@@ -14,7 +14,7 @@ IUSE="X"
 DEPEND="
     >=gui-libs/wlroots-0.19:=[libinput,session,X?]
     >=gui-libs/scenefx-0.4.1
-    dev-libs/cjson
+    dev-libs/cJSON
     dev-libs/libinput:=
     dev-libs/libpcre2
     dev-libs/wayland
