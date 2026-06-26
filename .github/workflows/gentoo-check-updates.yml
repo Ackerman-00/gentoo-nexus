@@ -20,7 +20,7 @@ jobs:
     timeout-minutes: 30
     steps:
       - name: Checkout Repository
-        uses: actions/checkout@v4
+        uses: actions/checkout@v5
         with:
           token: ${{ secrets.GITHUB_TOKEN }}
           fetch-depth: 0
@@ -345,7 +345,7 @@ jobs:
 
           LOCAL_PKGS=$(find /overlay -mindepth 2 -maxdepth 3 -name "*.ebuild" | awk -F/ '{print $(NF-2)"/"$(NF-1)}' | sort -u || true)
 
-          UPSTREAM_PKGS="llvm-core/llvm llvm-core/clang llvm-runtimes/compiler-rt media-libs/mesa media-libs/vulkan-loader sys-kernel/zen-sources virtual/dist-kernel sys-apps/portage games-util/heroic-bin app-editors/zed dev-util/rustup"
+          UPSTREAM_PKGS="llvm-core/llvm llvm-core/clang llvm-runtimes/compiler-rt media-libs/mesa media-libs/vulkan-loader sys-kernel/gentoo-kernel virtual/dist-kernel sys-apps/portage games-util/heroic-bin app-editors/zed dev-util/rustup"
 
           ALL_PKGS=$(echo -e "${LOCAL_PKGS}\n${UPSTREAM_PKGS}" | tr ' ' '\n' | sort -u | grep -v '^$')
 
@@ -402,7 +402,7 @@ jobs:
             "llvm-runtimes/compiler-rt"
             "media-libs/mesa"
             "media-libs/vulkan-loader"
-            "sys-kernel/zen-sources"
+            "sys-kernel/gentoo-kernel"
             "virtual/dist-kernel"
             "dev-util/rustup"
             "app-editors/zed"

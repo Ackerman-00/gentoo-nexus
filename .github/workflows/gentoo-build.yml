@@ -23,14 +23,14 @@ jobs:
     timeout-minutes: 360
     steps:
       - name: Checkout Repository
-        uses: actions/checkout@v4
+        uses: actions/checkout@v5
         with:
           token: ${{ secrets.GITHUB_TOKEN }}
           fetch-depth: 0
 
       - name: Allocate ZRAM Swap
         run: |
-          sudo modprobe zram
+          sudo modprobe zram 2>/dev/null || { echo "ZRAM not available, skipping"; free -h; exit 0; }
           sudo zramctl --find --size 12G --algorithm lz4
           sudo mkswap /dev/zram0
           sudo swapon /dev/zram0 --priority 100
@@ -42,7 +42,7 @@ jobs:
           df -h /
 
       - name: Persistent CCache Setup
-        uses: actions/cache@v4
+        uses: actions/cache@v5
         with:
           path: ccache
           key: gentoo-ccache-${{ runner.os }}-${{ github.sha }}
