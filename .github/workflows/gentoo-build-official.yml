@@ -112,7 +112,7 @@ jobs:
       - name: Resolve Build List
         id: resolve
         run: |
-          TRACKED_PKGS="=media-libs/mesa-26.1.3 media-libs/vulkan-loader sys-kernel/gentoo-kernel virtual/dist-kernel sys-apps/portage llvm-core/llvm llvm-core/clang llvm-runtimes/compiler-rt"
+          TRACKED_PKGS="llvm-core/llvm llvm-core/clang llvm-runtimes/compiler-rt media-libs/vulkan-loader sys-kernel/gentoo-kernel virtual/dist-kernel sys-apps/portage =media-libs/mesa-26.1.3"
           INPUT="${{ github.event.inputs.package_list }}"
           if [ -n "$INPUT" ]; then
             echo "build_list=$INPUT" >> "$GITHUB_OUTPUT"
@@ -184,6 +184,9 @@ jobs:
           USES
 
           cat > /etc/portage/package.use/gaming << 'GAMING'
+          llvm-core/llvm abi_x86_32
+          llvm-core/clang abi_x86_32
+          llvm-runtimes/compiler-rt abi_x86_32
           media-libs/mesa abi_x86_32
           media-libs/vulkan-loader abi_x86_32
           media-libs/alsa-lib abi_x86_32
