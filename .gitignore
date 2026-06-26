@@ -4,3 +4,4 @@ packages_to_build.txt
 gen_manifests.sh
 resolve_state.sh
 desired_state.txt
+sync_overlay.sh
