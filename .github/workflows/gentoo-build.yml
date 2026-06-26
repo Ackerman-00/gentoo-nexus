@@ -250,7 +250,7 @@ jobs:
           BINHOST
 
           echo ">>> Updating Portage to latest version..."
-          emerge --oneshot --getbinpkg --usepkg sys-apps/portage
+          emerge --oneshot sys-apps/portage
           quickpkg sys-apps/portage 2>/dev/null || true
 
           mkdir -p /etc/portage/package.accept_keywords
