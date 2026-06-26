@@ -11,4 +11,4 @@ RESTRICT=mirror strip
 SLOT=0
 SRC_URI=amd64? ( https://github.com/zen-browser/desktop/releases/download/1.21.3b/zen.linux-x86_64.tar.xz -> zen-browser-1.21.3b-amd64.tar.xz ) arm64? ( https://github.com/zen-browser/desktop/releases/download/1.21.3b/zen.linux-aarch64.tar.xz -> zen-browser-1.21.3b-arm64.tar.xz )
 _eclasses_=desktop	e447b5f77146d69797e9f03ff177f3f1	xdg-utils	42869b3c8d86a70ef3cf75165a395e09
-_md5_=b9bd5f1642681398ae5176df2239ff22
+_md5_=d24381e52f12699fef662cf6eafe9603
