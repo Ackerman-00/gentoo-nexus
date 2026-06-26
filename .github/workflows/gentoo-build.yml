@@ -400,14 +400,11 @@ jobs:
             ASSET_NAME=$(basename "$file")
             echo "  Processing: $ASSET_NAME (PN=$PN)"
 
-            # Delete old assets for this package name
-            OLD_ASSETS=$(gh release view rolling --json assets \
-              --jq ".assets[].name" --repo "$REPO" 2>/dev/null \
-              | grep -E "^${PN}-[0-9].*\.gpkg\.tar$" || true)
-            for asset in $OLD_ASSETS; do
-              echo "    Deleting old: $asset"
-              gh release delete-asset rolling "$asset" --repo "$REPO" -y 2>&1 || true
-            done
+            # Delete only exact duplicate filename (not other versions)
+            if gh release view rolling --json assets --jq '.assets[].name' --repo "$REPO" 2>/dev/null | grep -qxF "$ASSET_NAME"; then
+              echo "    Deleting exact duplicate: $ASSET_NAME"
+              gh release delete-asset rolling "$ASSET_NAME" --repo "$REPO" -y 2>&1 || true
+            fi
 
             if retry_upload "$file"; then
               echo "    OK: $ASSET_NAME uploaded"
