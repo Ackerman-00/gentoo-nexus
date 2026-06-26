@@ -237,7 +237,8 @@ jobs:
           REPO
 
           echo ">>> Updating Portage to latest version..."
-          emerge --oneshot sys-apps/portage
+          emaint binhost --fix
+          FEATURES="-getbinpkg" emerge --oneshot --usepkg sys-apps/portage
           quickpkg sys-apps/portage 2>/dev/null || true
 
           mkdir -p /etc/portage/binrepos.conf
