@@ -1,21 +1,26 @@
 name: Build Official Gentoo Packages
 
 on:
-  schedule:
-    - cron: '0 6 * * 2,4,6'
+  workflow_call:
+    inputs:
+      package_list:
+        description: 'Space-separated package atoms to build'
+        type: string
+        required: true
   workflow_dispatch:
     inputs:
       package_list:
-        description: 'Package atoms (e.g. =media-libs/mesa-26.1.3 sys-kernel/gentoo-kernel)'
+        description: 'Space-separated package atoms (e.g. media-libs/mesa sys-kernel/gentoo-kernel)'
         required: false
         default: ''
 
 permissions:
   contents: write
+  actions: write
 
 jobs:
-  official-build:
-    name: Build Official Gentoo Packages
+  build:
+    name: Build Packages
     runs-on: ubuntu-latest
     timeout-minutes: 360
     outputs:
@@ -114,15 +119,13 @@ jobs:
       - name: Parse Queue & Normalize Targets
         id: queue
         run: |
-          TRACKED_PKGS="llvm-core/llvm llvm-core/clang llvm-runtimes/compiler-rt dev-libs/roct-thunk-interface dev-libs/rocr-runtime dev-libs/rocm-opencl-runtime sys-kernel/linux-firmware x11-drivers/xf86-video-amdgpu media-libs/vulkan-loader sys-kernel/gentoo-kernel sys-apps/portage media-libs/mesa games-util/heroic-bin app-editors/zed dev-util/rustup"
-          INPUT="${{ github.event.inputs.package_list }}"
-          if [ -n "$INPUT" ]; then
-            FULL_LIST="$INPUT"
-          else
-            FULL_LIST="$TRACKED_PKGS"
+          INPUT="${{ inputs.package_list || github.event.inputs.package_list }}"
+          if [ -z "$INPUT" ]; then
+            echo ">>> No package list provided, using defaults"
+            INPUT="llvm-core/llvm llvm-core/clang llvm-runtimes/compiler-rt dev-libs/roct-thunk-interface dev-libs/rocr-runtime dev-libs/rocm-opencl-runtime sys-kernel/linux-firmware x11-drivers/xf86-video-amdgpu media-libs/vulkan-loader sys-kernel/gentoo-kernel sys-apps/portage media-libs/mesa games-util/heroic-bin app-editors/zed dev-util/rustup"
           fi
 
-          read -r -a PKGS <<< "$FULL_LIST"
+          read -r -a PKGS <<< "$INPUT"
           TARGET="${PKGS[0]:-}"
           REMAINING=("${PKGS[@]:1}")
 
@@ -134,7 +137,7 @@ jobs:
             exit 0
           fi
 
-          # Skip check: only for version-pinned atoms
+          # Skip if exact version-pinned atom already exists in Packages
           if [[ "$TARGET" == =* ]]; then
             CPV="${TARGET#=}"
             if grep -qF "CPV: ${CPV}" binpkgs/Packages 2>/dev/null; then
@@ -152,7 +155,8 @@ jobs:
           #!/bin/bash
           set -euo pipefail
 
-          echo ">>> Building single package: $*"
+          TARGET="$1"
+          echo ">>> Building single package: ${TARGET}"
 
           echo ">>> Syncing Gentoo ebuild repository..."
           mkdir -p /var/db/repos/gentoo /etc/portage/repos.conf
@@ -212,9 +216,7 @@ jobs:
           USES
 
           cat > /etc/portage/package.use/gaming << 'GAMING'
-          # llvm provides the runtime LLVM libraries mesa links against
           llvm-core/llvm -xml abi_x86_32
-          # compiler-rt provides 32-bit runtime libs for clang-compiled 32-bit code
           llvm-runtimes/compiler-rt abi_x86_32
           media-libs/mesa abi_x86_32
           media-libs/vulkan-loader abi_x86_32
@@ -229,7 +231,6 @@ jobs:
           virtual/opengl abi_x86_32
           virtual/zlib abi_x86_32
           sys-libs/zlib abi_x86_32
-          # Additional multilib deps from mesa dep chain
           app-arch/zstd abi_x86_32
           dev-libs/icu abi_x86_32
           dev-libs/libffi abi_x86_32
@@ -278,20 +279,12 @@ jobs:
           set +e
           touch /var/cache/binpkgs/.build_start
 
-          TARGET="$1"
-          echo ""
-          echo "========================================================================"
-          echo ">>> BUILDING: $TARGET"
-          echo "========================================================================"
-
           # Safety skip check inside Docker (defense-in-depth):
-          # version-pinned atoms skip if exact CPV exists in Packages
-          # unversioned atoms always build (to pick up USE flag changes)
           if [[ "$TARGET" == =* ]]; then
             CPV="${TARGET#=}"
             if grep -qF "CPV: ${CPV}" /var/cache/binpkgs/Packages 2>/dev/null; then
               echo ">>> SKIPPING (already in Packages): $TARGET ($CPV)"
-              echo ">>> Build complete (skipped)."
+              echo ">>> Build skipped."
               exit 0
             fi
           fi
@@ -303,7 +296,6 @@ jobs:
           BUILD_EXIT=$?
           cat /tmp/emerge.log
 
-          set +e
           if [ "$BUILD_EXIT" -ne 0 ]; then
             echo ">>> BUILD FAILED with exit code $BUILD_EXIT"
             if grep -q "circular dependencies" /tmp/emerge.log; then
@@ -323,12 +315,11 @@ jobs:
                 echo ">>> WARNING: Circular dependency workaround also failed (exit $BUILD_EXIT)"
               fi
             else
-              echo ">>> WARNING: emerge failed for $TARGET (exit $BUILD_EXIT). Check logs above."
+              echo ">>> WARNING: emerge failed for ${TARGET} (exit $BUILD_EXIT). Check logs above."
             fi
           else
-            echo ">>> SUCCESS: $TARGET built"
+            echo ">>> SUCCESS: ${TARGET} built"
           fi
-          set -e
 
           emaint binhost --fix
           echo ">>> Build complete."
@@ -336,6 +327,7 @@ jobs:
           BUILDSCRIPT
 
           chmod +x build.sh
+          echo "TARGET=${{ steps.queue.outputs.TARGET_PKG }}" >> "$GITHUB_ENV"
 
       - name: Build Package in Docker
         if: steps.queue.outputs.skip_compile != 'true'
@@ -347,7 +339,7 @@ jobs:
             -v "${{ github.workspace }}/ccache:/var/cache/ccache:rw" \
             -v "${{ github.workspace }}/build.sh:/build.sh:ro" \
             gentoo/stage3:amd64-desktop-openrc \
-            bash /build.sh ${{ steps.queue.outputs.TARGET_PKG }}
+            bash /build.sh "${{ env.TARGET }}"
 
       - name: Fix Permissions Post-Build
         if: steps.queue.outputs.skip_compile != 'true'
@@ -443,8 +435,8 @@ jobs:
           fi
 
   relay:
-    if: ${{ always() && needs.official-build.outputs.remaining != '' }}
-    needs: [official-build]
+    if: ${{ always() && needs.build.outputs.remaining != '' }}
+    needs: [build]
     runs-on: ubuntu-latest
     timeout-minutes: 10
     permissions:
@@ -453,12 +445,13 @@ jobs:
       GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
     steps:
       - run: |
-          echo ">>> Triggering relay for: ${{ needs.official-build.outputs.remaining }}"
+          echo ">>> Triggering relay for: ${{ needs.build.outputs.remaining }}"
           for i in 1 2 3; do
             gh workflow run "${{ github.workflow }}" \
               --ref "${{ github.ref_name }}" \
               --repo ${{ github.repository }} \
-              -f package_list="${{ needs.official-build.outputs.remaining }}" && exit 0
+              -f package_list="${{ needs.build.outputs.remaining }}" && exit 0
             sleep 10
           done
           exit 1
+
