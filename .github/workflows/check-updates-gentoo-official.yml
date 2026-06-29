@@ -5,6 +5,10 @@ on:
     - cron: '0 8 * * *'
   workflow_dispatch:
     inputs:
+      package_list:
+        description: 'Space-separated package atoms to check (e.g. media-libs/mesa sys-kernel/gentoo-kernel). If empty, checks all TRACKED_PKGS.'
+        required: false
+        default: ''
       force_rebuild:
         description: 'Space-separated package atoms to force rebuild (e.g. media-libs/mesa sys-kernel/gentoo-kernel)'
         required: false
@@ -36,7 +40,13 @@ jobs:
           GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
           REPO: ${{ github.repository }}
         run: |
-          TRACKED_PKGS="llvm-core/llvm llvm-core/clang llvm-runtimes/compiler-rt dev-libs/roct-thunk-interface dev-libs/rocr-runtime dev-libs/rocm-opencl-runtime sys-kernel/linux-firmware x11-drivers/xf86-video-amdgpu media-libs/vulkan-loader sys-kernel/gentoo-kernel sys-apps/portage media-libs/mesa games-util/heroic-bin app-editors/zed dev-util/rustup"
+          ALL_TRACKED="llvm-core/llvm llvm-core/clang llvm-runtimes/compiler-rt dev-libs/roct-thunk-interface dev-libs/rocr-runtime dev-libs/rocm-opencl-runtime sys-kernel/linux-firmware x11-drivers/xf86-video-amdgpu media-libs/vulkan-loader sys-kernel/gentoo-kernel sys-apps/portage media-libs/mesa games-util/heroic-bin app-editors/zed dev-util/rustup"
+          SPECIFIC="${{ github.event.inputs.package_list }}"
+          if [ -n "$SPECIFIC" ]; then
+            TRACKED_PKGS="$SPECIFIC"
+          else
+            TRACKED_PKGS="$ALL_TRACKED"
+          fi
           FORCE="${{ github.event.inputs.force_rebuild }}"
 
           echo ">>> Fetching rolling release assets..."
