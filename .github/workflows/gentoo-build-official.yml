@@ -210,17 +210,36 @@ jobs:
           USES
 
           cat > /etc/portage/package.use/gaming << 'GAMING'
-          # llvm/clang are compilers, not libraries — no multilib needed
+          # llvm provides the runtime LLVM libraries mesa links against
+          llvm-core/llvm abi_x86_32
           # compiler-rt provides 32-bit runtime libs for clang-compiled 32-bit code
           llvm-runtimes/compiler-rt abi_x86_32
           media-libs/mesa abi_x86_32
           media-libs/vulkan-loader abi_x86_32
           media-libs/alsa-lib abi_x86_32
+          media-libs/libglvnd abi_x86_32 X
           x11-libs/libX11 abi_x86_32
           x11-libs/libxcb abi_x86_32
           x11-libs/libXext abi_x86_32
+          x11-libs/libdrm abi_x86_32
+          dev-libs/expat abi_x86_32
+          dev-util/spirv-tools abi_x86_32
           virtual/opengl abi_x86_32
           sys-libs/zlib abi_x86_32
+          # Additional multilib deps from mesa dep chain
+          app-arch/zstd abi_x86_32
+          dev-libs/icu abi_x86_32
+          dev-libs/libffi abi_x86_32
+          dev-libs/libxml2 abi_x86_32
+          x11-libs/libXau abi_x86_32
+          x11-libs/libXdmcp abi_x86_32
+          x11-libs/libXfixes abi_x86_32
+          x11-libs/libXrandr abi_x86_32
+          x11-libs/libXrender abi_x86_32
+          x11-libs/libXxf86vm abi_x86_32
+          x11-libs/libpciaccess abi_x86_32
+          x11-libs/libxshmfence abi_x86_32
+          x11-libs/xcb-util-keysyms abi_x86_32
           GAMING
 
           mkdir -p /etc/portage/binrepos.conf
@@ -258,25 +277,15 @@ jobs:
           echo ">>> BUILDING: $TARGET"
           echo "========================================================================"
 
-          # Safety skip check inside Docker (defense-in-depth)
+          # Safety skip check inside Docker (defense-in-depth):
+          # version-pinned atoms skip if exact CPV exists in Packages
+          # unversioned atoms always build (to pick up USE flag changes)
           if [[ "$TARGET" == =* ]]; then
             CPV="${TARGET#=}"
             if grep -qF "CPV: ${CPV}" /var/cache/binpkgs/Packages 2>/dev/null; then
               echo ">>> SKIPPING (already in Packages): $TARGET ($CPV)"
               echo ">>> Build complete (skipped)."
               exit 0
-            fi
-          else
-            LATEST_CPV=$(portageq best_visible / ebuild "$TARGET" 2>/dev/null || true)
-            if [ -n "$LATEST_CPV" ]; then
-              LATEST_PV="${LATEST_CPV#*/}"
-              PN="${TARGET##*/}"
-              if ls /var/cache/binpkgs/*/"$PN"/"$PN"-"$LATEST_PV"*.gpkg.tar >/dev/null 2>&1 || \
-                 ls /var/cache/binpkgs/"$PN"-"$LATEST_PV"*.gpkg.tar >/dev/null 2>&1; then
-                echo ">>> SKIPPING (latest $LATEST_CPV already built)"
-                echo ">>> Build complete (skipped)."
-                exit 0
-              fi
             fi
           fi
 
