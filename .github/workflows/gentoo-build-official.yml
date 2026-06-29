@@ -210,8 +210,8 @@ jobs:
           USES
 
           cat > /etc/portage/package.use/gaming << 'GAMING'
-          llvm-core/llvm abi_x86_32
-          llvm-core/clang abi_x86_32
+          # llvm/clang are compilers, not libraries — no multilib needed
+          # compiler-rt provides 32-bit runtime libs for clang-compiled 32-bit code
           llvm-runtimes/compiler-rt abi_x86_32
           media-libs/mesa abi_x86_32
           media-libs/vulkan-loader abi_x86_32
@@ -238,7 +238,7 @@ jobs:
 
           echo ">>> Updating Portage to latest version..."
           emaint binhost --fix
-          FEATURES="-getbinpkg" emerge --oneshot --usepkg sys-apps/portage
+          FEATURES="-getbinpkg" emerge --oneshot sys-apps/portage
           quickpkg sys-apps/portage 2>/dev/null || true
 
           echo ">>> Installing ccache..."
@@ -266,6 +266,18 @@ jobs:
               echo ">>> Build complete (skipped)."
               exit 0
             fi
+          else
+            LATEST_CPV=$(portageq best_visible / ebuild "$TARGET" 2>/dev/null || true)
+            if [ -n "$LATEST_CPV" ]; then
+              LATEST_PV="${LATEST_CPV#*/}"
+              PN="${TARGET##*/}"
+              if ls /var/cache/binpkgs/*/"$PN"/"$PN"-"$LATEST_PV"*.gpkg.tar >/dev/null 2>&1 || \
+                 ls /var/cache/binpkgs/"$PN"-"$LATEST_PV"*.gpkg.tar >/dev/null 2>&1; then
+                echo ">>> SKIPPING (latest $LATEST_CPV already built)"
+                echo ">>> Build complete (skipped)."
+                exit 0
+              fi
+            fi
           fi
 
           emerge --oneshot --usepkg --getbinpkg --buildpkg --backtrack=30 \
@@ -283,6 +295,7 @@ jobs:
           set -e
           emaint binhost --fix
           echo ">>> Build complete."
+          [ "$BUILD_EXIT" -eq 0 ] || exit $BUILD_EXIT
           BUILDSCRIPT
 
           chmod +x build.sh
