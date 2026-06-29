@@ -6,11 +6,11 @@
 
 *A bleeding-edge Gentoo overlay & binary host for the Wayland desktop.*
 
-[![Build](https://img.shields.io/github/actions/workflow/status/Ackerman-00/gentoo-nexus/build.yml?style=for-the-badge&label=FORGE&logo=githubactions&logoColor=white&color=4f8a5a)](https://github.com/Ackerman-00/gentoo-nexus/actions)
+[![Build](https://img.shields.io/github/actions/workflow/status/Ackerman-00/gentoo-nexus/build.yml?style=for-the-badge&label=FORGE&logo=githubactions&logoColor=white&color=8b5cf6)](https://github.com/Ackerman-00/gentoo-nexus/actions)
 &nbsp;
-[![Binhost](https://img.shields.io/badge/BINHOST-LIVE-4f8a5a?style=for-the-badge&logo=linux&logoColor=white)](https://github.com/Ackerman-00/gentoo-nexus/releases/tag/rolling)
+[![Binhost](https://img.shields.io/badge/BINHOST-LIVE-8b5cf6?style=for-the-badge&logo=linux&logoColor=white)](https://github.com/Ackerman-00/gentoo-nexus/releases/tag/rolling)
 &nbsp;
-[![License](https://img.shields.io/badge/LICENSE-MIT-4f8a5a?style=for-the-badge)](LICENSE)
+[![License](https://img.shields.io/badge/LICENSE-MIT-8b5cf6?style=for-the-badge)](LICENSE)
 
 Pre-compiled binaries &middot; Nightly CI &middot; Drop-in Portage overlay
 
@@ -278,6 +278,6 @@ Then follow the overlay setup steps above.
 
 <sub>built on Gentoo &middot; powered by Portage &middot; automated with GitHub Actions</sub>
 
-[![GitHub](https://img.shields.io/badge/Ackerman--00-gentoo--nexus-4f8a5a?style=flat-square&logo=github)](https://github.com/Ackerman-00/gentoo-nexus)
+[![GitHub](https://img.shields.io/badge/Ackerman--00-gentoo--nexus-8b5cf6?style=flat-square&logo=github)](https://github.com/Ackerman-00/gentoo-nexus)
 
 </div>
