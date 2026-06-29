@@ -45,8 +45,8 @@ jobs:
           cat > resolve_versions.sh << 'SCRIPT'
           #!/bin/bash
           source /etc/profile
-          emerge-webrsync -q
-           eselect profile set default/linux/amd64/23.0/desktop 2>/dev/null || true
+          emerge-webrsync -q >&2 || true
+           eselect profile set default/linux/amd64/23.0/desktop >&2 2>/dev/null || true
            export ACCEPT_KEYWORDS="~amd64"
            export ACCEPT_LICENSE="*"
            for pkg in "$@"; do
@@ -75,17 +75,17 @@ jobs:
 
             # Extract PN-PVR (e.g. mesa-26.1.3) and check rolling release assets
             PN_PV="${CPV#*/}"
-            export EXISTING_ASSETS
-            if python3 -c "
-                import os, re
-                assets = os.environ['EXISTING_ASSETS']
-                pn_pv = '$PN_PV'
-                pattern = r'^' + re.escape(pn_pv) + r'(-[0-9]+)?\.gpkg\.tar$'
-                for a in assets.splitlines():
-                    if re.match(pattern, a.strip()):
-                        sys.exit(0)
-                sys.exit(1)
-            "; then
+            export EXISTING_ASSETS PN_PV
+            if python3 << 'PYEOF'; then
+          import os, re, sys
+          assets = os.environ['EXISTING_ASSETS']
+          pn_pv = os.environ['PN_PV']
+          pattern = r'^' + re.escape(pn_pv) + r'(-[0-9]+)?\.gpkg\.tar$'
+          for a in assets.splitlines():
+              if re.match(pattern, a.strip()):
+                  sys.exit(0)
+          sys.exit(1)
+          PYEOF
               echo "  EXISTS: $CPV"
             else
               echo "  MISSING: $CPV"
