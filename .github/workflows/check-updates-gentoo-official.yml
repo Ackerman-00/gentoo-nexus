@@ -52,7 +52,6 @@ jobs:
           else
             TRACKED_PKGS="$ALL_TRACKED"
           fi
-          FORCE="${{ github.event.inputs.force_rebuild }}"
 
           echo ">>> Fetching rolling release assets..."
           EXISTING_ASSETS=$(gh release view rolling --json assets --jq '.assets[].name' 2>/dev/null || echo "")
@@ -76,19 +75,13 @@ jobs:
             bash /resolve_versions.sh $TRACKED_PKGS > latest_cpvs.txt
 
           BUILD_QUEUE=""
+          FORCE_BUILD=""
           i=1
           for PKG in $TRACKED_PKGS; do
             CPV=$(sed -n "${i}p" latest_cpvs.txt)
             i=$((i + 1))
 
             echo ">>> Checking: $PKG"
-
-            # Force rebuild — always include as unversioned atom
-            if echo "$FORCE" | tr ' ' '\n' | grep -qxF "$PKG"; then
-              echo "  FORCE: $PKG"
-              BUILD_QUEUE="$BUILD_QUEUE $PKG"
-              continue
-            fi
 
             if [ -z "$CPV" ]; then
               echo "  CANNOT RESOLVE: $PKG — adding to queue"
@@ -117,13 +110,53 @@ jobs:
           done
 
           BUILD_QUEUE="${BUILD_QUEUE# }"
+          echo "build_list=$BUILD_QUEUE" >> "$GITHUB_OUTPUT"
+          echo "force_rebuild=${{ github.event.inputs.force_rebuild }}" >> "$GITHUB_OUTPUT"
+
           if [ -z "$BUILD_QUEUE" ]; then
             echo ">>> All packages up to date. Nothing to build."
           else
             echo ">>> Packages to build: $BUILD_QUEUE"
-            gh workflow run "Build Gentoo Official" \
-              --ref "${{ github.ref_name }}" \
-              --repo ${{ github.repository }} \
-              -f package_list="$BUILD_QUEUE" \
-              -f force_rebuild="$FORCE"
           fi
+
+      - name: Trigger Relay
+        if: steps.scan.outputs.build_list != ''
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+        run: |
+          PRIORITY_ORDER=(
+            "llvm-core/llvm"
+            "llvm-core/clang"
+            "llvm-runtimes/compiler-rt"
+            "dev-libs/roct-thunk-interface"
+            "dev-libs/rocr-runtime"
+            "dev-libs/rocm-opencl-runtime"
+            "sys-kernel/linux-firmware"
+            "x11-drivers/xf86-video-amdgpu"
+            "media-libs/vulkan-loader"
+            "sys-kernel/gentoo-kernel"
+            "sys-apps/portage"
+            "media-libs/mesa"
+            "games-util/heroic-bin"
+            "app-editors/zed"
+            "dev-util/rustup"
+          )
+          RAW_LIST="${{ steps.scan.outputs.build_list }}"
+          ORDERED=()
+          for priority_pkg in "${PRIORITY_ORDER[@]}"; do
+            for exact_pkg in $RAW_LIST; do
+              if echo "$exact_pkg" | grep -q "$priority_pkg"; then ORDERED+=("$exact_pkg"); fi
+            done
+          done
+          for exact_pkg in $RAW_LIST; do
+            already=false
+            for p in "${ORDERED[@]}"; do [ "$p" == "$exact_pkg" ] && already=true && break; done
+            [ "$already" = false ] && ORDERED+=("$exact_pkg")
+          done
+          FINAL_LIST="${ORDERED[*]}"
+          echo ">>> Queueing for compilation: $FINAL_LIST"
+          gh workflow run "Build Gentoo Official" \
+            --ref "${{ github.ref_name }}" \
+            --repo ${{ github.repository }} \
+            -f package_list="$FINAL_LIST" \
+            -f force_rebuild="${{ steps.scan.outputs.force_rebuild }}"
