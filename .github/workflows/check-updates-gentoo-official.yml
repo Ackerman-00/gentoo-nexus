@@ -107,5 +107,6 @@ jobs:
             gh workflow run "Build Gentoo Official" \
               --ref "${{ github.ref_name }}" \
               --repo ${{ github.repository }} \
-              -f package_list="$BUILD_QUEUE"
+              -f package_list="$BUILD_QUEUE" \
+              -f force_rebuild="$FORCE"
           fi

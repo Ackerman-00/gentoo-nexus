@@ -13,6 +13,11 @@ on:
         description: 'Space-separated package atoms (e.g. media-libs/mesa sys-kernel/gentoo-kernel)'
         required: false
         default: ''
+      force_rebuild:
+        description: 'Packages to force rebuild (or "true" for all)'
+        type: string
+        required: false
+        default: ""
 
 permissions:
   contents: write
@@ -25,6 +30,7 @@ jobs:
     timeout-minutes: 360
     outputs:
       remaining: ${{ steps.queue.outputs.REMAINING_PKGS }}
+      force_rebuild: ${{ steps.queue.outputs.FORCE_REBUILD }}
     steps:
       - uses: actions/checkout@v5
 
@@ -125,6 +131,9 @@ jobs:
             INPUT="llvm-core/llvm llvm-core/clang llvm-runtimes/compiler-rt dev-libs/roct-thunk-interface dev-libs/rocr-runtime dev-libs/rocm-opencl-runtime sys-kernel/linux-firmware x11-drivers/xf86-video-amdgpu media-libs/vulkan-loader sys-kernel/gentoo-kernel sys-apps/portage media-libs/mesa games-util/heroic-bin app-editors/zed dev-util/rustup"
           fi
 
+          FORCE="${{ inputs.force_rebuild || github.event.inputs.force_rebuild }}"
+          echo "FORCE_REBUILD=$FORCE" >> "$GITHUB_OUTPUT"
+
           read -r -a PKGS <<< "$INPUT"
           TARGET="${PKGS[0]:-}"
           REMAINING=("${PKGS[@]:1}")
@@ -137,16 +146,33 @@ jobs:
             exit 0
           fi
 
-          # Skip if exact version-pinned atom already exists in Packages
-          if [[ "$TARGET" == =* ]]; then
-            CPV="${TARGET#=}"
-            if grep -qF "CPV: ${CPV}" binpkgs/Packages 2>/dev/null; then
-              echo "skip_compile=true" >> "$GITHUB_OUTPUT"
-              exit 0
-            fi
+          CPV="${TARGET#=}"
+
+          # Always build if live ebuild or unversioned atom
+          if [[ "$CPV" == *"-9999" ]] || [[ "$TARGET" != =* ]]; then
+            echo "skip_compile=false" >> "$GITHUB_OUTPUT"
+            exit 0
           fi
 
-          echo "skip_compile=false" >> "$GITHUB_OUTPUT"
+          # Force rebuild (true = all, or specific atoms)
+          if [[ "$FORCE" == "true" ]]; then
+            echo "skip_compile=false" >> "$GITHUB_OUTPUT"
+            exit 0
+          fi
+          for atom in $FORCE; do
+            atom="${atom#=}"
+            if [[ "$CPV" == "$atom"* ]]; then
+              echo "skip_compile=false" >> "$GITHUB_OUTPUT"
+              exit 0
+            fi
+          done
+
+          # Skip if exact CPV already in Packages
+          if grep -qF "CPV: ${CPV}" binpkgs/Packages 2>/dev/null; then
+            echo "skip_compile=true" >> "$GITHUB_OUTPUT"
+          else
+            echo "skip_compile=false" >> "$GITHUB_OUTPUT"
+          fi
 
       - name: Write Docker Build Script
         if: steps.queue.outputs.skip_compile != 'true'
@@ -451,7 +477,8 @@ jobs:
             gh workflow run "${{ github.workflow }}" \
               --ref "${{ github.ref_name }}" \
               --repo ${{ github.repository }} \
-              -f package_list="${{ needs.build.outputs.remaining }}" && exit 0
+              -f package_list="${{ needs.build.outputs.remaining }}" \
+              -f force_rebuild="${{ needs.build.outputs.force_rebuild }}" && exit 0
             sleep 10
           done
           exit 1
