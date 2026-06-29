@@ -310,9 +310,8 @@ jobs:
           emerge --oneshot --usepkg --getbinpkg --buildpkg --backtrack=30 \
             --binpkg-respect-use=y --quiet-build=y --keep-going \
             --autounmask=n \
-            "${TARGET}" > /tmp/emerge.log 2>&1
-          BUILD_EXIT=$?
-          cat /tmp/emerge.log
+            "${TARGET}" 2>&1 | tee /tmp/emerge.log
+          BUILD_EXIT=${PIPESTATUS[0]}
           set -e
 
           if [ "$BUILD_EXIT" -ne 0 ]; then
