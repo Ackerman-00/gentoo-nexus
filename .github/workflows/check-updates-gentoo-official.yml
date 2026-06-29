@@ -1,4 +1,4 @@
-name: Check Official Package Updates
+name: Check Gentoo Official Updates
 
 on:
   schedule:
@@ -84,16 +84,17 @@ jobs:
 
             # Extract PN-PVR (e.g. mesa-26.1.3) and check rolling release assets
             PN_PV="${CPV#*/}"
+            export EXISTING_ASSETS
             if python3 -c "
-import sys, re
-assets = '''$EXISTING_ASSETS'''
-pn_pv = '$PN_PV'
-pattern = r'^' + re.escape(pn_pv) + r'(-[0-9]+)?\.gpkg\.tar$'
-for a in assets.splitlines():
-    if re.match(pattern, a.strip()):
-        sys.exit(0)
-sys.exit(1)
-"; then
+                import os, re
+                assets = os.environ['EXISTING_ASSETS']
+                pn_pv = '$PN_PV'
+                pattern = r'^' + re.escape(pn_pv) + r'(-[0-9]+)?\.gpkg\.tar$'
+                for a in assets.splitlines():
+                    if re.match(pattern, a.strip()):
+                        sys.exit(0)
+                sys.exit(1)
+            "; then
               echo "  EXISTS: $CPV"
             else
               echo "  MISSING: $CPV"
@@ -115,7 +116,7 @@ sys.exit(1)
     name: Build Packages
     needs: [check]
     if: needs.check.outputs.has_builds == 'true'
-    uses: ./.github/workflows/gentoo-build-official.yml
+    uses: ./.github/workflows/build-gentoo-official.yml
     with:
       package_list: ${{ needs.check.outputs.build_queue }}
     secrets: inherit

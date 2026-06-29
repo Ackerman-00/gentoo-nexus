@@ -6,7 +6,7 @@
 
 *A bleeding-edge Gentoo overlay & binary host for the Wayland desktop.*
 
-[![Build](https://img.shields.io/github/actions/workflow/status/Ackerman-00/gentoo-nexus/gentoo-build.yml?style=for-the-badge&label=FORGE&logo=githubactions&logoColor=white&color=4f8a5a)](https://github.com/Ackerman-00/gentoo-nexus/actions)
+[![Build](https://img.shields.io/github/actions/workflow/status/Ackerman-00/gentoo-nexus/build.yml?style=for-the-badge&label=FORGE&logo=githubactions&logoColor=white&color=4f8a5a)](https://github.com/Ackerman-00/gentoo-nexus/actions)
 &nbsp;
 [![Binhost](https://img.shields.io/badge/BINHOST-LIVE-4f8a5a?style=for-the-badge&logo=linux&logoColor=white)](https://github.com/Ackerman-00/gentoo-nexus/releases/tag/rolling)
 &nbsp;

@@ -1,4 +1,4 @@
-name: Gentoo Check Updates
+name: Check Updates
 
 on:
   schedule:
@@ -6,7 +6,7 @@ on:
   workflow_dispatch:
 
 concurrency:
-  group: gentoo-check-updates-${{ github.ref }}
+  group: check-updates-${{ github.ref }}
   cancel-in-progress: false
 
 permissions:

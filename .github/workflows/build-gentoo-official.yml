@@ -1,16 +1,18 @@
-name: Gentoo Build Relay
+name: Build Gentoo Official
 
 on:
+  workflow_call:
+    inputs:
+      package_list:
+        description: 'Space-separated package atoms to build'
+        type: string
+        required: true
   workflow_dispatch:
     inputs:
       package_list:
-        description: 'Space-separated package atoms to compile'
-        required: true
-      force_rebuild:
-        description: 'Packages to force rebuild (or "true" for all)'
-        type: string
+        description: 'Space-separated package atoms (e.g. media-libs/mesa sys-kernel/gentoo-kernel)'
         required: false
-        default: ""
+        default: ''
 
 permissions:
   contents: write
@@ -18,49 +20,39 @@ permissions:
 
 jobs:
   build:
-    name: Build and Deploy
+    name: Build Packages
     runs-on: ubuntu-latest
     timeout-minutes: 360
     outputs:
       remaining: ${{ steps.queue.outputs.REMAINING_PKGS }}
-      force_rebuild: ${{ github.event.inputs.force_rebuild }}
     steps:
-      - name: Checkout Repository
-        uses: actions/checkout@v5
-        with:
-          token: ${{ secrets.GITHUB_TOKEN }}
-          fetch-depth: 0
+      - uses: actions/checkout@v5
 
       - name: Allocate ZRAM Swap
         run: |
-          sudo modprobe zram 2>/dev/null || { echo "ZRAM not available, skipping"; free -h; exit 0; }
+          sudo modprobe zram 2>/dev/null || { echo "ZRAM not available"; free -h; exit 0; }
           sudo zramctl --find --size 12G --algorithm lz4
           sudo mkswap /dev/zram0
           sudo swapon /dev/zram0 --priority 100
-          free -h
 
-      - name: Free Disk Space for Docker
+      - name: Free Disk Space
         run: |
           sudo rm -rf /usr/share/dotnet /usr/local/lib/android /opt/ghc /opt/hostedtoolcache/CodeQL || true
-          df -h /
 
       - name: Persistent CCache Setup
         uses: actions/cache@v5
         with:
           path: ccache
-          key: gentoo-ccache-${{ runner.os }}-${{ github.sha }}
+          key: gentoo-ccache-official-${{ runner.os }}-${{ github.sha }}
           restore-keys: |
-            gentoo-ccache-${{ runner.os }}-
+            gentoo-ccache-official-${{ runner.os }}-
 
-      - name: Prepare Workspace & Overlay
+      - name: Prepare Workspace
         run: |
-          mkdir -p binpkgs overlay/metadata overlay/profiles distfiles ccache
-          chmod -R 777 binpkgs overlay distfiles ccache
-          rsync -a --exclude='.git' --exclude='binpkgs' --exclude='overlay' ./ overlay/
-          printf 'masters = gentoo\nthin-manifests = true\nsign-manifests = false\n' > overlay/metadata/layout.conf
-          echo "gentoo-nexus" > overlay/profiles/repo_name
+          mkdir -p binpkgs distfiles ccache
+          chmod -R 777 binpkgs distfiles ccache
 
-      - name: Download Release Binaries
+      - name: Download Existing Binaries
         env:
           GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
         run: |
@@ -81,7 +73,6 @@ jobs:
         run: |
           docker run --rm \
             -v "${{ github.workspace }}/binpkgs:/var/cache/binpkgs:rw" \
-            -v "${{ github.workspace }}/overlay:/var/db/repos/gentoo-nexus:ro" \
             gentoo/stage3:amd64-desktop-openrc \
             python3 -c "
           import os, shutil, re
@@ -91,7 +82,7 @@ jobs:
           os.makedirs('/var/db/repos/gentoo', exist_ok=True)
           os.system('emerge-webrsync -q')
 
-          repos = ['/var/db/repos/gentoo-nexus', '/var/db/repos/gentoo']
+          repos = ['/var/db/repos/gentoo']
           pn_to_cat = {}
 
           for repo in repos:
@@ -128,72 +119,44 @@ jobs:
       - name: Parse Queue & Normalize Targets
         id: queue
         run: |
-          raw_input="${{ github.event.inputs.package_list }}"
-          read -r -a RAW_PKGS <<< "$raw_input"
+          INPUT="${{ inputs.package_list || github.event.inputs.package_list }}"
+          if [ -z "$INPUT" ]; then
+            echo ">>> No package list provided, using defaults"
+            INPUT="llvm-core/llvm llvm-core/clang llvm-runtimes/compiler-rt dev-libs/roct-thunk-interface dev-libs/rocr-runtime dev-libs/rocm-opencl-runtime sys-kernel/linux-firmware x11-drivers/xf86-video-amdgpu media-libs/vulkan-loader sys-kernel/gentoo-kernel sys-apps/portage media-libs/mesa games-util/heroic-bin app-editors/zed dev-util/rustup"
+          fi
 
-          normalize_target() {
-            local t="$1"
-            if [[ "$t" == https://gitweb.gentoo.org/*/tree/* ]]; then
-              echo "$t" | sed -E 's|.*/tree/([^/]+)/([^/]+)/\2-([^/]+)\.ebuild$|=\1/\2-\3|'
-              return
-            fi
-            if [[ "$t" == =* ]]; then echo "$t"; return; fi
-            if echo "$t" | grep -qE '^[a-z][a-z0-9_+-]+/[a-zA-Z0-9_+.-]+-[0-9]'; then
-              echo "=${t}"; return
-            fi
-            echo "$t"
-          }
-
-          NORMALIZED=()
-          for raw in "${RAW_PKGS[@]}"; do
-            NORMALIZED+=("$(normalize_target "$raw")")
-          done
-
-          TARGET="${NORMALIZED:-}"
-          REMAINING="${NORMALIZED[*]:1}"
+          read -r -a PKGS <<< "$INPUT"
+          TARGET="${PKGS[0]:-}"
+          REMAINING=("${PKGS[@]:1}")
 
           echo "TARGET_PKG=$TARGET" >> "$GITHUB_OUTPUT"
-          echo "REMAINING_PKGS=$REMAINING" >> "$GITHUB_OUTPUT"
+          echo "REMAINING_PKGS=${REMAINING[*]:-}" >> "$GITHUB_OUTPUT"
 
           if [ -z "$TARGET" ]; then
             echo "skip_compile=true" >> "$GITHUB_OUTPUT"
             exit 0
           fi
 
-          CPV="${TARGET#=}"
-
-          if [[ "$CPV" == *"-9999" ]] || [[ "$TARGET" != =* ]]; then
-            echo "skip_compile=false" >> "$GITHUB_OUTPUT"
-            exit 0
-          fi
-
-          FORCE="${{ github.event.inputs.force_rebuild }}"
-          if [[ "$FORCE" == "true" ]]; then
-            echo "skip_compile=false" >> "$GITHUB_OUTPUT"
-            exit 0
-          fi
-          for atom in $FORCE; do
-            atom="${atom#=}"
-            if [[ "$CPV" == "$atom"* ]]; then
-              echo "skip_compile=false" >> "$GITHUB_OUTPUT"
+          # Skip if exact version-pinned atom already exists in Packages
+          if [[ "$TARGET" == =* ]]; then
+            CPV="${TARGET#=}"
+            if grep -qF "CPV: ${CPV}" binpkgs/Packages 2>/dev/null; then
+              echo "skip_compile=true" >> "$GITHUB_OUTPUT"
               exit 0
             fi
-          done
-
-          if grep -qF "CPV: ${CPV}" binpkgs/Packages 2>/dev/null; then
-            echo "skip_compile=true" >> "$GITHUB_OUTPUT"
-          else
-            echo "skip_compile=false" >> "$GITHUB_OUTPUT"
           fi
 
-      - name: Write Monolithic Docker Build Script
+          echo "skip_compile=false" >> "$GITHUB_OUTPUT"
+
+      - name: Write Docker Build Script
         if: steps.queue.outputs.skip_compile != 'true'
         run: |
           cat > build.sh << 'BUILDSCRIPT'
           #!/bin/bash
           set -euo pipefail
 
-          RAW_TARGET="$1"
+          TARGET="$1"
+          echo ">>> Building single package: ${TARGET}"
 
           echo ">>> Syncing Gentoo ebuild repository..."
           mkdir -p /var/db/repos/gentoo /etc/portage/repos.conf
@@ -212,14 +175,14 @@ jobs:
           FCFLAGS="${COMMON_FLAGS}"
           FFLAGS="${COMMON_FLAGS}"
           VIDEO_CARDS="amdgpu radeonsi"
-          USE="elogind -systemd dbus wayland egl vaapi vdpau vulkan amdgpu ffmpeg encode opencl"
-          
+          USE="elogind -systemd dbus wayland egl vaapi vdpau vulkan amdgpu ffmpeg encode"
+
           FEATURES="getbinpkg buildpkg parallel-install ccache binpkg-ignore-signature -sandbox -usersandbox -ipc-sandbox -network-sandbox -pid-sandbox"
           CCACHE_DIR="/var/cache/ccache"
           BINPKG_FORMAT="gpkg"
           PKGDIR="/var/cache/binpkgs"
           DISTDIR="/var/cache/distfiles"
-          
+
           ACCEPT_LICENSE="*"
           ACCEPT_KEYWORDS="~amd64"
           ACCEPT_PROPERTIES="*"
@@ -231,21 +194,61 @@ jobs:
           LC_MESSAGES=C.UTF-8
           MAKECONF
 
-          cat > /etc/portage/repos.conf/gentoo-nexus.conf << 'REPO'
-          [gentoo-nexus]
-          location = /var/db/repos/gentoo-nexus
-          masters = gentoo
-          priority = 9999
-          auto-sync = no
-          REPO
+          mkdir -p /etc/portage/package.accept_keywords
+          echo 'net-libs/webkit-gtk -~amd64 amd64' > /etc/portage/package.accept_keywords/stable-binary
 
-          echo ">>> Updating Portage to latest version..."
-          emaint binhost --fix
-          FEATURES="-getbinpkg" emerge --oneshot --usepkg sys-apps/portage
-          quickpkg sys-apps/portage 2>/dev/null || true
+          mkdir -p /etc/portage/package.use
+          cat > /etc/portage/package.use/nexus << 'USES'
+          media-libs/opus abi_x86_64
+          gui-libs/gtk introspection
+          sys-auth/seatd builtin server
+          sys-kernel/installkernel dracut
+          sys-kernel/linux-firmware redistributable initramfs compress-zstd
+          sys-libs/minizip-ng compat
+          sys-apps/dbus -systemd elogind
+          media-video/pipewire -systemd elogind extra
+          dev-libs/libdbusmenu gtk3
+          net-misc/networkmanager -modemmanager -bluetooth
+          sys-libs/ncurses -gpm
+          sys-libs/zlib-ng abi_x86_32 abi_x86_64 compat
+          x11-libs/libdrm video_cards_radeon
+          media-libs/mesa -rust -opencl
+          USES
 
-          echo ">>> Installing ccache..."
-          FEATURES="-getbinpkg" emerge --oneshot --usepkg dev-util/ccache 2>/dev/null || true
+          cat > /etc/portage/package.use/gaming << 'GAMING'
+          llvm-core/llvm -xml abi_x86_32
+          llvm-runtimes/compiler-rt abi_x86_32
+          media-libs/mesa abi_x86_32
+          media-libs/vulkan-loader abi_x86_32
+          media-libs/alsa-lib abi_x86_32
+          media-libs/libglvnd abi_x86_32 X
+          x11-libs/libX11 abi_x86_32
+          x11-libs/libxcb abi_x86_32
+          x11-libs/libXext abi_x86_32
+          x11-libs/libdrm abi_x86_32
+          dev-libs/expat abi_x86_32
+          dev-util/spirv-tools abi_x86_32
+          virtual/opengl abi_x86_32
+          virtual/zlib abi_x86_32
+          sys-libs/zlib abi_x86_32
+          app-arch/zstd abi_x86_32
+          dev-libs/icu abi_x86_32
+          dev-libs/libffi abi_x86_32
+          dev-libs/libxml2 abi_x86_32
+          x11-libs/libXau abi_x86_32
+          x11-libs/libXdmcp abi_x86_32
+          x11-libs/libXfixes abi_x86_32
+          x11-libs/libXrandr abi_x86_32
+          x11-libs/libXrender abi_x86_32
+          x11-libs/libXxf86vm abi_x86_32
+          x11-libs/libpciaccess abi_x86_32
+          x11-libs/libxshmfence abi_x86_32
+          x11-libs/xcb-util-keysyms abi_x86_32
+          dev-libs/wayland abi_x86_32
+          media-libs/libva abi_x86_32
+          media-libs/libdisplay-info abi_x86_32
+          llvm-core/clang abi_x86_32
+          GAMING
 
           mkdir -p /etc/portage/binrepos.conf
           cat > /etc/portage/binrepos.conf/gentoo-official.conf << 'BINHOST'
@@ -260,57 +263,36 @@ jobs:
           verify-signature = true
           BINHOST
 
-          mkdir -p /etc/portage/package.accept_keywords
-          echo '*/*::gentoo-nexus **' > /etc/portage/package.accept_keywords/nexus
-          echo 'net-libs/webkit-gtk -~amd64 amd64' > /etc/portage/package.accept_keywords/stable-binary
+          echo ">>> Updating Portage to latest version..."
+          emaint binhost --fix
+          FEATURES="-getbinpkg" emerge --oneshot sys-apps/portage
+          quickpkg sys-apps/portage 2>/dev/null || true
 
-          mkdir -p /etc/portage/package.use
-          cat > /etc/portage/package.use/nexus << 'USES'
-          media-libs/opus abi_x86_64
-          gui-libs/gtk introspection
-          sys-auth/seatd builtin server
-          sys-kernel/installkernel dracut
-          sys-libs/minizip-ng compat
-          sys-apps/dbus -systemd elogind
-          media-video/pipewire -systemd elogind extra
-          dev-libs/libdbusmenu gtk3
-          net-misc/networkmanager -modemmanager -bluetooth
-          sys-libs/ncurses -gpm
-          sys-libs/zlib-ng abi_x86_64 compat
-          USES
-
-          mkdir -p /etc/portage/package.mask
-          echo '>=dev-libs/libgit2-1.9.3' > /etc/portage/package.mask/libgit2
+          echo ">>> Installing ccache..."
+          FEATURES="-getbinpkg" emerge --oneshot --usepkg dev-util/ccache 2>/dev/null || true
 
           emaint binhost --fix
 
-          while IFS= read -r -d '' ebuild_file; do
-              ebuild "$ebuild_file" manifest >/dev/null 2>&1 || true
-          done < <(find /var/db/repos/gentoo-nexus -mindepth 2 -maxdepth 3 -name "*.ebuild" -print0)
-
-          TARGET="$RAW_TARGET"
-          if [[ "$TARGET" != =* && "$TARGET" != *"-9999" ]]; then
-            RESOLVED=$(portageq best_visible / "$TARGET" 2>/dev/null || true)
-            if [ -n "$RESOLVED" ] && [[ "$RESOLVED" == */* ]]; then
-              TARGET="=${RESOLVED}"
-            fi
-          fi
-
-          emerge --oneshot --getbinpkg --backtrack=30 --quiet-build=y '>=dev-libs/gobject-introspection-1.86.0' 2>/dev/null || true
-          emerge --oneshot --getbinpkg --backtrack=30 --quiet-build=y '>=dev-util/gdbus-codegen-2.88.1' 2>/dev/null || true
-
-          if echo "${TARGET}" | grep -qE "media-libs/mesa|media-libs/libsdl2|media-video/ffmpeg|media-video/pipewire|x11-libs/gtk|gui-libs/libdecor|gui-wm/"; then
-              emerge --oneshot --getbinpkg --backtrack=30 --quiet-build=y "dev-libs/wayland" "dev-util/wayland-scanner" 2>/dev/null || {
-                  emerge --oneshot --usepkg --getbinpkg --buildpkg --backtrack=30 --quiet-build=y "dev-libs/wayland" "dev-util/wayland-scanner" || true
-              }
-          fi
+          emerge --oneshot --getbinpkg --backtrack=30 --quiet-build=y dev-libs/gobject-introspection 2>/dev/null || true
+          emerge --oneshot --getbinpkg --backtrack=30 --quiet-build=y dev-util/gdbus-codegen 2>/dev/null || true
 
           set +e
           touch /var/cache/binpkgs/.build_start
+
+          # Safety skip check inside Docker (defense-in-depth):
+          if [[ "$TARGET" == =* ]]; then
+            CPV="${TARGET#=}"
+            if grep -qF "CPV: ${CPV}" /var/cache/binpkgs/Packages 2>/dev/null; then
+              echo ">>> SKIPPING (already in Packages): $TARGET ($CPV)"
+              echo ">>> Build skipped."
+              exit 0
+            fi
+          fi
+
           emerge --oneshot --usepkg --getbinpkg --buildpkg --backtrack=30 \
             --binpkg-respect-use=y --quiet-build=y --keep-going \
             --autounmask=n \
-            "${TARGET}" > /tmp/emerge.log 2>&1
+            "$TARGET" > /tmp/emerge.log 2>&1
           BUILD_EXIT=$?
           cat /tmp/emerge.log
           set -e
@@ -327,13 +309,22 @@ jobs:
               emerge --oneshot --usepkg --getbinpkg --buildpkg --backtrack=30 \
                 --binpkg-respect-use=y --quiet-build=y --keep-going \
                 --autounmask=n \
-                "${TARGET}" || echo ">>> WARNING: Circular dependency workaround also failed"
+                "$TARGET" > /tmp/emerge2.log 2>&1
+              BUILD_EXIT=$?
+              cat /tmp/emerge2.log
+              if [ "$BUILD_EXIT" -ne 0 ]; then
+                echo ">>> WARNING: Circular dependency workaround also failed (exit $BUILD_EXIT)"
+              fi
             else
-              echo ">>> WARNING: emerge failed for ${TARGET}. Check logs above."
+              echo ">>> WARNING: emerge failed for ${TARGET} (exit $BUILD_EXIT). Check logs above."
             fi
+          else
+            echo ">>> SUCCESS: ${TARGET} built"
           fi
 
           emaint binhost --fix
+          echo ">>> Build complete."
+          [ "$BUILD_EXIT" -eq 0 ] || exit $BUILD_EXIT
           BUILDSCRIPT
 
           chmod +x build.sh
@@ -345,7 +336,6 @@ jobs:
           touch build_start_marker
           docker run --rm --privileged \
             -v "${{ github.workspace }}/binpkgs:/var/cache/binpkgs:rw" \
-            -v "${{ github.workspace }}/overlay:/var/db/repos/gentoo-nexus:rw" \
             -v "${{ github.workspace }}/distfiles:/var/cache/distfiles:rw" \
             -v "${{ github.workspace }}/ccache:/var/cache/ccache:rw" \
             -v "${{ github.workspace }}/build.sh:/build.sh:ro" \
@@ -377,7 +367,6 @@ jobs:
             return 1
           }
 
-          # Determine which reference file to use for -newer
           if [ -f binpkgs/.build_start ]; then
             REF_FILE="binpkgs/.build_start"
           else
@@ -387,12 +376,11 @@ jobs:
 
           UPLOAD_FAILED=0
 
-          # 1. Upload newly built .gpkg.tar files first (before Packages index)
           echo ">>> Uploading new binary packages..."
           shopt -s nullglob
           while IFS= read -r -d '' file; do
-            PN=$(echo "$file" | awk -F'/' '{print $3}')
             ASSET_NAME=$(basename "$file")
+            PN=$(echo "$file" | awk -F'/' '{print $3}')
             echo "  Processing: $ASSET_NAME (PN=$PN)"
 
             # Delete old versions of the same package name
@@ -411,8 +399,7 @@ jobs:
             fi
           done < <(find binpkgs -type f -name '*.gpkg.tar' -newer "$REF_FILE" -print0 2>/dev/null)
 
-          # 2. Sanitize and upload Packages index last (the "commit" step)
-          echo ">>> Processing Packages index..."
+          echo ">>> Processing and uploading Packages index..."
           for existing in Packages Packages.gz; do
             if gh release view rolling --json assets --jq '.assets[].name' --repo "$REPO" 2>/dev/null | grep -qxF "$existing"; then
               echo "  Deleting existing: $existing"
@@ -444,7 +431,6 @@ jobs:
 
           if [ "$UPLOAD_FAILED" -ne 0 ]; then
             echo ">>> WARNING: One or more uploads failed. The rolling release may be incomplete."
-            echo ">>> Check the above logs for details."
           else
             echo ">>> All uploads completed successfully."
           fi
@@ -465,8 +451,8 @@ jobs:
             gh workflow run "${{ github.workflow }}" \
               --ref "${{ github.ref_name }}" \
               --repo ${{ github.repository }} \
-              -f package_list="${{ needs.build.outputs.remaining }}" \
-              -f force_rebuild="${{ needs.build.outputs.force_rebuild }}" && exit 0
+              -f package_list="${{ needs.build.outputs.remaining }}" && exit 0
             sleep 10
           done
           exit 1
+
