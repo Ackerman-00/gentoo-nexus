@@ -242,6 +242,8 @@ jobs:
           USES
 
           cat > /etc/portage/package.use/gaming << 'GAMING'
+          virtual/libelf abi_x86_32
+          dev-libs/elfutils abi_x86_32
           llvm-core/llvm -xml abi_x86_32
           llvm-runtimes/compiler-rt abi_x86_32
           media-libs/mesa abi_x86_32
