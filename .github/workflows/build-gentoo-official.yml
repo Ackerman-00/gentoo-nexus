@@ -128,7 +128,7 @@ jobs:
           INPUT="${{ inputs.package_list || github.event.inputs.package_list }}"
           if [ -z "$INPUT" ]; then
             echo ">>> No package list provided, using defaults"
-            INPUT="llvm-core/llvm llvm-core/clang llvm-runtimes/compiler-rt dev-libs/roct-thunk-interface dev-libs/rocr-runtime dev-libs/rocm-opencl-runtime sys-kernel/linux-firmware x11-drivers/xf86-video-amdgpu media-libs/vulkan-loader sys-kernel/gentoo-kernel sys-apps/portage media-libs/mesa games-util/heroic-bin app-editors/zed dev-util/rustup media-gfx/blender-bin"
+            INPUT="llvm-core/llvm llvm-core/clang llvm-runtimes/compiler-rt sys-devel/gcc dev-libs/roct-thunk-interface dev-libs/rocr-runtime dev-libs/rocm-opencl-runtime sys-kernel/linux-firmware x11-drivers/xf86-video-amdgpu media-libs/vulkan-loader sys-kernel/gentoo-kernel sys-apps/portage media-libs/mesa games-util/heroic-bin app-editors/zed dev-util/rustup media-gfx/blender-bin dev-games/godot"
           fi
 
           FORCE="${{ inputs.force_rebuild || github.event.inputs.force_rebuild }}"
