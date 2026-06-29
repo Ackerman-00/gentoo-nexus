@@ -18,9 +18,6 @@ jobs:
   check:
     name: Check for Updates
     runs-on: ubuntu-latest
-    outputs:
-      build_queue: ${{ steps.scan.outputs.BUILD_QUEUE }}
-      has_builds: ${{ steps.scan.outputs.HAS_BUILDS }}
     steps:
       - uses: actions/checkout@v5
 
@@ -103,20 +100,12 @@ jobs:
           done
 
           BUILD_QUEUE="${BUILD_QUEUE# }"
-          echo "BUILD_QUEUE=$BUILD_QUEUE" >> "$GITHUB_OUTPUT"
-          if [ -n "$BUILD_QUEUE" ]; then
-            echo "HAS_BUILDS=true" >> "$GITHUB_OUTPUT"
-            echo ">>> Packages to build: $BUILD_QUEUE"
-          else
-            echo "HAS_BUILDS=false" >> "$GITHUB_OUTPUT"
+          if [ -z "$BUILD_QUEUE" ]; then
             echo ">>> All packages up to date. Nothing to build."
+          else
+            echo ">>> Packages to build: $BUILD_QUEUE"
+            gh workflow run "Build Gentoo Official" \
+              --ref "${{ github.ref_name }}" \
+              --repo ${{ github.repository }} \
+              -f package_list="$BUILD_QUEUE"
           fi
-
-  trigger-build:
-    name: Build Packages
-    needs: [check]
-    if: needs.check.outputs.has_builds == 'true'
-    uses: ./.github/workflows/build-gentoo-official.yml
-    with:
-      package_list: ${{ needs.check.outputs.build_queue }}
-    secrets: inherit
