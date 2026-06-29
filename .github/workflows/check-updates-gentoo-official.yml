@@ -14,6 +14,10 @@ on:
         required: false
         default: ''
 
+concurrency:
+  group: ${{ github.workflow }}-${{ github.ref }}
+  cancel-in-progress: false
+
 permissions:
   contents: write
   actions: write
@@ -22,6 +26,7 @@ jobs:
   check:
     name: Check for Updates
     runs-on: ubuntu-latest
+    timeout-minutes: 30
     steps:
       - uses: actions/checkout@v5
 
@@ -57,10 +62,12 @@ jobs:
           #!/bin/bash
           source /etc/profile
           emerge-webrsync -q
-          eselect profile set default/linux/amd64/23.0/desktop 2>/dev/null || true
-          for pkg in "$@"; do
-            portageq best_visible / "$pkg" 2>/dev/null || echo ""
-          done
+           eselect profile set default/linux/amd64/23.0/desktop 2>/dev/null || true
+           export ACCEPT_KEYWORDS="~amd64"
+           export ACCEPT_LICENSE="*"
+           for pkg in "$@"; do
+             portageq best_visible / "$pkg" 2>/dev/null || echo ""
+           done
           SCRIPT
           chmod +x resolve_versions.sh
           docker run --rm \
