@@ -211,7 +211,7 @@ jobs:
 
           cat > /etc/portage/package.use/gaming << 'GAMING'
           # llvm provides the runtime LLVM libraries mesa links against
-          llvm-core/llvm abi_x86_32
+          llvm-core/llvm -xml abi_x86_32
           # compiler-rt provides 32-bit runtime libs for clang-compiled 32-bit code
           llvm-runtimes/compiler-rt abi_x86_32
           media-libs/mesa abi_x86_32
@@ -225,6 +225,7 @@ jobs:
           dev-libs/expat abi_x86_32
           dev-util/spirv-tools abi_x86_32
           virtual/opengl abi_x86_32
+          virtual/zlib abi_x86_32
           sys-libs/zlib abi_x86_32
           # Additional multilib deps from mesa dep chain
           app-arch/zstd abi_x86_32
