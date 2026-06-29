@@ -4,15 +4,6 @@ on:
   schedule:
     - cron: '0 8 * * *'
   workflow_dispatch:
-    inputs:
-      package_list:
-        description: 'Space-separated package atoms to check (e.g. media-libs/mesa sys-kernel/gentoo-kernel). If empty, checks all TRACKED_PKGS.'
-        required: false
-        default: ''
-      force_rebuild:
-        description: 'Space-separated package atoms to force rebuild (e.g. media-libs/mesa sys-kernel/gentoo-kernel)'
-        required: false
-        default: ''
 
 concurrency:
   group: ${{ github.workflow }}-${{ github.ref }}
@@ -45,13 +36,7 @@ jobs:
           GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
           REPO: ${{ github.repository }}
         run: |
-          ALL_TRACKED="llvm-core/llvm llvm-core/clang llvm-runtimes/compiler-rt dev-libs/roct-thunk-interface dev-libs/rocr-runtime dev-libs/rocm-opencl-runtime sys-kernel/linux-firmware x11-drivers/xf86-video-amdgpu media-libs/vulkan-loader sys-kernel/gentoo-kernel sys-apps/portage media-libs/mesa games-util/heroic-bin app-editors/zed dev-util/rustup"
-          SPECIFIC="${{ github.event.inputs.package_list }}"
-          if [ -n "$SPECIFIC" ]; then
-            TRACKED_PKGS="$SPECIFIC"
-          else
-            TRACKED_PKGS="$ALL_TRACKED"
-          fi
+          TRACKED_PKGS="llvm-core/llvm llvm-core/clang llvm-runtimes/compiler-rt dev-libs/roct-thunk-interface dev-libs/rocr-runtime dev-libs/rocm-opencl-runtime sys-kernel/linux-firmware x11-drivers/xf86-video-amdgpu media-libs/vulkan-loader sys-kernel/gentoo-kernel sys-apps/portage media-libs/mesa games-util/heroic-bin app-editors/zed dev-util/rustup"
 
           echo ">>> Fetching rolling release assets..."
           EXISTING_ASSETS=$(gh release view rolling --json assets --jq '.assets[].name' 2>/dev/null || echo "")
@@ -75,7 +60,6 @@ jobs:
             bash /resolve_versions.sh $TRACKED_PKGS > latest_cpvs.txt
 
           BUILD_QUEUE=""
-          FORCE_BUILD=""
           i=1
           for PKG in $TRACKED_PKGS; do
             CPV=$(sed -n "${i}p" latest_cpvs.txt)
@@ -111,7 +95,7 @@ jobs:
 
           BUILD_QUEUE="${BUILD_QUEUE# }"
           echo "build_list=$BUILD_QUEUE" >> "$GITHUB_OUTPUT"
-          echo "force_rebuild=${{ github.event.inputs.force_rebuild }}" >> "$GITHUB_OUTPUT"
+          echo "force_rebuild=" >> "$GITHUB_OUTPUT"
 
           if [ -z "$BUILD_QUEUE" ]; then
             echo ">>> All packages up to date. Nothing to build."
