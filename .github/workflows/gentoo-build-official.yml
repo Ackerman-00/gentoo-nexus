@@ -171,7 +171,7 @@ jobs:
           FCFLAGS="${COMMON_FLAGS}"
           FFLAGS="${COMMON_FLAGS}"
           VIDEO_CARDS="amdgpu radeonsi"
-          USE="elogind -systemd dbus wayland egl vaapi vdpau vulkan amdgpu ffmpeg encode opencl"
+          USE="elogind -systemd dbus wayland egl vaapi vdpau vulkan amdgpu ffmpeg encode"
 
           FEATURES="getbinpkg buildpkg parallel-install ccache binpkg-ignore-signature -sandbox -usersandbox -ipc-sandbox -network-sandbox -pid-sandbox"
           CCACHE_DIR="/var/cache/ccache"
@@ -207,6 +207,8 @@ jobs:
           net-misc/networkmanager -modemmanager -bluetooth
           sys-libs/ncurses -gpm
           sys-libs/zlib-ng abi_x86_32 abi_x86_64 compat
+          x11-libs/libdrm video_cards_radeon
+          media-libs/mesa -rust -opencl
           USES
 
           cat > /etc/portage/package.use/gaming << 'GAMING'
@@ -241,6 +243,10 @@ jobs:
           x11-libs/libpciaccess abi_x86_32
           x11-libs/libxshmfence abi_x86_32
           x11-libs/xcb-util-keysyms abi_x86_32
+          dev-libs/wayland abi_x86_32
+          media-libs/libva abi_x86_32
+          media-libs/libdisplay-info abi_x86_32
+          llvm-core/clang abi_x86_32
           GAMING
 
           mkdir -p /etc/portage/binrepos.conf
@@ -266,8 +272,8 @@ jobs:
 
           emaint binhost --fix
 
-          emerge --oneshot --getbinpkg --backtrack=30 --quiet-build=y '>=dev-libs/gobject-introspection-1.86.0' 2>/dev/null || true
-          emerge --oneshot --getbinpkg --backtrack=30 --quiet-build=y '>=dev-util/gdbus-codegen-2.88.1' 2>/dev/null || true
+          emerge --oneshot --getbinpkg --backtrack=30 --quiet-build=y dev-libs/gobject-introspection 2>/dev/null || true
+          emerge --oneshot --getbinpkg --backtrack=30 --quiet-build=y dev-util/gdbus-codegen 2>/dev/null || true
 
           set +e
           touch /var/cache/binpkgs/.build_start
@@ -296,13 +302,34 @@ jobs:
             "$TARGET" > /tmp/emerge.log 2>&1
           BUILD_EXIT=$?
           cat /tmp/emerge.log
+
+          set +e
           if [ "$BUILD_EXIT" -ne 0 ]; then
-            echo ">>> WARNING: emerge failed for $TARGET (exit $BUILD_EXIT)"
+            echo ">>> BUILD FAILED with exit code $BUILD_EXIT"
+            if grep -q "circular dependencies" /tmp/emerge.log; then
+              echo ">>> Circular dependencies detected, attempting workaround..."
+              USE="-pipewire" emerge --oneshot --usepkg --getbinpkg --buildpkg --backtrack=30 --quiet-build=y media-libs/libsdl2 || true
+              emerge --oneshot --usepkg --getbinpkg --buildpkg --backtrack=30 --quiet-build=y media-video/ffmpeg || true
+              emerge --oneshot --usepkg --getbinpkg --buildpkg --backtrack=30 --quiet-build=y media-video/pipewire || true
+              USE="pipewire" emerge --oneshot --usepkg --getbinpkg --buildpkg --backtrack=30 --quiet-build=y media-libs/libsdl2 || true
+
+              emerge --oneshot --usepkg --getbinpkg --buildpkg --backtrack=30 \
+                --binpkg-respect-use=y --quiet-build=y --keep-going \
+                --autounmask=n \
+                "$TARGET" > /tmp/emerge2.log 2>&1
+              BUILD_EXIT=$?
+              cat /tmp/emerge2.log
+              if [ "$BUILD_EXIT" -ne 0 ]; then
+                echo ">>> WARNING: Circular dependency workaround also failed (exit $BUILD_EXIT)"
+              fi
+            else
+              echo ">>> WARNING: emerge failed for $TARGET (exit $BUILD_EXIT). Check logs above."
+            fi
           else
             echo ">>> SUCCESS: $TARGET built"
           fi
-
           set -e
+
           emaint binhost --fix
           echo ">>> Build complete."
           [ "$BUILD_EXIT" -eq 0 ] || exit $BUILD_EXIT
