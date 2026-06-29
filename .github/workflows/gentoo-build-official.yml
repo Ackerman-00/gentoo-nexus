@@ -291,7 +291,7 @@ jobs:
 
           emerge --oneshot --usepkg --getbinpkg --buildpkg --backtrack=30 \
             --binpkg-respect-use=y --quiet-build=y --keep-going \
-            --autounmask=y --autounmask-write --autounmask-continue=y \
+            --autounmask=n \
             "$TARGET" > /tmp/emerge.log 2>&1
           BUILD_EXIT=$?
           cat /tmp/emerge.log
