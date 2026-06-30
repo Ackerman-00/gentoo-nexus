@@ -307,12 +307,13 @@ jobs:
           MANIFEST_FAILS=0
           for e in $(find /overlay -mindepth 2 -maxdepth 3 -name "*.ebuild" | sort); do
             PN=$(basename "$(dirname "$e")")
-            PV=$(grep -oP '^PV="?\K[^" ]+' "$e" 2>/dev/null | head -1 || echo "")
+            FILENAME_NO_EXT="$(basename "$e" .ebuild)"
+            PV="${FILENAME_NO_EXT#${PN}-}"
             PV="${PV#v}"
-            P=$(grep -oP '^P="?\K[^" ]+' "$e" 2>/dev/null || echo "${PN}-${PV}")
+            P="${PN}-${PV}"
             SRC_URI_LINE=$(grep -oP 'SRC_URI="\K[^"]+' "$e" 2>/dev/null || true)
             if [ -z "$SRC_URI_LINE" ]; then continue; fi
-            DISTFILE=$(echo "$SRC_URI_LINE" | grep -oP '-> \K\S+' 2>/dev/null | head -1 || echo "$SRC_URI_LINE" | grep -oP '\S+' | head -1)
+            DISTFILE=$(echo "$SRC_URI_LINE" | grep -oP -- '-> \K\S+' 2>/dev/null | head -1 || echo "$SRC_URI_LINE" | grep -oP '\S+' | head -1)
             DISTFILE=$(basename "$DISTFILE" 2>/dev/null || echo "$DISTFILE")
             DISTFILE=$(echo "$DISTFILE" | sed "s/\${PV}/$PV/g; s/\${P}/$P/g; s/\${PN}/$PN/g")
             if [ -n "$DISTFILE" ]; then
