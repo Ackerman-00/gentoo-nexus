@@ -448,6 +448,32 @@ jobs:
             echo ">>> All uploads completed successfully."
           fi
 
+          # === Update commit manifest for 9999 live packages ===
+          COMMITS_JSON=$(gh release download rolling -p 'commits.json' --repo "$REPO" --clobber -O /tmp/commits.json 2>/dev/null && cat /tmp/commits.json || echo '{}')
+          while IFS= read -r -d '' file; do
+            CAT=$(echo "$file" | awk -F'/' '{print $2}')
+            PN=$(echo "$file" | awk -F'/' '{print $3}')
+            ATOM="${CAT}/${PN}"
+            EBUILD="overlay/${CAT}/${PN}/${PN}-9999.ebuild"
+            if [ -f "$EBUILD" ]; then
+              EGIT_COMMIT=$(grep -oP '^EGIT_COMMIT="\K[a-fA-F0-9]+' "$EBUILD" 2>/dev/null || true)
+              if [ -n "$EGIT_COMMIT" ]; then
+                COMMITS_JSON=$(echo "$COMMITS_JSON" | python3 -c "
+import json, sys
+data = json.load(sys.stdin)
+data['${ATOM}'] = '${EGIT_COMMIT}'
+print(json.dumps(data, indent=2))
+")
+                echo "  [*] Recorded commit ${EGIT_COMMIT} for ${ATOM}"
+              fi
+            fi
+          done < <(find binpkgs -type f -name '*.gpkg.tar' -newer "$REF_FILE" -print0 2>/dev/null)
+          echo "$COMMITS_JSON" > /tmp/commits.json
+          for i in 1 2 3; do
+            gh release upload rolling /tmp/commits.json --repo "$REPO" --clobber 2>&1 && { echo ">>> commits.json updated"; break; }
+            sleep 3
+          done
+
   relay:
     if: ${{ always() && needs.build.outputs.remaining != '' }}
     needs: [build]

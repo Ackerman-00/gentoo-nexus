@@ -177,14 +177,27 @@ jobs:
                   branch = branch_m.group(1) if branch_m else "HEAD"
                   new_commit = get_latest_commit(f"https://github.com/{repo}.git", branch)
                   if new_commit:
-                      new_content = re.sub(r'(EGIT_COMMIT=["\']?)[a-fA-F0-9]{7,40}(["\']?)',
-                                           r"\g<1>" + new_commit + r"\2", content)
-                      if new_content != content:
+                      egit_regex = r'(EGIT_COMMIT=["\']?)[a-fA-F0-9]{7,40}(["\']?)'
+                      if re.search(egit_regex, content):
+                          new_content = re.sub(egit_regex, r"\g<1>" + new_commit + r"\2", content)
+                          if new_content != content:
+                              ebuild_path.write_text(new_content, encoding="utf-8")
+                              updated_atoms.add(pkg_cat_name)
+                              print(f"  [+] Bumped live commit on {branch} to: {new_commit}")
+                          else:
+                              print("  [-] Commit hash already up to date.")
+                      else:
+                          insert_m = re.search(r'^EGIT_BRANCH=.*$', content, re.MULTILINE)
+                          if not insert_m:
+                              insert_m = re.search(r'^EGIT_REPO_URI=.*$', content, re.MULTILINE)
+                          if insert_m:
+                              eol = content.index('\n', insert_m.end())
+                              new_content = content[:eol+1] + f'EGIT_COMMIT="{new_commit}"\n' + content[eol+1:]
+                          else:
+                              new_content = content.rstrip() + f'\n\nEGIT_COMMIT="{new_commit}"\n'
                           ebuild_path.write_text(new_content, encoding="utf-8")
                           updated_atoms.add(pkg_cat_name)
-                          print(f"  [+] Bumped live commit on {branch} to: {new_commit}")
-                      else:
-                          print("  [-] Commit hash already up to date.")
+                          print(f"  [+] Added EGIT_COMMIT={new_commit} for {pkg_cat_name}")
               else:
                   curr_m = re.search(rf'{re.escape(pkg_dir.parts[-1])}-(\S+?)\.ebuild$', ebuild_path.name)
                   if not curr_m:
@@ -346,6 +359,7 @@ jobs:
           REPO: ${{ github.repository }}
         run: |
           EXISTING_ASSETS=$(gh release view rolling --json assets --jq '.assets[].name' 2>/dev/null || echo "")
+          COMMITS_JSON=$(gh release download rolling -p 'commits.json' --repo "$REPO" --clobber -O /tmp/commits.json 2>/dev/null && cat /tmp/commits.json || echo '{}')
           CHANGED=$(cat changed_packages.txt 2>/dev/null || echo "")
           > packages_to_build.txt
           CHANGED_ATOMS=""
@@ -354,6 +368,24 @@ jobs:
              [ -z "$CPV" ] && continue
              PN_PV="${CPV#*/}"
              ATOM=$(python3 -c "import re,sys;cpv=sys.argv[1];m=re.match(r'^(.*?)-[0-9]',cpv);print(m.group(1)) if m else print(cpv)" "$CPV")
+             CATEGORY="${CPV%%/*}"
+             PN="${ATOM#*/}"
+
+             # Check 9999 live ebuilds: compare EGIT_COMMIT against stored commit
+             if echo "$CPV" | grep -q '\-9999$'; then
+               EBUILD_PATH="${CATEGORY}/${PN}/${PN}-9999.ebuild"
+               if [ -f "$EBUILD_PATH" ]; then
+                 EGIT_COMMIT=$(grep -oP '^EGIT_COMMIT="\K[a-fA-F0-9]+' "$EBUILD_PATH" 2>/dev/null || true)
+                 if [ -n "$EGIT_COMMIT" ]; then
+                   STORED_COMMIT=$(echo "$COMMITS_JSON" | python3 -c "import json,sys; d=json.load(sys.stdin); print(d.get('${ATOM}','') or '')" 2>/dev/null || true)
+                   if [ -n "$STORED_COMMIT" ] && [ "$STORED_COMMIT" != "$EGIT_COMMIT" ] && ! echo "$CHANGED" | grep -q "^${ATOM}$"; then
+                     echo "=$CPV" >> packages_to_build.txt
+                     echo "  [*] Stale commit for ${ATOM}: stored=${STORED_COMMIT} current=${EGIT_COMMIT}"
+                     continue
+                   fi
+                 fi
+               fi
+             fi
 
              if echo "$CHANGED" | grep -q "^${ATOM}$"; then
                 echo "=$CPV" >> packages_to_build.txt
