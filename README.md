@@ -193,10 +193,10 @@ The CI pipeline handles version bumps, binary rebuilds, and index updates automa
 <br>
 
 | | |
-|---|---|
-| ![Request](https://img.shields.io/badge/Request-8b5cf6?style=flat-square) | Open an [issue](https://github.com/Ackerman-00/gentoo-nexus/issues/new) with the atom and upstream URL |
-| ![Submit](https://img.shields.io/badge/Submit-8b5cf6?style=flat-square) | Follow the existing category structure with `metadata.xml` |
-| ![Report](https://img.shields.io/badge/Report-8b5cf6?style=flat-square) | Run the **Build Relay** workflow from the [Actions](https://github.com/Ackerman-00/gentoo-nexus/actions) tab |
+|---|---|---|
+| [![Request](https://img.shields.io/badge/Request-8b5cf6?style=flat-square)](https://github.com/Ackerman-00/gentoo-nexus/issues/new) | Open an issue with the atom and upstream URL |
+| [![Submit](https://img.shields.io/badge/Submit-8b5cf6?style=flat-square)](https://github.com/Ackerman-00/gentoo-nexus/pulls) | Follow the existing category structure with `metadata.xml` |
+| [![Report](https://img.shields.io/badge/Report-8b5cf6?style=flat-square)](https://github.com/Ackerman-00/gentoo-nexus/actions) | Run the **Build Relay** workflow from the Actions tab |
 
 </details>
 
