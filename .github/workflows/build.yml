@@ -458,12 +458,7 @@ jobs:
             if [ -f "$EBUILD" ]; then
               EGIT_COMMIT=$(grep -oP '^EGIT_COMMIT="\K[a-fA-F0-9]+' "$EBUILD" 2>/dev/null || true)
               if [ -n "$EGIT_COMMIT" ]; then
-                COMMITS_JSON=$(echo "$COMMITS_JSON" | python3 -c "
-import json, sys
-data = json.load(sys.stdin)
-data['${ATOM}'] = '${EGIT_COMMIT}'
-print(json.dumps(data, indent=2))
-")
+                COMMITS_JSON=$(echo "$COMMITS_JSON" | python3 -c "import json,sys; d=json.load(sys.stdin); d['${ATOM}']='${EGIT_COMMIT}'; print(json.dumps(d,indent=2))")
                 echo "  [*] Recorded commit ${EGIT_COMMIT} for ${ATOM}"
               fi
             fi
