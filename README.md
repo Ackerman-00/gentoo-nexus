@@ -20,9 +20,20 @@ Pre-compiled binaries &middot; Nightly CI &middot; Drop-in Portage overlay
 
 ## About
 
-gentoo-nexus is an automated Gentoo overlay and binary host. Packages are compiled nightly via GitHub Actions and distributed as ready-to-install gpkg binaries — no local compilation required.
+**gentoo-nexus** is an automated Gentoo overlay and binary host
+(binhost) for the Wayland desktop. Every package is compiled
+nightly via GitHub Actions and distributed as pre-built `.gpkg`
+binaries — install without compiling.
 
-> **AMD64 only.** This overlay is built and tested on AMD/AMD64 hardware with AMD GPUs. NVIDIA support is not planned.
+- **Pre-built for `amd64`** — niri, mangowm, scenefx, and the
+full desktop stack, ready to emerge
+- **Nightly CI** — packages auto-rebuild on every upstream
+release or commit
+- **Drop-in setup** — add the overlay, binhost, and GPG trust
+with a single command
+
+> **Architecture:** `amd64` (x86_64) · **CPUs:** Intel & AMD  
+> **GPUs:** AMD (primary target), Intel (compatible, unvalidated), NVIDIA (not in test matrix)
 
 ---
 
