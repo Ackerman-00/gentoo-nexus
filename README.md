@@ -26,21 +26,26 @@ gentoo-nexus is an automated Gentoo overlay and binary host. Packages are compil
 
 ---
 
-## Quick Install
+<details>
 
-The fastest way to set up a complete Gentoo desktop:
+<summary><strong>Quick Install</strong> &nbsp; <code>one-liner</code></summary>
+
+One command. Full desktop. From scratch to login in minutes.
 
 ```bash
 bash <(curl -Ls https://raw.githubusercontent.com/Ackerman-00/gentoo-nexus/main/setup/quickstart.sh)
 ```
 
-**What it does:**
-- Partitions disk, extracts stage3 (desktop-openrc), tunes CFLAGS
-- Sets up binrepos, kernel, firmware, dracut, GRUB
-- Configures your compositor (niri, mangowm, Hyprland, GNOME, KDE)
-- Sets up greetd, elogind, seatd, pipewire, zram, doas
+| | |
+|---|---|
+| **System** | Partitions disk · Stage3 extraction · Hardware-tuned CFLAGS |
+| **Binaries** | Binrepos config · Kernel · Firmware · Dracut · GRUB |
+| **Desktop** | Compositor (niri / mangowm / Hyprland / GNOME / KDE) |
+| **Services** | Greetd · Elogind · Seatd · Pipewire · Zram · Doas |
 
 Or follow the [manual installation](#manual-installation) below.
+
+</details>
 
 <details>
 
