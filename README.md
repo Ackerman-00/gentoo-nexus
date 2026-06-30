@@ -20,10 +20,9 @@ Pre-compiled binaries &middot; Nightly CI &middot; Drop-in Portage overlay
 
 ## About
 
-**gentoo-nexus** is an automated Gentoo overlay and binary host
-(binhost) for the Wayland desktop. Every package is compiled
-nightly via GitHub Actions and distributed as pre-built `.gpkg`
-binaries — install without compiling.
+**gentoo-nexus** is a Gentoo overlay and binary host for the
+Wayland desktop. Packages are pre-built nightly and delivered
+as `.gpkg` binaries — emerge without the compile.
 
 | | |
 |---|---|
