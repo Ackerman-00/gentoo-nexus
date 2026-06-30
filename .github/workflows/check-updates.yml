@@ -376,15 +376,20 @@ jobs:
           PRIORITY_ORDER=(
             "dev-python/icoextract"
             "games-util/faugus-launcher"
+            "games-util/protonplus"
             "net-im/vesktop"
             "gui-libs/scenefx"
             "x11-misc/matugen"
+            "x11-misc/xcur2png"
             "gui-wm/niri"
             "gui-wm/noctalia-v5"
             "gui-wm/mangowm"
+            "app-misc/nwg-look"
             "app-misc/brightnessctl"
             "app-misc/cliphist"
             "x11-base/xwayland-satellite"
+            "app-office/obsidian"
+            "www-client/zen-browser"
           )
           RAW_LIST="${{ steps.audit.outputs.build_list }}"
           ORDERED=()
