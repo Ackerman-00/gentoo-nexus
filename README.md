@@ -92,7 +92,8 @@ Packages tracking `master` rebuild automatically on every upstream commit.
 
 ---
 
-## Manual Installation
+<details>
+<summary><strong>Manual Installation</strong> (click to expand)</summary>
 
 ### Prerequisites
 
@@ -167,6 +168,8 @@ emerge -g1 sys-kernel/gentoo-kernel
 emerge --config sys-kernel/gentoo-kernel
 emerge -g gui-wm/niri
 ```
+
+</details>
 
 ---
 
