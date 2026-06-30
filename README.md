@@ -7,9 +7,9 @@
 *A bleeding-edge Gentoo overlay & binary host for the Wayland desktop.*
 
 [![Build](https://img.shields.io/github/actions/workflow/status/Ackerman-00/gentoo-nexus/build.yml?style=for-the-badge&label=FORGE&logo=githubactions&logoColor=white&color=8b5cf6)](https://github.com/Ackerman-00/gentoo-nexus/actions)
-&nbsp;
+&nbsp;&nbsp;
 [![Binhost](https://img.shields.io/badge/BINHOST-LIVE-8b5cf6?style=for-the-badge&logo=linux&logoColor=white)](https://github.com/Ackerman-00/gentoo-nexus/releases/tag/rolling)
-&nbsp;
+&nbsp;&nbsp;
 [![License](https://img.shields.io/badge/LICENSE-MIT-8b5cf6?style=for-the-badge)](LICENSE)
 
 Pre-compiled binaries &middot; Nightly CI &middot; Drop-in Portage overlay
@@ -20,46 +20,27 @@ Pre-compiled binaries &middot; Nightly CI &middot; Drop-in Portage overlay
 
 ## About
 
-gentoo-nexus is an automated Gentoo overlay and binary host. Packages are compiled
-nightly via GitHub Actions and distributed as ready-to-install gpkg binaries.
-No local compilation required for overlay packages.
+gentoo-nexus is an automated Gentoo overlay and binary host. Packages are compiled nightly via GitHub Actions and distributed as ready-to-install gpkg binaries — no local compilation required.
 
-```
-overlay  ->  ebuilds synced from git
-binhost  ->  pre-built gpkg via GitHub Releases (rolling)
-CI       ->  auto-rebuilds on version bumps and commits
-```
-
-> **AMD64 only.** This overlay is built and tested on AMD/AMD64 hardware with
-> AMD GPUs. NVIDIA hardware is not supported and will not be added. If you
-> need NVIDIA support, please open a PR -- I will not implement it myself.
->
+> **AMD64 only.** This overlay is built and tested on AMD/AMD64 hardware with AMD GPUs. NVIDIA support is not planned.
 
 ---
 
 ## Quick Install
 
-The fastest way to set up a complete Gentoo desktop with nexus is the quickstart
-script. It handles partitioning, stage3 extraction, chroot, and full installation.
+The fastest way to set up a complete Gentoo desktop:
 
 ```bash
-# From a Gentoo LiveCD or any Linux live environment:
 bash <(curl -Ls https://raw.githubusercontent.com/Ackerman-00/gentoo-nexus/main/setup/quickstart.sh)
 ```
 
 **What it does:**
-- Partitions your disk (cfdisk) and auto-detects partitions by GPT type UUID
-- Downloads and extracts the latest stage3 (desktop-openrc)
-- Configures make.conf with hardware-tuned CFLAGS (znver3, znver4, etc.)
-- Sets up binrepos (nexus priority 100, Gentoo priority 1)
-- Installs kernel, firmware, dracut, GRUB
-- Configures your compositor of choice (niri, mangowm, Hyprland, GNOME, KDE)
-- Sets up greetd, elogind, seatd, pipewire, zram
-- Creates a user with doas, enables services
+- Partitions disk, extracts stage3 (desktop-openrc), tunes CFLAGS
+- Sets up binrepos, kernel, firmware, dracut, GRUB
+- Configures your compositor (niri, mangowm, Hyprland, GNOME, KDE)
+- Sets up greetd, elogind, seatd, pipewire, zram, doas
 
-Or follow the manual installation below.
-
----
+Or follow the [manual installation](#manual-installation) below.
 
 <details>
 
@@ -184,19 +165,15 @@ emerge -g gui-wm/niri
 emerge -g -uDN @world
 ```
 
-The CI pipeline handles version bumps, binary rebuilds, and index updates
-automatically. No manual intervention needed for overlay packages.
+The CI pipeline handles version bumps, binary rebuilds, and index updates automatically.
 
 ---
 
 ## Contributing
 
-Issues and PRs are welcome.
-
-- **Request a package** -- open an issue with the package atom and upstream URL
-- **NVIDIA support** -- not planned. open an issue if you need it, or submit a PR
-- **Submit an ebuild** -- follow the existing category structure, include metadata.xml
-- **Report a build failure** -- run the Build Relay workflow from the Actions tab
+- **Request a package** — open an issue with the atom and upstream URL
+- **Submit an ebuild** — follow the existing category structure with metadata.xml
+- **Report a build failure** — run the Build Relay workflow from the Actions tab
 
 ### Adding a new package
 
