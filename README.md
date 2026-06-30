@@ -61,34 +61,38 @@ Or follow the manual installation below.
 
 ---
 
-## Packages
+<details>
 
-| Atom | Description | Track |
-|------|-------------|-------|
-| `gui-wm/niri` | Scrollable-tiling Wayland compositor | master |
-| `gui-wm/mangowm` | Custom Wayland compositor | master |
-| `gui-wm/noctalia-shell` | Desktop shell for niri | master |
-| `gui-wm/dank-material-shell` | Material Design shell | stable |
-| `gui-apps/noctalia-qs` | Quickshell-based launcher | master |
-| `gui-apps/quickshell` | Scriptable widget engine | master |
-| `gui-apps/dgop` | Application launcher | stable |
-| `sys-apps/danksearch` | System-wide fuzzy search | stable |
-| `x11-misc/matugen` | Material You color token generator | stable |
-| `x11-misc/xwayland-satellite` | Rootless XWayland | master |
-| `net-im/vesktop-bin` | Discord client with Vencord | stable |
-| `games-util/steam-launcher` | Steam (from steam-overlay) | stable |
-| `games-util/heroic-bin` | Heroic Games Launcher | stable |
-| `games-util/protonplus-bin` | Proton manager | stable |
-| `app-misc/rootapp-bin` | Rootful app launcher | stable |
-| `app-misc/cliphist` | Clipboard manager | stable |
-| `www-client/zen-browser` | Privacy-focused Firefox fork | stable |
-| `app-office/obsidian` | Knowledge base | stable |
-| `gui-apps/tuigreet` | TUI greeter for greetd | stable |
-| `gui-libs/greetd` | Minimal login manager | stable |
-| `app-misc/brightnessctl` | Backlight control | stable |
-| `app-misc/nwg-look` | GTK settings for wlroots | stable |
+<summary><strong>Packages</strong> <code>22 available</code></summary>
+
+| Category | Atom | Description | Track |
+|----------|------|-------------|-------|
+| `gui-wm` | `niri` | Scrollable-tiling Wayland compositor | master |
+| `gui-wm` | `mangowm` | Custom Wayland compositor | master |
+| `gui-wm` | `noctalia-shell` | Desktop shell for niri | master |
+| `gui-wm` | `dank-material-shell` | Material Design shell | stable |
+| `gui-apps` | `noctalia-qs` | Quickshell-based launcher | master |
+| `gui-apps` | `quickshell` | Scriptable widget engine | master |
+| `gui-apps` | `dgop` | Application launcher | stable |
+| `gui-apps` | `tuigreet` | TUI greeter for greetd | stable |
+| `gui-libs` | `greetd` | Minimal login manager | stable |
+| `x11-misc` | `matugen` | Material You color token generator | stable |
+| `x11-misc` | `xwayland-satellite` | Rootless XWayland | master |
+| `net-im` | `vesktop-bin` | Discord client with Vencord | stable |
+| `games-util` | `steam-launcher` | Steam (from steam-overlay) | stable |
+| `games-util` | `heroic-bin` | Heroic Games Launcher | stable |
+| `games-util` | `protonplus-bin` | Proton manager | stable |
+| `app-misc` | `rootapp-bin` | Rootful app launcher | stable |
+| `app-misc` | `cliphist` | Clipboard manager | stable |
+| `app-misc` | `brightnessctl` | Backlight control | stable |
+| `app-misc` | `nwg-look` | GTK settings for wlroots | stable |
+| `sys-apps` | `danksearch` | System-wide fuzzy search | stable |
+| `www-client` | `zen-browser` | Privacy-focused Firefox fork | stable |
+| `app-office` | `obsidian` | Knowledge base | stable |
 
 Packages tracking `master` rebuild automatically on every upstream commit.
+
+</details>
 
 ---
 
