@@ -277,6 +277,7 @@ jobs:
           media-libs/libdisplay-info abi_x86_32
           llvm-core/clang abi_x86_32
           app-arch/bzip2 abi_x86_32
+          app-arch/xz-utils abi_x86_32
           media-libs/freetype brotli
           GAMING
 
