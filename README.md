@@ -30,7 +30,7 @@ gentoo-nexus is an automated Gentoo overlay and binary host. Packages are compil
 
 <summary><strong>Quick Install</strong> &nbsp; <code>one-liner</code></summary>
 
-One command. Full desktop. From scratch to login in minutes.
+AMD64 only. One command. Full desktop. From scratch to login in minutes.
 
 ```bash
 bash <(curl -Ls https://raw.githubusercontent.com/Ackerman-00/gentoo-nexus/main/setup/quickstart.sh)
