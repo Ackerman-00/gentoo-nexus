@@ -25,15 +25,12 @@ Pre-compiled binaries &middot; Nightly CI &middot; Drop-in Portage overlay
 nightly via GitHub Actions and distributed as pre-built `.gpkg`
 binaries — install without compiling.
 
-- **Pre-built for `amd64`** — niri, mangowm, scenefx, and the
-full desktop stack, ready to emerge
-- **Official packages, rebuilt** — mesa, kernel, llvm, gcc,
-blender, godot, zed, and more, with optimized USE flags and
-32-bit multilib for gaming
-- **Nightly CI** — packages auto-rebuild on every upstream
-release or commit
-- **Drop-in setup** — add the overlay, binhost, and GPG trust
-with a single command
+| | |
+|---|---|
+| **Overlay** | niri, mangowm, scenefx, and the full Wayland desktop stack |
+| **Official rebuilds** | mesa, kernel, llvm, gcc, blender, godot, zed, and more — with 32-bit multilib for gaming |
+| **CI** | nightly auto-rebuilds on every upstream release or commit |
+| **Setup** | one command — overlay, binhost, and GPG trust together |
 
 > **Architecture:** `amd64` (x86_64) · **CPUs:** Intel & AMD  
 > **GPUs:** AMD (primary target), Intel (compatible, unvalidated), NVIDIA (not in test matrix)
