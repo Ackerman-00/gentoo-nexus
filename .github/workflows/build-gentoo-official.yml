@@ -325,7 +325,7 @@ jobs:
             fi
           fi
 
-          EXCLUDE_ATOM="${TARGET#=}"
+          EXCLUDE_ATOM=$(echo "${TARGET#=}" | sed 's/-[0-9].*//')
           emerge --oneshot --usepkg --getbinpkg --buildpkg --backtrack=30 \
             --binpkg-respect-use=y --quiet-build=y --keep-going \
             --autounmask=n \
