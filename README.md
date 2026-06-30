@@ -186,16 +186,34 @@ The CI pipeline handles version bumps, binary rebuilds, and index updates automa
 
 ## Contributing
 
-- **Request a package** — open an issue with the atom and upstream URL
-- **Submit an ebuild** — follow the existing category structure with metadata.xml
-- **Report a build failure** — run the Build Relay workflow from the Actions tab
+<details>
 
-### Adding a new package
+<summary><strong>Ways to Contribute</strong> &nbsp; <code>request · submit · report</code></summary>
 
-1. Create the ebuild under the appropriate category (e.g., `gui-wm/my-pkg/`)
-2. Generate the Manifest: `ebuild my-pkg-1.0.0.ebuild manifest`
-3. Add a metadata.xml with maintainer and upstream information
-4. Submit a PR
+<br>
+
+| | |
+|---|---|
+| ![Request](https://img.shields.io/badge/Request-8b5cf6?style=flat-square) | Open an [issue](https://github.com/Ackerman-00/gentoo-nexus/issues/new) with the atom and upstream URL |
+| ![Submit](https://img.shields.io/badge/Submit-8b5cf6?style=flat-square) | Follow the existing category structure with `metadata.xml` |
+| ![Report](https://img.shields.io/badge/Report-8b5cf6?style=flat-square) | Run the **Build Relay** workflow from the [Actions](https://github.com/Ackerman-00/gentoo-nexus/actions) tab |
+
+</details>
+
+<details>
+
+<summary><strong>Adding a New Package</strong> &nbsp; <code>4 steps</code></summary>
+
+<br>
+
+| Step | Action |
+|------|--------|
+| **1** | Create the ebuild under the appropriate category (e.g., `gui-wm/my-pkg/`) |
+| **2** | Generate the Manifest: `ebuild my-pkg-1.0.0.ebuild manifest` |
+| **3** | Add a `metadata.xml` with maintainer and upstream information |
+| **4** | Submit a [pull request](https://github.com/Ackerman-00/gentoo-nexus/pulls) |
+
+</details>
 
 ---
 
