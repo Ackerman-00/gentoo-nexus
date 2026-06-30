@@ -13,6 +13,7 @@ IUSE="X"
 
 DEPEND="
     >=gui-libs/wlroots-0.19:=[libinput,session,X?]
+    <gui-libs/wlroots-0.20:=[X?]
     >=gui-libs/scenefx-0.4.1
     dev-libs/cJSON
     dev-libs/libinput:=

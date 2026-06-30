@@ -36,6 +36,7 @@ DEPEND="
 RDEPEND="${DEPEND}"
 
 BDEPEND="
+    dev-build/just
     dev-libs/wayland-protocols
     dev-util/wayland-scanner
     virtual/pkgconfig
