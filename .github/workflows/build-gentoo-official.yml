@@ -325,11 +325,9 @@ jobs:
             fi
           fi
 
-          EXCLUDE_ATOM=$(echo "${TARGET#=}" | sed 's/-[0-9].*//')
           emerge --oneshot --usepkg --getbinpkg --buildpkg --backtrack=30 \
             --binpkg-respect-use=y --quiet-build=y --keep-going \
             --autounmask=n \
-            --usepkg-exclude "$EXCLUDE_ATOM" \
             "$TARGET" 2>&1 | tee /tmp/emerge.log
           BUILD_EXIT=${PIPESTATUS[0]}
           set -e
@@ -346,16 +344,23 @@ jobs:
               emerge --oneshot --usepkg --getbinpkg --buildpkg --backtrack=30 \
                 --binpkg-respect-use=y --quiet-build=y --keep-going \
                 --autounmask=n \
-                --usepkg-exclude "$EXCLUDE_ATOM" \
                 "$TARGET" 2>&1 | tee /tmp/emerge2.log
               BUILD_EXIT=${PIPESTATUS[0]}
               if [ "$BUILD_EXIT" -ne 0 ]; then
                 echo ">>> WARNING: Circular dependency workaround also failed (exit $BUILD_EXIT)"
+              else
+                echo ">>> Creating binary package for upload..."
+                PN=$(echo "${TARGET#=}" | sed 's/-[0-9].*//')
+                quickpkg "$PN" 2>/dev/null || true
+                echo ">>> SUCCESS: ${TARGET} built (after circular dependency workaround)"
               fi
             else
               echo ">>> WARNING: emerge failed for ${TARGET} (exit $BUILD_EXIT). Check logs above."
             fi
           else
+            echo ">>> Creating binary package for upload..."
+            PN=$(echo "${TARGET#=}" | sed 's/-[0-9].*//')
+            quickpkg "$PN" 2>/dev/null || true
             echo ">>> SUCCESS: ${TARGET} built"
           fi
 
