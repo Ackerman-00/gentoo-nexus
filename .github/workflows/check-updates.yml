@@ -106,7 +106,7 @@ jobs:
                           for tag_obj in r2.json():
                               name = tag_obj.get("name", "").lstrip("v")
                               if re.match(r'^[0-9]', name):
-                                  if ver_gt(name, best_ver):
+                                  if not best_ver or ver_gt(name, best_ver):
                                       best_ver = name
               except Exception as e:
                   print(f"  [!] API Error for {repo}: {e}")
