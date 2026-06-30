@@ -276,6 +276,8 @@ jobs:
           media-libs/libva abi_x86_32
           media-libs/libdisplay-info abi_x86_32
           llvm-core/clang abi_x86_32
+          app-arch/bzip2 abi_x86_32
+          media-libs/freetype brotli
           GAMING
 
           mkdir -p /etc/portage/binrepos.conf
@@ -323,9 +325,11 @@ jobs:
             fi
           fi
 
+          EXCLUDE_ATOM="${TARGET#=}"
           emerge --oneshot --usepkg --getbinpkg --buildpkg --backtrack=30 \
             --binpkg-respect-use=y --quiet-build=y --keep-going \
             --autounmask=n \
+            --usepkg-exclude "$EXCLUDE_ATOM" \
             "$TARGET" 2>&1 | tee /tmp/emerge.log
           BUILD_EXIT=${PIPESTATUS[0]}
           set -e
@@ -342,6 +346,7 @@ jobs:
               emerge --oneshot --usepkg --getbinpkg --buildpkg --backtrack=30 \
                 --binpkg-respect-use=y --quiet-build=y --keep-going \
                 --autounmask=n \
+                --usepkg-exclude "$EXCLUDE_ATOM" \
                 "$TARGET" 2>&1 | tee /tmp/emerge2.log
               BUILD_EXIT=${PIPESTATUS[0]}
               if [ "$BUILD_EXIT" -ne 0 ]; then
