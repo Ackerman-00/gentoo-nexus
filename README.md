@@ -93,6 +93,7 @@ Packages tracking `master` rebuild automatically on every upstream commit.
 ---
 
 <details>
+
 <summary><strong>Manual Installation</strong> (click to expand)</summary>
 
 ### Prerequisites
