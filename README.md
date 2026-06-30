@@ -28,7 +28,8 @@ binaries — install without compiling.
 - **Pre-built for `amd64`** — niri, mangowm, scenefx, and the
 full desktop stack, ready to emerge
 - **Official packages, rebuilt** — mesa, kernel, llvm, gcc,
-blender, godot, and more, compiled with optimized USE flags
+blender, godot, and more, with optimized USE flags and
+32-bit multilib for gaming
 - **Nightly CI** — packages auto-rebuild on every upstream
 release or commit
 - **Drop-in setup** — add the overlay, binhost, and GPG trust
