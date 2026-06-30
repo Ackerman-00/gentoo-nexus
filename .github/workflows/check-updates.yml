@@ -306,7 +306,8 @@ jobs:
           echo ">>> Validating Manifests..."
           MANIFEST_FAILS=0
           for e in $(find /overlay -mindepth 2 -maxdepth 3 -name "*.ebuild" | sort); do
-            DISTFILE=$(grep -oP 'SRC_URI="?\K[^"]+' "$e" 2>/dev/null | head -1 || true)
+            DISTFILE=$(grep -oP 'SRC_URI="\K[^" ]+' "$e" 2>/dev/null | head -1 || true)
+            DISTFILE=$(basename "$DISTFILE" 2>/dev/null || echo "$DISTFILE")
             if [ -n "$DISTFILE" ]; then
               if ! grep -q "DIST ${DISTFILE}" "${e%/*}/Manifest" 2>/dev/null; then
                 echo "  [!] Missing DIST entry — regenerating for $(basename "$e")"
@@ -378,7 +379,7 @@ jobs:
                  EGIT_COMMIT=$(grep -oP '^EGIT_COMMIT="\K[a-fA-F0-9]+' "$EBUILD_PATH" 2>/dev/null || true)
                  if [ -n "$EGIT_COMMIT" ]; then
                    STORED_COMMIT=$(echo "$COMMITS_JSON" | python3 -c "import json,sys; d=json.load(sys.stdin); print(d.get('${ATOM}','') or '')" 2>/dev/null || true)
-                   if [ -n "$STORED_COMMIT" ] && [ "$STORED_COMMIT" != "$EGIT_COMMIT" ] && ! echo "$CHANGED" | grep -q "^${ATOM}$"; then
+                    if ( [ -z "$STORED_COMMIT" ] || [ "$STORED_COMMIT" != "$EGIT_COMMIT" ] ) && ! echo "$CHANGED" | grep -q "^${ATOM}$"; then
                      echo "=$CPV" >> packages_to_build.txt
                      echo "  [*] Stale commit for ${ATOM}: stored=${STORED_COMMIT} current=${EGIT_COMMIT}"
                      continue
