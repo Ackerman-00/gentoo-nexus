@@ -44,34 +44,32 @@ Or follow the [manual installation](#manual-installation) below.
 
 <details>
 
-<summary><strong>Packages</strong> <code>22 available</code></summary>
+<summary><strong>Packages</strong> <code>19 available</code></summary>
 
 | Category | Atom | Description | Track |
 |----------|------|-------------|-------|
 | `gui-wm` | `niri` | Scrollable-tiling Wayland compositor | master |
 | `gui-wm` | `mangowm` | Custom Wayland compositor | master |
-| `gui-wm` | `noctalia-shell` | Desktop shell for niri | master |
-| `gui-wm` | `dank-material-shell` | Material Design shell | stable |
-| `gui-apps` | `noctalia-qs` | Quickshell-based launcher | master |
-| `gui-apps` | `quickshell` | Scriptable widget engine | master |
-| `gui-apps` | `dgop` | Application launcher | stable |
-| `gui-apps` | `tuigreet` | TUI greeter for greetd | stable |
-| `gui-libs` | `greetd` | Minimal login manager | stable |
+| `gui-wm` | `noctalia-v5` | Desktop shell for niri | master |
+| `gui-libs` | `scenefx` | Scene-graph graphics layer for wlroots | stable |
+| `x11-base` | `xwayland-satellite` | Rootless XWayland | master |
 | `x11-misc` | `matugen` | Material You color token generator | stable |
-| `x11-misc` | `xwayland-satellite` | Rootless XWayland | master |
-| `net-im` | `vesktop-bin` | Discord client with Vencord | stable |
-| `games-util` | `steam-launcher` | Steam (from steam-overlay) | stable |
-| `games-util` | `heroic-bin` | Heroic Games Launcher | stable |
-| `games-util` | `protonplus-bin` | Proton manager | stable |
+| `x11-misc` | `xcur2png` | X cursor to PNG converter | stable |
+| `net-im` | `vesktop` | Discord client with Vencord | stable |
+| `games-util` | `faugus-launcher` | Game launcher utility | stable |
+| `games-util` | `protonplus` | Proton manager | stable |
 | `app-misc` | `rootapp-bin` | Rootful app launcher | stable |
 | `app-misc` | `cliphist` | Clipboard manager | stable |
 | `app-misc` | `brightnessctl` | Backlight control | stable |
 | `app-misc` | `nwg-look` | GTK settings for wlroots | stable |
-| `sys-apps` | `danksearch` | System-wide fuzzy search | stable |
-| `www-client` | `zen-browser` | Privacy-focused Firefox fork | stable |
 | `app-office` | `obsidian` | Knowledge base | stable |
+| `dev-python` | `icoextract` | Icon extractor for PE files | stable |
+| `www-client` | `zen-browser` | Privacy-focused Firefox fork | stable |
+| `www-client` | `brave-origin-bin` | Brave browser (upstream binary) | stable |
 
-Packages tracking `master` rebuild automatically on every upstream commit.
+Packages tracking `master` rebuild on every upstream commit.
+
+</details>
 
 </details>
 
