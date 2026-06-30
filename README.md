@@ -43,6 +43,8 @@ with a single command
 
 AMD64 only. One command. Full desktop. From scratch to login in minutes.
 
+> **Caution:** This script is built around specific hardware profiles and has not been broadly tested. It may not work on your device.
+
 ```bash
 bash <(curl -Ls https://raw.githubusercontent.com/Ackerman-00/gentoo-nexus/main/setup/quickstart.sh)
 ```
