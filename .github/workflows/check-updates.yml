@@ -373,24 +373,62 @@ jobs:
         env:
           GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
         run: |
-          PRIORITY_ORDER=(
-            "dev-python/icoextract"
-            "games-util/faugus-launcher"
-            "games-util/protonplus"
-            "net-im/vesktop"
-            "gui-libs/scenefx"
-            "x11-misc/matugen"
-            "x11-misc/xcur2png"
-            "gui-wm/niri"
-            "gui-wm/noctalia-v5"
-            "gui-wm/mangowm"
-            "app-misc/nwg-look"
-            "app-misc/brightnessctl"
-            "app-misc/cliphist"
-            "x11-base/xwayland-satellite"
-            "app-office/obsidian"
-            "www-client/zen-browser"
-          )
+          python3 << 'PYEOF'
+          import os, re, json, sys
+          from pathlib import Path
+          from collections import defaultdict
+
+          overlay = Path(os.environ.get('GITHUB_WORKSPACE', '.'))
+          pkgs = {}
+          deps = defaultdict(set)
+
+          for ebuild_path in sorted(overlay.rglob('*.ebuild')):
+              if any(x in ebuild_path.parts for x in ['.git', '.github', 'metadata', 'profiles', 'binpkgs', 'distfiles', 'ccache']):
+                  continue
+              pkg = f"{ebuild_path.parts[-3]}/{ebuild_path.parts[-2]}"
+              pkgs[pkg] = ebuild_path
+
+          for pkg, ebuild_path in pkgs.items():
+              content = ebuild_path.read_text(encoding='utf-8', errors='ignore')
+              for other_pkg in pkgs:
+                  if other_pkg == pkg:
+                      continue
+                  other_pn = other_pkg.split('/')[1]
+                  if re.search(rf'\b{re.escape(other_pn)}\b', content):
+                      deps[pkg].add(other_pkg)
+
+          edges = defaultdict(list)
+          for pkg, pkg_deps in deps.items():
+              for dep in pkg_deps:
+                  edges[dep].append(pkg)
+
+          in_degree = defaultdict(int)
+          for pkg in pkgs:
+              in_degree[pkg] = len(deps[pkg])
+
+          queue = sorted(pkg for pkg in pkgs if in_degree[pkg] == 0)
+          sorted_pkgs = []
+          while queue:
+              node = queue.pop(0)
+              sorted_pkgs.append(node)
+              for dependent in edges[node]:
+                  in_degree[dependent] -= 1
+                  if in_degree[dependent] == 0:
+                      queue.append(dependent)
+                      queue.sort()
+
+          if len(sorted_pkgs) != len(pkgs):
+              remaining = set(pkgs) - set(sorted_pkgs)
+              print(f"Warning: cycle detected: {remaining}", file=sys.stderr)
+              sorted_pkgs.extend(remaining)
+
+          with open('priority_order.json', 'w') as f:
+              json.dump(sorted_pkgs, f)
+
+          print(">>> Auto-detected package order (deps first):", " ".join(sorted_pkgs))
+          PYEOF
+
+          PRIORITY_ORDER=($(python3 -c "import json; print(' '.join(json.load(open('priority_order.json'))))"))
           RAW_LIST="${{ steps.audit.outputs.build_list }}"
           ORDERED=()
           for priority_pkg in "${PRIORITY_ORDER[@]}"; do
