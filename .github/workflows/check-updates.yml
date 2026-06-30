@@ -443,7 +443,7 @@ jobs:
           done
           FINAL_LIST="${ORDERED[*]}"
           echo ">>> Queueing for compilation: $FINAL_LIST"
-          gh workflow run "Gentoo Build Relay" \
+          gh workflow run "Build Relay" \
             --ref "${GITHUB_REF_NAME}" \
             -f package_list="$FINAL_LIST" \
             -f force_rebuild="${{ steps.audit.outputs.force_required }}"
