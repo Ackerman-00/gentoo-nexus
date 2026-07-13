@@ -5,7 +5,7 @@ EAPI=8
 
 inherit desktop xdg-utils
 
-DESCRIPTION="Discord alternative for gaming communities and large online groups"
+DESCRIPTION="Rootful app launcher for AppImage binaries"
 HOMEPAGE="https://www.rootapp.com"
 SRC_URI="https://installer.rootapp.com/installer/Linux/X64/Root.AppImage -> ${P}-amd64.AppImage"
 

@@ -5,3 +5,12 @@ gen_manifests.sh
 resolve_state.sh
 desired_state.txt
 sync_overlay.sh
+binpkgs/
+distfiles/
+ccache/
+*.AppImage
+build.sh
+build_start_marker
+priority_order.json
+latest_cpvs.txt
+build.sh

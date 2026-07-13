@@ -20,13 +20,13 @@ jobs:
     timeout-minutes: 30
     steps:
       - name: Checkout Repository
-        uses: actions/checkout@v5
+        uses: actions/checkout@v6
         with:
           token: ${{ secrets.GITHUB_TOKEN }}
           fetch-depth: 0
 
       - name: Set up Python
-        uses: actions/setup-python@v5
+        uses: actions/setup-python@v6
         with:
           python-version: '3.13'
 
@@ -257,7 +257,7 @@ jobs:
           REPOEOF
 
           mkdir -p /overlay/metadata /overlay/profiles
-          echo "masters = gentoo" > /overlay/metadata/layout.conf
+          printf 'masters = gentoo\nthin-manifests = true\nsign-manifests = false\nmanifest-required-hashes = BLAKE2B SHA512\ncache-formats = md5-dict\nprofile-formats = portage-2\n' > /overlay/metadata/layout.conf
           find /overlay -mindepth 1 -maxdepth 1 -type d | grep -v -E '\.git|\.github|metadata|profiles|binpkgs|distfiles|ccache|setup' | sed 's|/overlay/||' > /overlay/profiles/categories
 
           # === Generate Manifests ===

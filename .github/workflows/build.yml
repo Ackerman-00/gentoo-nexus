@@ -26,7 +26,7 @@ jobs:
       force_rebuild: ${{ github.event.inputs.force_rebuild }}
     steps:
       - name: Checkout Repository
-        uses: actions/checkout@v5
+        uses: actions/checkout@v6
         with:
           token: ${{ secrets.GITHUB_TOKEN }}
           fetch-depth: 0
@@ -57,7 +57,7 @@ jobs:
           mkdir -p binpkgs overlay/metadata overlay/profiles distfiles ccache
           chmod -R 777 binpkgs overlay distfiles ccache
           rsync -a --exclude='.git' --exclude='binpkgs' --exclude='overlay' ./ overlay/
-          printf 'masters = gentoo\nthin-manifests = true\nsign-manifests = false\n' > overlay/metadata/layout.conf
+          printf 'masters = gentoo\nthin-manifests = true\nsign-manifests = false\nmanifest-required-hashes = BLAKE2B SHA512\ncache-formats = md5-dict\nprofile-formats = portage-2\n' > overlay/metadata/layout.conf
           echo "gentoo-nexus" > overlay/profiles/repo_name
 
       - name: Download Release Binaries
@@ -214,7 +214,7 @@ jobs:
           VIDEO_CARDS="amdgpu radeonsi"
           USE="elogind -systemd dbus wayland egl vaapi vdpau vulkan amdgpu ffmpeg encode opencl"
           
-          FEATURES="getbinpkg buildpkg parallel-install ccache binpkg-ignore-signature -sandbox -usersandbox -ipc-sandbox -network-sandbox -pid-sandbox"
+          FEATURES="getbinpkg buildpkg ccache binpkg-ignore-signature -sandbox -usersandbox -ipc-sandbox -network-sandbox -pid-sandbox"
           CCACHE_DIR="/var/cache/ccache"
           BINPKG_FORMAT="gpkg"
           PKGDIR="/var/cache/binpkgs"

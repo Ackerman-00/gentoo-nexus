@@ -67,6 +67,10 @@ src_unpack() {
 
 src_prepare() {
     default
+
+    pushd opt/Vesktop/locales >/dev/null 2>&1 || pushd "${S}/opt/Vesktop/locales" >/dev/null 2>&1 || return 0
+    chromium_remove_language_paks
+    popd >/dev/null || true
     
     sed -i 's/Exec=vesktop/Exec=vesktop-bin/g' usr/share/applications/vesktop.desktop || die
 }

@@ -10,7 +10,7 @@ LICENSE="MPL-2.0"
 SLOT="0"
 KEYWORDS=""
 
-IUSE=""
+IUSE="systemd"
 
 PROPERTIES="live"
 RESTRICT="network-sandbox"
@@ -41,7 +41,8 @@ src_unpack() {
 }
 
 src_configure() {
-    local myfeatures=( systemd )
+    local myfeatures=()
+    use systemd && myfeatures+=( systemd )
     cargo_src_configure
 }
 

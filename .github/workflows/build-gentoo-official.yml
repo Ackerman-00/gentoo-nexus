@@ -32,7 +32,7 @@ jobs:
       remaining: ${{ steps.queue.outputs.REMAINING_PKGS }}
       force_rebuild: ${{ steps.queue.outputs.FORCE_REBUILD }}
     steps:
-      - uses: actions/checkout@v5
+      - uses: actions/checkout@v6
 
       - name: Allocate ZRAM Swap
         run: |
@@ -203,7 +203,7 @@ jobs:
           VIDEO_CARDS="amdgpu radeonsi"
           USE="elogind -systemd dbus wayland egl vaapi vdpau vulkan amdgpu ffmpeg encode"
 
-          FEATURES="getbinpkg buildpkg parallel-install ccache binpkg-ignore-signature -sandbox -usersandbox -ipc-sandbox -network-sandbox -pid-sandbox"
+          FEATURES="getbinpkg buildpkg ccache binpkg-ignore-signature -sandbox -usersandbox -ipc-sandbox -network-sandbox -pid-sandbox"
           CCACHE_DIR="/var/cache/ccache"
           BINPKG_FORMAT="gpkg"
           PKGDIR="/var/cache/binpkgs"

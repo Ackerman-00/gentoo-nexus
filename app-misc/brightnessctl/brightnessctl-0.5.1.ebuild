@@ -11,8 +11,7 @@ SRC_URI="https://github.com/Hummer12007/brightnessctl/archive/${PV}.tar.gz -> ${
 LICENSE="MIT"
 SLOT="0"
 KEYWORDS="~amd64"
-IUSE="+udev"
-REQUIRED_USE="udev"
+IUSE="udev"
 
 DEPEND="udev? ( virtual/udev )"
 RDEPEND="${DEPEND}"

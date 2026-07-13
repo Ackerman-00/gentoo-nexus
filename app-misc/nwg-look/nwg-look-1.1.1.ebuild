@@ -3,7 +3,7 @@
 
 EAPI=8
 
-inherit desktop xdg
+inherit desktop
 
 DESCRIPTION="GTK settings editor adapted to work on wlroots-based compositors"
 HOMEPAGE="https://github.com/nwg-piotr/nwg-look"

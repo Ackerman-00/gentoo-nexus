@@ -112,10 +112,8 @@ CXXFLAGS="${COMMON_FLAGS}"
 USE="elogind -systemd dbus wayland egl vaapi vdpau vulkan amdgpu ffmpeg encode"
 VIDEO_CARDS="amdgpu radeonsi"
 
-FEATURES="getbinpkg binpkg-ignore-signature parallel-install"
-PORTAGE_BINPKG_SIGVERIFY="0"
-EMERGE_DEFAULT_OPTS="--getbinpkg --quiet-build=y --keep-going"
-BINPKG_FORMAT="gpkg"
+FEATURES="binpkg binpkg-ignore-signature"
+EMERGE_DEFAULT_OPTS="--binpkg --quiet-build=y --keep-going"
 ACCEPT_LICENSE="*"
 ACCEPT_KEYWORDS="~amd64"
 ```
@@ -165,9 +163,9 @@ echo "*/*::gentoo-nexus **" > /etc/portage/package.accept_keywords/nexus
 ### 6. Install the kernel and compositor
 
 ```bash
-emerge -g1 sys-kernel/gentoo-kernel
+emerge --binpkg --oneshot sys-kernel/gentoo-kernel
 emerge --config sys-kernel/gentoo-kernel
-emerge -g gui-wm/niri
+emerge --binpkg gui-wm/niri
 ```
 
 </details>
@@ -177,7 +175,7 @@ emerge -g gui-wm/niri
 ## Staying Updated
 
 ```bash
-emerge -g -uDN @world
+emerge --binpkg -uDN @world
 ```
 
 The CI pipeline handles version bumps, binary rebuilds, and index updates automatically.
@@ -225,10 +223,8 @@ The CI pipeline handles version bumps, binary rebuilds, and index updates automa
 Verify `make.conf` contains the required directives:
 
 ```bash
-BINPKG_FORMAT="gpkg"
-FEATURES="getbinpkg binpkg-ignore-signature"
-PORTAGE_BINPKG_SIGVERIFY="0"
-EMERGE_DEFAULT_OPTS="--getbinpkg --quiet-build=y --keep-going"
+FEATURES="binpkg binpkg-ignore-signature"
+EMERGE_DEFAULT_OPTS="--binpkg --quiet-build=y --keep-going"
 ```
 
 Run `emerge --info | grep FEATURES` to confirm flags are active.
@@ -242,7 +238,7 @@ The nexus binhost does not ship signed package indexes. Ensure:
 
 ```bash
 FEATURES="... binpkg-ignore-signature"
-PORTAGE_BINPKG_SIGVERIFY="0"
+# verify-signature = false is already set in binrepos.conf
 ```
 
 </details>

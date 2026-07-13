@@ -148,7 +148,7 @@ fi
 mkdir -p "$(dirname "$LOCKFILE")"
 echo "Install started: $(date)" > "$LOCKFILE"
 
-export PKGDIR=$(portageq envvar PKGDIR 2>/dev/null || echo "/var/cache/binpkgs")
+:
 
 # 1. HARDWARE & SOFTWARE
 echo -e "${B}>>> HARDWARE TARGET${C}"
@@ -216,7 +216,10 @@ fi
 mkdir -p /etc/portage/repos.conf /var/db/repos/gentoo /etc/portage/binrepos.conf
 emerge-webrsync -q
 
-eselect profile set default/linux/amd64/23.0/desktop
+eselect profile set default/linux/amd64/23.0/desktop/elogind 2>/dev/null || \
+eselect profile set default/linux/amd64/23.0/desktop 2>/dev/null || \
+eselect profile list 2>/dev/null | grep -m1 "desktop" | grep -m1 "elogind\|openrc" | awk '{print $1}' | tr -d '[]' | xargs -r eselect profile set || \
+eselect profile set 1
 eselect news read all >/dev/null 2>&1 || true
 
 if [[ "${steam_choice,,}" == "y" ]] && eselect profile show 2>/dev/null | grep -q "no-multilib"; then
@@ -249,7 +252,7 @@ MAKEOPTS="-j${CORES} -l${CORES}"
 USE="wayland X vulkan pipewire dbus elogind udev opengl dri gbm vaapi vdpau ffmpeg bluetooth screencast gstreamer minizip -daemon -systemd -aqua -cups"
 VIDEO_CARDS="amdgpu radeon radeonsi intel iris nouveau virgl"
 LINUX_FIRMWARE="${LINUX_FW}"
-FEATURES="getbinpkg binpkg-ignore-signature -userfetch -userpriv -usersandbox -ipc-sandbox -pid-sandbox -network-sandbox parallel-install"
+FEATURES="binpkg binpkg-ignore-signature"
 ACCEPT_LICENSE="*"
 PKGDIR="/var/cache/binpkgs"
 DISTDIR="/var/cache/distfiles"
@@ -258,7 +261,7 @@ PORTAGE_BINPKG_TAR_OPTS="--warning=no-unknown-keyword"
 EOF
 
 echo -e "${B}>>> Updating Portage to latest version${C}"
-emerge --oneshot --getbinpkg --usepkg sys-apps/portage 2>&1 | tail -5
+emerge --oneshot --binpkg --usepkg sys-apps/portage 2>&1 | tail -5
 
 # 4. PORTAGE CONFIG
 mkdir -p /etc/portage/{profile,package.use,package.mask,package.accept_keywords,package.unmask,package.license,package.env,env}
@@ -267,12 +270,6 @@ cat > /etc/portage/package.mask/systemd << 'MASK'
 sys-apps/systemd
 sys-apps/gentoo-systemd-integration
 MASK
-
-cat > /etc/portage/profile/package.provided << 'PROV'
-sys-apps/systemd-299.0
-sys-apps/gentoo-systemd-integration-99.0
-sys-apps/systemd-initctl-99.0
-PROV
 
 cat > /etc/portage/package.unmask/overrides << 'UNMASK'
 media-libs/dav1d
@@ -485,10 +482,10 @@ dev-util/breakpad **
 media-libs/dav1d **
 media-libs/libdvdnav **
 media-libs/libdvdread **
-net-im/vesktop-bin **
+net-im/vesktop **
 games-util/steam-launcher **
 games-util/heroic-bin **
-games-util/protonplus-bin **
+games-util/protonplus **
 sys-libs/libudev-compat **
 app-misc/cliphist **
 dev-lang/rust **
@@ -522,7 +519,7 @@ fi
 
 # 5. OVERLAYS
 echo -e "${B}>>> OVERLAYS${C}"
-emerge --noreplace --quiet --getbinpkg app-eselect/eselect-repository dev-vcs/git
+emerge --noreplace --quiet --binpkg app-eselect/eselect-repository dev-vcs/git
 
 repo_add_safe "gentoo-nexus" "git" "${NEXUS_REPO_URL}"
 [[ "${guru_choice,,}" == "y" ]]  && repo_enable_safe "guru"
@@ -571,8 +568,8 @@ esac
 
 [[ "${matugen_choice,,}" == "y" ]]  && INSTALL_LIST+=( x11-misc/matugen )
 [[ "${steam_choice,,}" == "y" ]]    && INSTALL_LIST+=( games-util/steam-launcher )
-[[ "${games_choice,,}" == "y" ]]    && INSTALL_LIST+=( games-util/protonplus-bin games-util/heroic-bin )
-[[ "${vesktop_choice,,}" == "y" ]]  && INSTALL_LIST+=( net-im/vesktop-bin )
+[[ "${games_choice,,}" == "y" ]]    && INSTALL_LIST+=( games-util/protonplus games-util/heroic-bin )
+[[ "${vesktop_choice,,}" == "y" ]]  && INSTALL_LIST+=( net-im/vesktop )
 [[ "${rootapp_choice,,}" == "y" ]]  && INSTALL_LIST+=( app-misc/rootapp-bin )
 [[ "${NEED_WIFI}" == "yes" ]]       && INSTALL_LIST+=( net-wireless/iwd net-wireless/wpa_supplicant )
 
@@ -581,7 +578,7 @@ INSTALL_LIST+=(
     x11-terms/alacritty x11-terms/kitty app-editors/nano sys-apps/ripgrep
 )
 
-BIN_OPTS="--getbinpkg --usepkg --keep-going --autounmask=y --autounmask-write --autounmask-keep-masks=n"
+BIN_OPTS="--binpkg --usepkg --keep-going --autounmask=y --autounmask-write --autounmask-keep-masks=n"
 EXCLUDES="--usepkg-exclude sys-auth/polkit --usepkg-exclude dev-libs/libei --usepkg-exclude media-video/wireplumber --usepkg-exclude media-libs/libpulse --usepkg-exclude sys-apps/accountsservice --usepkg-exclude sys-auth/elogind"
 
 emerge ${BIN_OPTS} --oneshot --quiet sys-apps/systemd-utils virtual/libudev || true
