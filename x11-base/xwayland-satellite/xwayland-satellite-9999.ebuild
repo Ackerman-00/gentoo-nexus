@@ -28,7 +28,7 @@ BDEPEND="
 "
 
 QA_FLAGS_IGNORED="usr/bin/xwayland-satellite"
-EGIT_COMMIT="8575d0ef55d7"
+EGIT_COMMIT="a2b5c635d8c8"
 
 pkg_setup() {
     llvm-r2_pkg_setup
