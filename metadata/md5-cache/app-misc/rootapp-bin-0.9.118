@@ -1,6 +1,6 @@
 BDEPEND=sys-fs/squashfs-tools
 DEFINED_PHASES=install postinst postrm unpack
-DESCRIPTION=Discord alternative for gaming communities and large online groups
+DESCRIPTION=Rootful app launcher for AppImage binaries
 EAPI=8
 HOMEPAGE=https://www.rootapp.com
 INHERIT=desktop xdg-utils
@@ -11,4 +11,4 @@ RESTRICT=bindist mirror strip test
 SLOT=0
 SRC_URI=https://installer.rootapp.com/installer/Linux/X64/Root.AppImage -> rootapp-bin-0.9.118-amd64.AppImage
 _eclasses_=desktop	e447b5f77146d69797e9f03ff177f3f1	xdg-utils	42869b3c8d86a70ef3cf75165a395e09
-_md5_=4adcd4e4b1483a8e5ec545bbceab57aa
+_md5_=d9c24e7fe86ec3b50e9b887530035a56
