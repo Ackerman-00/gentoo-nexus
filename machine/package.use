@@ -1,0 +1,9 @@
+# gentoo-nexus consumer package.use — drop-in for /etc/portage/package.use/
+#
+# VIDEO_CARDS reset MUST live here (package.use), NOT in make.conf.
+# Portage rejects the '-*' operator in make.conf's VIDEO_CARDS line
+# ("Invalid '-' operator in non-incremental variable 'VIDEO_CARDS'").
+# The make.conf value stays a plain list: VIDEO_CARDS="amdgpu radeonsi".
+#
+# Pure-AMD (Ryzen APU / discrete). Matches nexus builder so prebuilt mesa is reused.
+*/* VIDEO_CARDS: -* amdgpu radeonsi
