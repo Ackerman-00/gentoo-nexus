@@ -237,7 +237,7 @@ EOF
 cat > /etc/portage/binrepos.conf/gentoo.conf << EOF
 [gentoo]
 priority = 1
-sync-uri = https://distfiles.gentoo.org/releases/amd64/binpackages/23.0/x86-64/
+sync-uri = https://distfiles.gentoo.org/releases/amd64/binpackages/23.0/x86-64-v3/
 verify-signature = true
 EOF
 
@@ -250,8 +250,13 @@ CFLAGS="\${COMMON_FLAGS}"
 CXXFLAGS="\${COMMON_FLAGS}"
 RUSTFLAGS="-C opt-level=2"
 MAKEOPTS="-j${CORES} -l${CORES}"
-USE="wayland X vulkan pipewire dbus elogind udev opengl dri gbm vaapi vdpau ffmpeg bluetooth screencast gstreamer minizip -daemon -systemd -aqua -cups"
+# ffmpeg codecs are set per-package in package.use (media-video/ffmpeg x264 x265 ...),
+# NOT as a global USE flag — this matches the official Gentoo binhost layout.
+USE="wayland X vulkan pipewire dbus elogind udev opengl dri gbm vaapi vdpau bluetooth screencast gstreamer minizip -daemon -systemd -aqua -cups"
 VIDEO_CARDS="amdgpu radeon radeonsi intel iris nouveau virgl"
+# MUST match the x86-64-v3 binhost exactly (CPU_FLAGS_X86 is a USE flag checked by
+# --binpkg-respect-use=y); otherwise nexus update rejects the prebuilt binaries.
+CPU_FLAGS_X86="avx avx2 f16c fma3 mmx mmxext popcnt sse sse2 sse3 sse4_1 sse4_2 ssse3"
 LINUX_FIRMWARE="${LINUX_FW}"
 FEATURES="getbinpkg binpkg-ignore-signature"
 ACCEPT_LICENSE="*"

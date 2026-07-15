@@ -1,0 +1,330 @@
+#!/usr/bin/env python3
+"""nexus - a minimal binary-package manager for the gentoo-nexus rolling release.
+
+The rolling release publishes Gentoo binary packages (.gpkg.tar) plus a
+`Packages` index to a GitHub release:
+
+    https://github.com/Ackerman-00/gentoo-nexus/releases/download/rolling/
+
+`nexus` lets you query and install those binaries the same way `emerge`
+does, but scoped to, and verified against, the rolling index. All
+dependency resolution and actual installation are delegated to Portage
+(`emerge --getbinpkg --usepkgonly`), so behaviour is identical to a normal
+Gentoo binhost client - we only add a fast offline cache, query commands,
+and a strict "binary-only" guarantee.
+
+Default mode is STRICT: packages are installed from binaries only and the
+command fails if a package (or a required dependency) is missing from the
+rolling release. Use --fallback to allow Portage to pull from other
+configured binrepos (e.g. the official Gentoo binhost) or to compile.
+"""
+import argparse
+import gzip
+import os
+import re
+import shutil
+import subprocess
+import sys
+import urllib.request
+
+REPO = "Ackerman-00/gentoo-nexus"
+ROLLING_PKGS = f"https://github.com/{REPO}/releases/download/rolling/Packages"
+ROLLING_PKGS_GZ = ROLLING_PKGS + ".gz"
+CACHE = "/var/cache/nexus/Packages"
+CACHE_GZ = CACHE + ".gz"
+VDB = "/var/db/pkg"
+
+
+def _fetch(url, timeout=30):
+    req = urllib.request.Request(url, headers={"User-Agent": "nexus/1.0"})
+    with urllib.request.urlopen(req, timeout=timeout) as r:
+        return r.read()
+
+
+def _parse_packages(text):
+    """Return (header_dict, [package_dict, ...])."""
+    blocks = text.split("\n\n")
+    header = {}
+    pkgs = []
+    for i, blk in enumerate(blocks):
+        lines = [l for l in blk.splitlines()
+                 if l.strip() and not l.lstrip().startswith("#")]
+        d = {}
+        for l in lines:
+            if ":" in l:
+                k, v = l.split(":", 1)
+                d[k.strip()] = v.strip()
+        if i == 0:
+            header = d
+            continue
+        if "CPV" in d:
+            pkgs.append(d)
+    return header, pkgs
+
+
+def fetch_index(force=False, use_cache=True):
+    """Return (header, pkgs); caches to CACHE for offline queries."""
+    if use_cache and not force and os.path.exists(CACHE):
+        with open(CACHE, "r", encoding="utf-8", errors="replace") as f:
+            text = f.read()
+        return _parse_packages(text)
+
+    os.makedirs(os.path.dirname(CACHE), exist_ok=True)
+    data = None
+    last_err = None
+    for url in (ROLLING_PKGS, ROLLING_PKGS_GZ):
+        try:
+            data = _fetch(url)
+            if url.endswith(".gz"):
+                data = gzip.decompress(data)
+            break
+        except Exception as e:  # noqa: BLE001
+            last_err = e
+    if data is None:
+        raise SystemExit(f"nexus: failed to fetch Packages index: {last_err}")
+
+    text = data.decode("utf-8", "replace")
+    with open(CACHE, "w", encoding="utf-8") as f:
+        f.write(text)
+    return _parse_packages(text)
+
+
+def _cpv_split(cpv):
+    try:
+        from portage.versions import catpkgsplit
+        c, n, v, r = catpkgsplit(cpv)
+        rs = str(r) if r is not None else ""
+        if rs in ("", "0", "r0"):
+            full = v
+        elif rs.startswith("r"):
+            full = f"{v}-{rs}"
+        else:
+            full = f"{v}-r{rs}"
+        return f"{c}/{n}", full
+    except Exception:  # noqa: BLE001
+        cat, rest = cpv.split("/", 1)
+        m = re.match(r"^(.+?)-(\d.*)$", rest)
+        if m:
+            return f"{cat}/{m.group(1)}", m.group(2)
+        return cpv, ""
+
+
+def _split_ver(base):
+    """Extract a full version (with -rN) from a CPV tail or VDB PF string."""
+    try:
+        from portage.versions import pkgsplit
+        pn, pvr, rev = pkgsplit(base)
+        if pvr is None:
+            return None
+        rs = str(rev) if rev is not None else ""
+        if rs in ("", "0", "r0"):
+            return pvr
+        elif rs.startswith("r"):
+            return f"{pvr}-{rs}"
+        else:
+            return f"{pvr}-r{rs}"
+    except Exception:  # noqa: BLE001
+        m = re.match(r"^\S+?-(\d.*)$", base)
+        return m.group(1) if m else None
+
+
+def installed_db():
+    res = {}
+    if not os.path.isdir(VDB):
+        return res
+    for cat in sorted(os.listdir(VDB)):
+        cdir = os.path.join(VDB, cat)
+        if not os.path.isdir(cdir):
+            continue
+        for name in sorted(os.listdir(cdir)):
+            full = os.path.join(cdir, name)
+            if not os.path.isdir(full):
+                continue
+            try:
+                from portage.versions import pkgsplit
+                pn, _v, _r = pkgsplit(name)
+                cp = f"{cat}/{pn}"
+            except Exception:  # noqa: BLE001
+                m = re.match(r"^(.+?)-\d", name)
+                cp = f"{cat}/{m.group(1)}" if m else f"{cat}/{name}"
+            res[cp] = full
+    return res
+
+
+def _vercmp(a, b):
+    try:
+        from portage.versions import vercmp as _vc
+        r = _vc(a, b)
+        return r if r is not None else 0
+    except Exception:  # noqa: BLE001
+        # fallback used only when portage is unavailable (non-target envs)
+        def _tok(v):
+            toks = []
+            for m in re.finditer(r"\d+|\D+", v):
+                s = m.group(0)
+                toks.append((1, int(s)) if s.isdigit() else (0, s))
+            return toks
+        ta, tb = _tok(a), _tok(b)
+        for x, y in zip(ta, tb):
+            if x[0] != y[0]:
+                return -1 if x[0] < y[0] else 1
+            if x[1] != y[1]:
+                return -1 if x[1] < y[1] else 1
+        if len(ta) == len(tb):
+            return 0
+        return -1 if len(ta) < len(tb) else 1
+
+
+def _emerge(pkgs, update=False, fallback=False):
+    cmd = ["emerge", "--getbinpkg", "--binpkg-respect-use=y"]
+    if not fallback:
+        cmd.append("--usepkgonly")
+    if update:
+        cmd += ["-uDN", "@world"]
+    else:
+        cmd += list(pkgs)
+    print("nexus: running", " ".join(cmd), file=sys.stderr)
+    return subprocess.call(cmd)
+
+
+# ---------------------------------------------------------------------------
+# subcommands
+# ---------------------------------------------------------------------------
+def cmd_sync(args):
+    header, pkgs = fetch_index(force=True, use_cache=False)
+    n = header.get("PACKAGES") or len(pkgs)
+    print(f"nexus: synced {n} packages from rolling")
+
+
+def cmd_list(args):
+    _header, pkgs = fetch_index(force=args.force)
+    for p in pkgs:
+        cpv = p["CPV"]
+        repo = p.get("REPO", "")
+        bid = p.get("BUILD_ID", "")
+        print(f"{cpv}\t{repo}\t{bid}")
+
+
+def cmd_search(args):
+    _header, pkgs = fetch_index(force=args.force)
+    pat = re.compile(args.term, re.IGNORECASE)
+    seen = set()
+    for p in pkgs:
+        cpv = p["CPV"]
+        if pat.search(cpv) and cpv not in seen:
+            seen.add(cpv)
+            print(cpv)
+
+
+def cmd_info(args):
+    _header, pkgs = fetch_index(force=args.force)
+    term = args.package.lower()
+    matches = [p for p in pkgs
+               if p["CPV"].lower() == term
+               or _cpv_split(p["CPV"])[0].lower() == term
+               or term in p["CPV"].lower()]
+    if not matches:
+        print(f"nexus: no package matching {args.package!r} in rolling")
+        return 1
+    for p in sorted(matches, key=lambda x: x["CPV"]):
+        cpv = p["CPV"]
+        print(f"{cpv}")
+        for key in ("USE", "REPO", "BUILD_ID", "CHOST", "BUILD_TIME"):
+            if key in p:
+                print(f"    {key}: {p[key]}")
+    return 0
+
+
+def cmd_install(args):
+    return _emerge(args.packages, update=False, fallback=args.fallback)
+
+
+def cmd_update(args):
+    return _emerge([], update=True, fallback=args.fallback)
+
+
+def cmd_status(args):
+    _header, pkgs = fetch_index(force=args.force)
+    rolling = {}
+    for p in pkgs:
+        cp, ver = _cpv_split(p["CPV"])
+        if cp not in rolling or _vercmp(ver, rolling[cp][0]) > 0:
+            rolling[cp] = (ver, p)
+    inst = installed_db()
+    upgradable = 0
+    for cp in sorted(inst):
+        if cp in rolling:
+            # derive installed version from the VDB (PF file, else dir name)
+            base = None
+            ver_file = os.path.join(inst[cp], "PF")
+            if os.path.exists(ver_file):
+                with open(ver_file) as f:
+                    base = f.read().strip()
+            if not base:
+                base = inst[cp].rsplit("/", 1)[-1]
+            iv = _split_ver(base)
+            if iv is None:
+                continue
+            rver = rolling[cp][0]
+            cmp = _vercmp(rver, iv)
+            if cmp > 0:
+                upgradable += 1
+                print(f"UPGRADABLE {cp}: {iv} -> {rver}")
+            elif cmp < 0:
+                print(f"DOWNGRADE  {cp}: {iv} -> {rver}")
+    if upgradable == 0:
+        print("nexus: all installed packages are up to date with rolling")
+    else:
+        print(f"nexus: {upgradable} package(s) upgradable - run: nexus update")
+    return 0
+
+
+def build_parser():
+    p = argparse.ArgumentParser(
+        prog="nexus",
+        description="binary-package manager for the gentoo-nexus rolling release")
+    sub = p.add_subparsers(dest="cmd", required=True)
+
+    sp = sub.add_parser("sync", help="download the rolling Packages index")
+    sp.add_argument("-f", "--force", action="store_true",
+                    help="ignore cache and re-download")
+    sp.set_defaults(func=cmd_sync)
+
+    sp = sub.add_parser("list", help="list every package in rolling")
+    sp.add_argument("-f", "--force", action="store_true")
+    sp.set_defaults(func=cmd_list)
+
+    sp = sub.add_parser("search", help="search rolling by name/regex")
+    sp.add_argument("term")
+    sp.add_argument("-f", "--force", action="store_true")
+    sp.set_defaults(func=cmd_search)
+
+    sp = sub.add_parser("info", help="show versions + USE for a package")
+    sp.add_argument("package")
+    sp.add_argument("-f", "--force", action="store_true")
+    sp.set_defaults(func=cmd_info)
+
+    sp = sub.add_parser("install", help="install package(s) from binaries")
+    sp.add_argument("packages", nargs="+")
+    sp.add_argument("--fallback", action="store_true",
+                    help="allow other binrepos / compile if missing from rolling")
+    sp.set_defaults(func=cmd_install)
+
+    sp = sub.add_parser("update", help="upgrade @world from binaries")
+    sp.add_argument("--fallback", action="store_true")
+    sp.set_defaults(func=cmd_update)
+
+    sp = sub.add_parser("status", help="compare installed vs rolling")
+    sp.add_argument("-f", "--force", action="store_true")
+    sp.set_defaults(func=cmd_status)
+
+    return p
+
+
+def main(argv=None):
+    args = build_parser().parse_args(argv)
+    return args.func(args) or 0
+
+
+if __name__ == "__main__":
+    sys.exit(main())

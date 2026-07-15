@@ -286,7 +286,7 @@ jobs:
 
           # === Validate Manifests & Resolve State ===
           cat > /etc/portage/make.conf << 'MAKECONF'
-          COMMON_FLAGS="-O2 -march=x86-64 -pipe"
+          COMMON_FLAGS="-O2 -pipe -march=x86-64-v3"
           CFLAGS="${COMMON_FLAGS}"
           CXXFLAGS="${COMMON_FLAGS}"
           FCFLAGS="${COMMON_FLAGS}"
@@ -296,14 +296,17 @@ jobs:
           ACCEPT_PROPERTIES="*"
           ACCEPT_RESTRICT="*"
           MAKEOPTS="-j4"
-          USE="elogind -systemd dbus wayland egl vaapi vdpau vulkan amdgpu ffmpeg encode opencl"
-          VIDEO_CARDS="amdgpu radeonsi"
+          # USE flags are inherited from the selected desktop/gnome profile.
+          # The official Gentoo x86-64-v3 binhost sets NO custom global USE (only
+          # profile defaults + */* CPU_FLAGS_X86), so we match it here for binary
+          # compatibility. ffmpeg codec flags are set per-package in package.use below.
+          VIDEO_CARDS="amdgpu radeonsi intel"
+          CPU_FLAGS_X86="avx avx2 f16c fma3 mmx mmxext popcnt sse sse2 sse3 sse4_1 sse4_2 ssse3"
           MAKECONF
 
           cat > /etc/portage/package.use/global << 'USECONF'
           sys-libs/zlib minizip
-          media-video/pipewire extra
-          media-video/ffmpeg -sdl
+          media-video/pipewire -ffmpeg
           sys-libs/ncurses -gpm
           dev-libs/openssl -bindist
           dev-libs/libdbusmenu gtk3

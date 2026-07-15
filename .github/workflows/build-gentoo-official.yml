@@ -133,7 +133,7 @@ jobs:
           INPUT="${{ inputs.package_list || github.event.inputs.package_list }}"
           if [ -z "$INPUT" ]; then
             echo ">>> No package list provided, using defaults"
-            INPUT="llvm-core/llvm llvm-core/clang llvm-runtimes/compiler-rt sys-devel/gcc dev-libs/roct-thunk-interface dev-libs/rocr-runtime dev-libs/rocm-opencl-runtime sys-kernel/linux-firmware x11-drivers/xf86-video-amdgpu media-libs/vulkan-loader sys-kernel/gentoo-kernel sys-apps/portage media-libs/mesa dev-util/mesa_clc games-util/heroic-bin app-editors/zed dev-util/rustup media-gfx/blender-bin dev-games/godot"
+            INPUT="llvm-core/llvm llvm-core/clang llvm-runtimes/compiler-rt sys-devel/gcc dev-libs/roct-thunk-interface dev-libs/rocr-runtime dev-libs/rocm-opencl-runtime sys-kernel/linux-firmware x11-drivers/xf86-video-amdgpu media-libs/vulkan-loader sys-kernel/gentoo-kernel sys-apps/portage media-libs/mesa media-libs/libva-intel-media-driver dev-util/mesa_clc media-video/ffmpeg games-util/heroic-bin app-editors/zed dev-util/rustup media-gfx/blender-bin dev-games/godot"
           fi
 
           FORCE="${{ inputs.force_rebuild || github.event.inputs.force_rebuild }}"
@@ -193,20 +193,24 @@ jobs:
           mkdir -p /var/db/repos/gentoo /etc/portage/repos.conf
           emerge-webrsync -q
 
-          eselect profile set default/linux/amd64/23.0/desktop 2>/dev/null || \
+          eselect profile set default/linux/amd64/23.0/desktop/gnome 2>/dev/null || \
             eselect profile list 2>/dev/null | grep -m1 desktop | awk '{print $1}' | tr -d '[]' | xargs -r eselect profile set || \
             eselect profile set 1
 
           getuto 2>/dev/null || emerge -q --oneshot app-crypt/gentoo-keys 2>/dev/null || true
 
           cat > /etc/portage/make.conf << 'MAKECONF'
-          COMMON_FLAGS="-O2 -march=x86-64 -pipe"
+          COMMON_FLAGS="-O2 -pipe -march=x86-64-v3"
           CFLAGS="${COMMON_FLAGS}"
           CXXFLAGS="${COMMON_FLAGS}"
           FCFLAGS="${COMMON_FLAGS}"
           FFLAGS="${COMMON_FLAGS}"
-          VIDEO_CARDS="amdgpu radeonsi"
-          USE="elogind -systemd dbus wayland egl vaapi vdpau vulkan amdgpu ffmpeg encode"
+          VIDEO_CARDS="amdgpu radeonsi intel"
+          CPU_FLAGS_X86="avx avx2 f16c fma3 mmx mmxext popcnt sse sse2 sse3 sse4_1 sse4_2 ssse3"
+          # USE flags are inherited from the selected desktop/gnome profile.
+          # The official Gentoo x86-64-v3 binhost sets NO custom global USE (only
+          # profile defaults + */* CPU_FLAGS_X86), so we match it here for binary
+          # compatibility. ffmpeg codec flags are set per-package in package.use below.
 
           FEATURES="getbinpkg buildpkg ccache binpkg-ignore-signature -sandbox -usersandbox -ipc-sandbox -network-sandbox -pid-sandbox"
           CCACHE_DIR="/var/cache/ccache"
@@ -238,13 +242,14 @@ jobs:
           sys-kernel/linux-firmware redistributable initramfs compress-zstd
           sys-libs/minizip-ng compat
           sys-apps/dbus -systemd elogind
-          media-video/pipewire -systemd elogind extra
+          media-video/pipewire -systemd elogind -ffmpeg
           dev-libs/libdbusmenu gtk3
           net-misc/networkmanager -modemmanager -bluetooth
           sys-libs/ncurses -gpm
           sys-libs/zlib-ng abi_x86_32 abi_x86_64 compat
-          x11-libs/libdrm video_cards_radeon
-          media-libs/mesa -rust -opencl
+          x11-libs/libdrm video_cards_amdgpu video_cards_intel video_cards_radeon
+          media-libs/mesa -rust -opencl proprietary-codecs lm-sensors
+          media-video/ffmpeg x264 x265 vpx opus dav1d vaapi vdpau
           USES
 
           cat > /etc/portage/package.use/gaming << 'GAMING'
@@ -294,12 +299,6 @@ jobs:
           sync-uri = https://distfiles.gentoo.org/releases/amd64/binpackages/23.0/x86-64-v3/
           location = /var/cache/binhost/gentoo-official-v3
           verify-signature = true
-
-          [gentoo-official]
-          priority = 1
-          sync-uri = https://distfiles.gentoo.org/releases/amd64/binpackages/23.0/x86-64/
-          location = /var/cache/binhost/gentoo-official
-          verify-signature = true
           BINHOST
 
           echo ">>> Updating Portage to latest version..."
@@ -343,29 +342,7 @@ jobs:
 
           if [ "$BUILD_EXIT" -ne 0 ]; then
             echo ">>> BUILD FAILED with exit code $BUILD_EXIT"
-            if grep -q "circular dependencies" /tmp/emerge.log; then
-              echo ">>> Circular dependencies detected, attempting workaround..."
-              USE="-pipewire" emerge --oneshot --usepkg --getbinpkg --buildpkg --backtrack=30 --quiet-build=y media-libs/libsdl2 || true
-              emerge --oneshot --usepkg --getbinpkg --buildpkg --backtrack=30 --quiet-build=y media-video/ffmpeg || true
-              emerge --oneshot --usepkg --getbinpkg --buildpkg --backtrack=30 --quiet-build=y media-video/pipewire || true
-              USE="pipewire" emerge --oneshot --usepkg --getbinpkg --buildpkg --backtrack=30 --quiet-build=y media-libs/libsdl2 || true
-
-              emerge --oneshot --usepkg --getbinpkg --buildpkg --backtrack=30 \
-                --binpkg-respect-use=y --quiet-build=y --keep-going \
-                --autounmask=n \
-                "$TARGET" 2>&1 | tee /tmp/emerge2.log
-              BUILD_EXIT=${PIPESTATUS[0]}
-              if [ "$BUILD_EXIT" -ne 0 ]; then
-                echo ">>> WARNING: Circular dependency workaround also failed (exit $BUILD_EXIT)"
-              else
-                echo ">>> Creating binary package for upload..."
-                PN=$(echo "${TARGET#=}" | sed 's/-[0-9].*//')
-                quickpkg "$PN" 2>/dev/null || true
-                echo ">>> SUCCESS: ${TARGET} built (after circular dependency workaround)"
-              fi
-            else
-              echo ">>> WARNING: emerge failed for ${TARGET} (exit $BUILD_EXIT). Check logs above."
-            fi
+            echo ">>> WARNING: emerge failed for ${TARGET} (exit $BUILD_EXIT). Check logs above."
           else
             echo ">>> Creating binary package for upload..."
             PN=$(echo "${TARGET#=}" | sed 's/-[0-9].*//')

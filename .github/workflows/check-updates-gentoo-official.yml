@@ -40,7 +40,7 @@ jobs:
           GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
           REPO: ${{ github.repository }}
         run: |
-          TRACKED_PKGS="llvm-core/llvm llvm-core/clang llvm-runtimes/compiler-rt sys-devel/gcc dev-libs/roct-thunk-interface dev-libs/rocr-runtime dev-libs/rocm-opencl-runtime sys-kernel/linux-firmware x11-drivers/xf86-video-amdgpu media-libs/vulkan-loader sys-kernel/gentoo-kernel sys-apps/portage media-libs/mesa dev-util/mesa_clc games-util/heroic-bin app-editors/zed dev-util/rustup media-gfx/blender-bin dev-games/godot"
+          TRACKED_PKGS="llvm-core/llvm llvm-core/clang llvm-runtimes/compiler-rt sys-devel/gcc dev-libs/roct-thunk-interface dev-libs/rocr-runtime dev-libs/rocm-opencl-runtime sys-kernel/linux-firmware x11-drivers/xf86-video-amdgpu media-libs/vulkan-loader sys-kernel/gentoo-kernel sys-apps/portage media-libs/mesa media-libs/libva-intel-media-driver dev-util/mesa_clc media-video/ffmpeg games-util/heroic-bin app-editors/zed dev-util/rustup media-gfx/blender-bin dev-games/godot"
 
           echo ">>> Fetching rolling release assets..."
           EXISTING_ASSETS=$(gh release view rolling --json assets --jq '.assets[].name' 2>/dev/null || echo "")
@@ -50,7 +50,7 @@ jobs:
           #!/bin/bash
           source /etc/profile
           emerge-webrsync -q >&2 || true
-           eselect profile set default/linux/amd64/23.0/desktop >&2 2>/dev/null || true
+            eselect profile set default/linux/amd64/23.0/desktop/gnome >&2 2>/dev/null || true
            export ACCEPT_KEYWORDS="~amd64"
            export ACCEPT_LICENSE="*"
            for pkg in "$@"; do

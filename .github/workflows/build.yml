@@ -204,20 +204,24 @@ jobs:
           mkdir -p /var/db/repos/gentoo /etc/portage/repos.conf
           emerge-webrsync -q
 
-          eselect profile set default/linux/amd64/23.0/desktop 2>/dev/null || \
+          eselect profile set default/linux/amd64/23.0/desktop/gnome 2>/dev/null || \
             eselect profile list 2>/dev/null | grep -m1 desktop | awk '{print $1}' | tr -d '[]' | xargs -r eselect profile set || \
             eselect profile set 1
 
           getuto 2>/dev/null || emerge -q --oneshot app-crypt/gentoo-keys 2>/dev/null || true
 
           cat > /etc/portage/make.conf << 'MAKECONF'
-          COMMON_FLAGS="-O2 -march=x86-64 -pipe"
+          COMMON_FLAGS="-O2 -pipe -march=x86-64-v3"
           CFLAGS="${COMMON_FLAGS}"
           CXXFLAGS="${COMMON_FLAGS}"
           FCFLAGS="${COMMON_FLAGS}"
           FFLAGS="${COMMON_FLAGS}"
-          VIDEO_CARDS="amdgpu radeonsi"
-          USE="elogind -systemd dbus wayland egl vaapi vdpau vulkan amdgpu ffmpeg encode opencl"
+          VIDEO_CARDS="amdgpu radeonsi intel"
+          CPU_FLAGS_X86="avx avx2 f16c fma3 mmx mmxext popcnt sse sse2 sse3 sse4_1 sse4_2 ssse3"
+          # USE flags are inherited from the selected desktop/gnome profile.
+          # The official Gentoo x86-64-v3 binhost sets NO custom global USE (only
+          # profile defaults + */* CPU_FLAGS_X86), so we match it here for binary
+          # compatibility. ffmpeg codec flags are set per-package in package.use below.
           
           FEATURES="getbinpkg buildpkg ccache binpkg-ignore-signature -sandbox -usersandbox -ipc-sandbox -network-sandbox -pid-sandbox"
           CCACHE_DIR="/var/cache/ccache"
@@ -255,16 +259,16 @@ jobs:
 
           mkdir -p /etc/portage/binrepos.conf
           cat > /etc/portage/binrepos.conf/gentoo-official.conf << 'BINHOST'
+          [nexus]
+          priority = 10
+          sync-uri = https://github.com/Ackerman-00/gentoo-nexus/releases/download/rolling/
+          location = /var/cache/binhost/nexus
+          verify-signature = false
+
           [gentoo-official-v3]
           priority = 5
           sync-uri = https://distfiles.gentoo.org/releases/amd64/binpackages/23.0/x86-64-v3/
           location = /var/cache/binhost/gentoo-official-v3
-          verify-signature = true
-
-          [gentoo-official]
-          priority = 1
-          sync-uri = https://distfiles.gentoo.org/releases/amd64/binpackages/23.0/x86-64/
-          location = /var/cache/binhost/gentoo-official
           verify-signature = true
           BINHOST
 
@@ -278,14 +282,58 @@ jobs:
           gui-libs/gtk introspection
           sys-auth/seatd builtin server
           sys-kernel/installkernel dracut
+          sys-kernel/linux-firmware redistributable initramfs compress-zstd
           sys-libs/minizip-ng compat
           sys-apps/dbus -systemd elogind
-          media-video/pipewire -systemd elogind extra
+          media-video/pipewire -systemd elogind -ffmpeg
           dev-libs/libdbusmenu gtk3
           net-misc/networkmanager -modemmanager -bluetooth
           sys-libs/ncurses -gpm
-          sys-libs/zlib-ng abi_x86_64 compat
+          sys-libs/zlib-ng abi_x86_32 abi_x86_64 compat
+          x11-libs/libdrm video_cards_amdgpu video_cards_intel video_cards_radeon
+          media-libs/mesa -rust -opencl proprietary-codecs lm-sensors
+          media-video/ffmpeg x264 x265 vpx opus dav1d vaapi vdpau
           USES
+
+          cat > /etc/portage/package.use/gaming << 'GAMING'
+          virtual/libelf abi_x86_32
+          dev-libs/elfutils abi_x86_32
+          llvm-core/llvm -xml abi_x86_32
+          llvm-runtimes/compiler-rt abi_x86_32
+          media-libs/mesa abi_x86_32
+          media-libs/vulkan-loader abi_x86_32
+          media-libs/alsa-lib abi_x86_32
+          media-libs/libglvnd abi_x86_32 X
+          x11-libs/libX11 abi_x86_32
+          x11-libs/libxcb abi_x86_32
+          x11-libs/libXext abi_x86_32
+          x11-libs/libdrm abi_x86_32
+          dev-libs/expat abi_x86_32
+          dev-util/spirv-tools abi_x86_32
+          virtual/opengl abi_x86_32
+          virtual/zlib abi_x86_32
+          sys-libs/zlib abi_x86_32
+          app-arch/zstd abi_x86_32
+          dev-libs/icu abi_x86_32
+          dev-libs/libffi abi_x86_32
+          dev-libs/libxml2 abi_x86_32
+          x11-libs/libXau abi_x86_32
+          x11-libs/libXdmcp abi_x86_32
+          x11-libs/libXfixes abi_x86_32
+          x11-libs/libXrandr abi_x86_32
+          x11-libs/libXrender abi_x86_32
+          x11-libs/libXxf86vm abi_x86_32
+          x11-libs/libpciaccess abi_x86_32
+          x11-libs/libxshmfence abi_x86_32
+          x11-libs/xcb-util-keysyms abi_x86_32
+          dev-libs/wayland abi_x86_32
+          media-libs/libva abi_x86_32
+          media-libs/libdisplay-info abi_x86_32
+          llvm-core/clang abi_x86_32
+          app-arch/bzip2 abi_x86_32
+          app-arch/xz-utils abi_x86_32
+          media-libs/freetype brotli
+          GAMING
 
           mkdir -p /etc/portage/package.mask
           echo '>=dev-libs/libgit2-1.9.3' > /etc/portage/package.mask/libgit2
@@ -324,20 +372,7 @@ jobs:
 
           if [ "$BUILD_EXIT" -ne 0 ]; then
             echo ">>> BUILD FAILED with exit code $BUILD_EXIT"
-            if grep -q "circular dependencies" /tmp/emerge.log; then
-              echo ">>> Circular dependencies detected, attempting workaround..."
-              USE="-pipewire" emerge --oneshot --usepkg --getbinpkg --buildpkg --backtrack=30 --quiet-build=y media-libs/libsdl2 || true
-              emerge --oneshot --usepkg --getbinpkg --buildpkg --backtrack=30 --quiet-build=y media-video/ffmpeg || true
-              emerge --oneshot --usepkg --getbinpkg --buildpkg --backtrack=30 --quiet-build=y media-video/pipewire || true
-              USE="pipewire" emerge --oneshot --usepkg --getbinpkg --buildpkg --backtrack=30 --quiet-build=y media-libs/libsdl2 || true
-
-              emerge --oneshot --usepkg --getbinpkg --buildpkg --backtrack=30 \
-                --binpkg-respect-use=y --quiet-build=y --keep-going \
-                --autounmask=n \
-                "${TARGET}" || echo ">>> WARNING: Circular dependency workaround also failed"
-            else
-              echo ">>> WARNING: emerge failed for ${TARGET}. Check logs above."
-            fi
+            echo ">>> WARNING: emerge failed for ${TARGET}. Check logs above."
           fi
 
           emaint binhost --fix
