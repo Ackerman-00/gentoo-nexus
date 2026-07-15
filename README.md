@@ -112,8 +112,8 @@ CXXFLAGS="${COMMON_FLAGS}"
 USE="elogind -systemd dbus wayland egl vaapi vdpau vulkan amdgpu ffmpeg encode"
 VIDEO_CARDS="amdgpu radeonsi"
 
-FEATURES="binpkg binpkg-ignore-signature"
-EMERGE_DEFAULT_OPTS="--binpkg --quiet-build=y --keep-going"
+FEATURES="getbinpkg binpkg-ignore-signature"
+EMERGE_DEFAULT_OPTS="--getbinpkg --quiet-build=y --keep-going"
 ACCEPT_LICENSE="*"
 ACCEPT_KEYWORDS="~amd64"
 ```
@@ -144,6 +144,7 @@ cat > /etc/portage/binrepos.conf/gentoo-nexus.conf << 'EOF'
 priority = 9999
 sync-uri = https://github.com/Ackerman-00/gentoo-nexus/releases/download/rolling/
 verify-signature = false
+location = /var/cache/binhost/gentoo-nexus
 EOF
 ```
 
@@ -163,9 +164,9 @@ echo "*/*::gentoo-nexus **" > /etc/portage/package.accept_keywords/nexus
 ### 6. Install the kernel and compositor
 
 ```bash
-emerge --binpkg --oneshot sys-kernel/gentoo-kernel
+emerge --getbinpkg --oneshot sys-kernel/gentoo-kernel
 emerge --config sys-kernel/gentoo-kernel
-emerge --binpkg gui-wm/niri
+emerge --getbinpkg gui-wm/niri
 ```
 
 </details>
@@ -175,7 +176,7 @@ emerge --binpkg gui-wm/niri
 ## Staying Updated
 
 ```bash
-emerge --binpkg -uDN @world
+emerge --getbinpkg -uDN @world
 ```
 
 The CI pipeline handles version bumps, binary rebuilds, and index updates automatically.
@@ -223,8 +224,8 @@ The CI pipeline handles version bumps, binary rebuilds, and index updates automa
 Verify `make.conf` contains the required directives:
 
 ```bash
-FEATURES="binpkg binpkg-ignore-signature"
-EMERGE_DEFAULT_OPTS="--binpkg --quiet-build=y --keep-going"
+FEATURES="getbinpkg binpkg-ignore-signature"
+EMERGE_DEFAULT_OPTS="--getbinpkg --quiet-build=y --keep-going"
 ```
 
 Run `emerge --info | grep FEATURES` to confirm flags are active.

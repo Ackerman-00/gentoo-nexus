@@ -19,17 +19,21 @@ jobs:
     runs-on: ubuntu-latest
     timeout-minutes: 30
     steps:
+
+      # ---- topic: checkout-setup ----
       - uses: actions/checkout@v6
 
       - name: Free Disk Space
         run: |
           sudo rm -rf /usr/share/dotnet /usr/local/lib/android /opt/ghc /opt/hostedtoolcache/CodeQL || true
 
+      # ---- topic: workspace ----
       - name: Prepare Workspace
         run: |
           mkdir -p binpkgs distfiles
           chmod -R 777 binpkgs distfiles
 
+      # ---- topic: scan-versions ----
       - name: Scan Tracked Packages for Updates
         id: scan
         env:
@@ -103,6 +107,7 @@ jobs:
             echo ">>> Packages to build: $BUILD_QUEUE"
           fi
 
+      # ---- topic: trigger-relay ----
       - name: Trigger Relay
         if: steps.scan.outputs.build_list != ''
         env:

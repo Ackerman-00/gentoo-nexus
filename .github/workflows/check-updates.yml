@@ -19,12 +19,15 @@ jobs:
     runs-on: ubuntu-latest
     timeout-minutes: 30
     steps:
+
+      # ---- topic: checkout-setup ----
       - name: Checkout Repository
         uses: actions/checkout@v6
         with:
           token: ${{ secrets.GITHUB_TOKEN }}
           fetch-depth: 0
 
+      # ---- topic: scan-script ----
       - name: Set up Python
         uses: actions/setup-python@v6
         with:
@@ -133,9 +136,16 @@ jobs:
                       if extracted_dir.is_dir():
                           for d_file in extracted_dir.glob('*.desktop'):
                               content = d_file.read_text(encoding='utf-8', errors='ignore')
-                              m = re.search(r'^X-AppImage-Version=(.+)', content, re.MULTILINE) or \
-                                  re.search(r'^Version=(.+)', content, re.MULTILINE)
+                              # Prefer the AppImage-specific version field
+                              m = re.search(r'^X-AppImage-Version=(.+)', content, re.MULTILINE)
                               if m: return m.group(1).strip()
+                              # Fall back to Version= only if it looks like a real
+                              # release (desktop spec default is often "1.0")
+                              m = re.search(r'^Version=(.+)', content, re.MULTILINE)
+                              if m:
+                                  v = m.group(1).strip()
+                                  if re.match(r'^\d+\.\d+(\.\d+)?$', v) and v not in ('1.0', '1.0.0'):
+                                      return v
               except: pass
               return None
 
@@ -229,6 +239,7 @@ jobs:
           EOF
           python3 -u scan.py
 
+      # ---- topic: sync-overlay ----
       - name: Sync Overlay
         run: |
           cat > sync_overlay.sh << 'SYNCEOF'
@@ -301,7 +312,7 @@ jobs:
           mkdir -p /etc/portage/package.accept_keywords
           cat > /etc/portage/package.accept_keywords/nexus << 'KEYW'
           */*::gentoo-nexus **
-          net-libs/webkit-gtk ~amd64
+          net-libs/webkit-gtk -~amd64 amd64
           KEYW
 
           echo ">>> Validating Manifests..."
@@ -348,6 +359,7 @@ jobs:
           chmod +x sync_overlay.sh
           docker run --rm -v "${{ github.workspace }}:/overlay" gentoo/stage3:amd64-desktop-openrc bash /overlay/sync_overlay.sh
 
+      # ---- topic: commit ----
       - name: Commit Changes
         run: |
           git config user.name "github-actions[bot]"
@@ -365,6 +377,7 @@ jobs:
             git push origin HEAD:${{ github.ref_name }}
           fi
 
+      # ---- topic: binhost-audit ----
       - name: Binhost Audit
         id: audit
         env:
@@ -413,6 +426,7 @@ jobs:
           UNIQUE_CHANGED_ATOMS=$(echo $CHANGED_ATOMS | tr ' ' '\n' | sort -u | xargs)
           echo "force_required=$UNIQUE_CHANGED_ATOMS" >> "$GITHUB_OUTPUT"
 
+      # ---- topic: trigger-relay ----
       - name: Trigger Relay
         if: steps.audit.outputs.build_list != ''
         env:

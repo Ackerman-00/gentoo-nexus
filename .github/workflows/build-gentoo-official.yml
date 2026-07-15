@@ -32,6 +32,8 @@ jobs:
       remaining: ${{ steps.queue.outputs.REMAINING_PKGS }}
       force_rebuild: ${{ steps.queue.outputs.FORCE_REBUILD }}
     steps:
+
+      # ---- topic: environment-setup ----
       - uses: actions/checkout@v6
 
       - name: Allocate ZRAM Swap
@@ -45,6 +47,7 @@ jobs:
         run: |
           sudo rm -rf /usr/share/dotnet /usr/local/lib/android /opt/ghc /opt/hostedtoolcache/CodeQL || true
 
+      # ---- topic: ccache ----
       - name: Persistent CCache Setup
         uses: actions/cache@v5
         with:
@@ -53,6 +56,7 @@ jobs:
           restore-keys: |
             gentoo-ccache-official-${{ runner.os }}-
 
+      # ---- topic: workspace-binaries ----
       - name: Prepare Workspace
         run: |
           mkdir -p binpkgs distfiles ccache
@@ -122,6 +126,7 @@ jobs:
       - name: Fix Workspace Permissions
         run: sudo chown -R "$(id -u):$(id -g)" "${{ github.workspace }}"
 
+      # ---- topic: queue-and-build-script ----
       - name: Parse Queue & Normalize Targets
         id: queue
         run: |
@@ -218,6 +223,7 @@ jobs:
           EMERGE_DEFAULT_OPTS="--usepkg --getbinpkg --buildpkg --binpkg-respect-use=y --jobs=4 --load-average=4 --keep-going"
           MAKEOPTS="-j4"
           LC_MESSAGES=C.UTF-8
+          PORTAGE_BINPKG_TAR_OPTS="--warning=no-unknown-keyword"
           MAKECONF
 
           mkdir -p /etc/portage/package.accept_keywords
@@ -286,11 +292,13 @@ jobs:
           [gentoo-official-v3]
           priority = 5
           sync-uri = https://distfiles.gentoo.org/releases/amd64/binpackages/23.0/x86-64-v3/
+          location = /var/cache/binhost/gentoo-official-v3
           verify-signature = true
 
           [gentoo-official]
           priority = 1
           sync-uri = https://distfiles.gentoo.org/releases/amd64/binpackages/23.0/x86-64/
+          location = /var/cache/binhost/gentoo-official
           verify-signature = true
           BINHOST
 
@@ -373,6 +381,7 @@ jobs:
           chmod +x build.sh
           echo "TARGET=${{ steps.queue.outputs.TARGET_PKG }}" >> "$GITHUB_ENV"
 
+      # ---- topic: docker-build ----
       - name: Build Package in Docker
         if: steps.queue.outputs.skip_compile != 'true'
         run: |
@@ -389,6 +398,7 @@ jobs:
         if: steps.queue.outputs.skip_compile != 'true'
         run: sudo chown -R "$(id -u):$(id -g)" "${{ github.workspace }}"
 
+      # ---- topic: upload ----
       - name: Upload to GitHub Release
         if: steps.queue.outputs.skip_compile != 'true'
         env:
@@ -478,6 +488,7 @@ jobs:
             echo ">>> All uploads completed successfully."
           fi
 
+  # ---- topic: relay ----
   relay:
     if: ${{ always() && needs.build.outputs.remaining != '' }}
     needs: [build]

@@ -24,9 +24,13 @@ DEPEND="
     media-libs/fontconfig
     media-libs/freetype
     media-libs/harfbuzz
+    media-libs/libglvnd
     media-libs/libwebp
     media-libs/mesa[egl(+),gles2(+)]
     media-video/pipewire
+    media-video/wireplumber
+    dev-libs/md4c
+    dev-cpp/tomlplusplus
     net-misc/curl
     sci-libs/libqalculate
     sys-auth/polkit

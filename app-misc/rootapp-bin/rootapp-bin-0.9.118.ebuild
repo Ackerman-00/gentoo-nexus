@@ -5,7 +5,7 @@ EAPI=8
 
 inherit desktop xdg-utils
 
-DESCRIPTION="Rootful app launcher for AppImage binaries"
+DESCRIPTION="Discord alternative designed for gaming communities and large online groups"
 HOMEPAGE="https://www.rootapp.com"
 SRC_URI="https://installer.rootapp.com/installer/Linux/X64/Root.AppImage -> ${P}-amd64.AppImage"
 
@@ -19,20 +19,27 @@ QA_PREBUILT="*"
 
 RDEPEND="
 	app-accessibility/at-spi2-core:2
+	app-crypt/libsecret
 	dev-libs/glib:2
 	dev-libs/icu
 	dev-libs/nspr
 	dev-libs/nss
+	dev-libs/openssl
+	dev-libs/wayland
 	media-libs/alsa-lib
 	media-libs/fontconfig
 	media-libs/freetype
+	media-libs/harfbuzz
+	media-libs/libpulse
 	media-libs/mesa[gbm(+)]
+	media-libs/vulkan-loader
 	net-print/cups
 	sys-apps/dbus
 	sys-libs/glibc
 	x11-libs/cairo
 	x11-libs/gdk-pixbuf:2
 	x11-libs/gtk+:3[X]
+	x11-libs/libdrm
 	x11-libs/libnotify
 	x11-libs/libX11
 	x11-libs/libXcomposite
@@ -41,13 +48,18 @@ RDEPEND="
 	x11-libs/libXext
 	x11-libs/libXfixes
 	x11-libs/libXi
+	x11-libs/libXinerama
 	x11-libs/libXrandr
 	x11-libs/libXrender
+	x11-libs/libXScrnSaver
+	x11-libs/libXt
 	x11-libs/libXtst
 	x11-libs/libxcb
 	x11-libs/libxkbcommon
 	x11-libs/pango
+	x11-misc/wl-clipboard
 	x11-misc/xdg-utils
+	x11-themes/hicolor-icon-theme
 	x11-base/xwayland
 "
 
@@ -68,8 +80,8 @@ src_install() {
 
 	newicon -s 256 squashfs-root/Root.png rootapp.png
 
-	make_desktop_entry "env AVALONIA_PLATFORM=Wayland rootapp %U" \
-		"Root" rootapp "Network;InstantMessaging"
+	make_desktop_entry "rootapp %U" \
+		"Root" rootapp "Network;InstantMessaging" "x-scheme-handler/rootapp"
 }
 
 pkg_postinst() {

@@ -31,8 +31,7 @@ DEPEND="
 "
 
 DEPEND+="
-	>=gui-libs/wlroots-0.19:=[X?]
-	<gui-libs/wlroots-0.20:=[X?]
+	>=gui-libs/wlroots-0.20:0.20=[X?]
 "
 
 RDEPEND="

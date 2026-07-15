@@ -231,6 +231,7 @@ cat > /etc/portage/binrepos.conf/gentoo-nexus.conf << EOF
 priority = 100
 sync-uri = ${NEXUS_BINHOST}
 verify-signature = false
+location = /var/cache/binhost/gentoo-nexus
 EOF
 
 cat > /etc/portage/binrepos.conf/gentoo.conf << EOF
@@ -252,16 +253,16 @@ MAKEOPTS="-j${CORES} -l${CORES}"
 USE="wayland X vulkan pipewire dbus elogind udev opengl dri gbm vaapi vdpau ffmpeg bluetooth screencast gstreamer minizip -daemon -systemd -aqua -cups"
 VIDEO_CARDS="amdgpu radeon radeonsi intel iris nouveau virgl"
 LINUX_FIRMWARE="${LINUX_FW}"
-FEATURES="binpkg binpkg-ignore-signature"
+FEATURES="getbinpkg binpkg-ignore-signature"
 ACCEPT_LICENSE="*"
 PKGDIR="/var/cache/binpkgs"
 DISTDIR="/var/cache/distfiles"
-LC_MESSAGES=C.utf8
+LC_MESSAGES=C.UTF-8
 PORTAGE_BINPKG_TAR_OPTS="--warning=no-unknown-keyword"
 EOF
 
 echo -e "${B}>>> Updating Portage to latest version${C}"
-emerge --oneshot --binpkg --usepkg sys-apps/portage 2>&1 | tail -5
+emerge --oneshot --getbinpkg --usepkg sys-apps/portage 2>&1 | tail -5
 
 # 4. PORTAGE CONFIG
 mkdir -p /etc/portage/{profile,package.use,package.mask,package.accept_keywords,package.unmask,package.license,package.env,env}
@@ -519,7 +520,7 @@ fi
 
 # 5. OVERLAYS
 echo -e "${B}>>> OVERLAYS${C}"
-emerge --noreplace --quiet --binpkg app-eselect/eselect-repository dev-vcs/git
+emerge --noreplace --quiet --getbinpkg app-eselect/eselect-repository dev-vcs/git
 
 repo_add_safe "gentoo-nexus" "git" "${NEXUS_REPO_URL}"
 [[ "${guru_choice,,}" == "y" ]]  && repo_enable_safe "guru"
@@ -578,7 +579,7 @@ INSTALL_LIST+=(
     x11-terms/alacritty x11-terms/kitty app-editors/nano sys-apps/ripgrep
 )
 
-BIN_OPTS="--binpkg --usepkg --keep-going --autounmask=y --autounmask-write --autounmask-keep-masks=n"
+BIN_OPTS="--getbinpkg --usepkg --keep-going --autounmask=y --autounmask-write --autounmask-keep-masks=n"
 EXCLUDES="--usepkg-exclude sys-auth/polkit --usepkg-exclude dev-libs/libei --usepkg-exclude media-video/wireplumber --usepkg-exclude media-libs/libpulse --usepkg-exclude sys-apps/accountsservice --usepkg-exclude sys-auth/elogind"
 
 emerge ${BIN_OPTS} --oneshot --quiet sys-apps/systemd-utils virtual/libudev || true
