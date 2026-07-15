@@ -6,11 +6,11 @@
 
 *A bleeding-edge Gentoo overlay & binary host for the x86-64-v3 Wayland desktop.*
 
-[![Build](https://img.shields.io/actions/workflow/status/Ackerman-00/gentoo-nexus/build.yml?style=for-the-badge&label=FORGE&logo=githubactions&logoColor=white&color=8b5cf6)](https://github.com/Ackerman-00/gentoo-nexus/actions)
+[![CI](https://img.shields.io/actions/workflow/status/Ackerman-00/gentoo-nexus/check-updates.yml?style=for-the-badge&label=CI&logo=githubactions&logoColor=white&color=8b5cf6)](https://github.com/Ackerman-00/gentoo-nexus/actions/workflows/check-updates.yml)
 &nbsp;&nbsp;
-[![Binhost](https://img.shields.io/badge/BINHOST-LIVE-8b5cf6?style=for-the-badge&logo=linux&logoColor=white)](https://github.com/Ackerman-00/gentoo-nexus/releases/tag/rolling)
+[![Binhost](https://img.shields.io/badge/BINHOST-rolling-8b5cf6?style=for-the-badge&logo=linux&logoColor=white)](https://github.com/Ackerman-00/gentoo-nexus/releases/tag/rolling)
 &nbsp;&nbsp;
-[![License](https://img.shields.io/badge/LICENSE-MIT-8b5cf6?style=for-the-badge)](LICENSE)
+[![License](https://img.shields.io/github/license/Ackerman-00/gentoo-nexus?style=for-the-badge&label=LICENSE&color=8b5cf6)](LICENSE)
 
 Pre-compiled binaries &middot; Nightly CI &middot; Drop-in Portage overlay
 
