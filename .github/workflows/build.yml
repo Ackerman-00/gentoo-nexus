@@ -216,7 +216,7 @@ jobs:
           CXXFLAGS="${COMMON_FLAGS}"
           FCFLAGS="${COMMON_FLAGS}"
           FFLAGS="${COMMON_FLAGS}"
-          VIDEO_CARDS="amdgpu radeonsi intel"
+          VIDEO_CARDS="-* amdgpu radeonsi"
           CPU_FLAGS_X86="avx avx2 f16c fma3 mmx mmxext popcnt sse sse2 sse3 sse4_1 sse4_2 ssse3"
           # USE flags are inherited from the selected desktop/gnome profile.
           # The official Gentoo x86-64-v3 binhost sets NO custom global USE (only
