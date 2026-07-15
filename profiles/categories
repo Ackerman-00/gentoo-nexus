@@ -1,10 +1,10 @@
 dev-python
-app-misc
-gui-libs
-x11-misc
-games-util
-app-office
-x11-base
 gui-wm
-net-im
+x11-misc
+gui-libs
+x11-base
+app-misc
+app-office
 www-client
+net-im
+games-util
