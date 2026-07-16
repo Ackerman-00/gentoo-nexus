@@ -29,12 +29,12 @@ Targets the **x86-64-v3** CPU baseline (Haswell-class Intel or Excavator/Ryzen-c
 2013+) and focuses on the Wayland desktop stack — compositors, shells, and the everyday
 tools around them.
 
-| | |
+| What | Details |
 |---|---|
-| ◆ **Overlay** | niri, mangowm, noctalia-v5, scenefx, and the rest of the Wayland stack |
-| ◆ **Rebuilds** | Official Gentoo packages (mesa, kernel, llvm, gcc, blender, godot, zed…) recompiled for x86-64-v3, with 32-bit support for gaming |
-| ◆ **CI** | Rebuilds automatically every night, or whenever upstream ships something new |
-| ◆ **Setup** | One script sets up the overlay, binary host, and package signing together |
+| **Overlay** | niri, mangowm, noctalia-v5, scenefx, and the rest of the Wayland stack |
+| **Official rebuilds** | mesa, kernel, llvm, gcc, blender, godot, zed, and more, recompiled for x86-64-v3, with 32-bit support for gaming |
+| **CI** | Rebuilds automatically every night, or whenever upstream ships something new |
+| **Setup** | One script sets up the overlay, binary host, and package signing together |
 
 **Hardware:** x86-64-v3 CPUs only (Intel Haswell+ / AMD Excavator+).
 **GPUs:** AMD ✓ · Intel ✓ · NVIDIA ✗ — not supported. Want it added?
