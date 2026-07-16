@@ -130,54 +130,88 @@ jobs:
       - name: Parse Queue & Normalize Targets
         id: queue
         run: |
+          echo ">>> === PARSE QUEUE DEBUG ==="
           INPUT="${{ inputs.package_list || github.event.inputs.package_list }}"
+          echo "INPUT=[${INPUT}]"
+
           if [ -z "$INPUT" ]; then
             echo ">>> No package list provided, using defaults"
             INPUT="llvm-core/llvm llvm-core/clang llvm-runtimes/compiler-rt sys-devel/gcc dev-libs/roct-thunk-interface dev-libs/rocr-runtime dev-libs/rocm-opencl-runtime sys-kernel/linux-firmware x11-drivers/xf86-video-amdgpu media-libs/vulkan-loader sys-kernel/gentoo-kernel sys-apps/portage media-libs/mesa media-libs/libva-intel-media-driver dev-util/mesa_clc media-video/ffmpeg games-util/heroic-bin app-editors/zed dev-util/rustup media-gfx/blender-bin dev-games/godot"
           fi
 
           FORCE="${{ inputs.force_rebuild || github.event.inputs.force_rebuild }}"
-          echo "FORCE_REBUILD=$FORCE" >> "$GITHUB_OUTPUT"
+          echo "FORCE_REBUILD=[${FORCE}]" >> "$GITHUB_OUTPUT"
+          echo "FORCE=[${FORCE}]"
 
           read -r -a PKGS <<< "$INPUT"
+          echo "PKGS count=${#PKGS[@]}"
+          for idx in "${!PKGS[@]}"; do echo "  PKGS[$idx]=[${PKGS[$idx]}]"; done
+
           TARGET="${PKGS[0]:-}"
           REMAINING=("${PKGS[@]:1}")
 
-          echo "TARGET_PKG=$TARGET" >> "$GITHUB_OUTPUT"
-          echo "REMAINING_PKGS=${REMAINING[*]:-}" >> "$GITHUB_OUTPUT"
+          echo "TARGET_PKG=[${TARGET}]" >> "$GITHUB_OUTPUT"
+          echo "REMAINING_PKGS=[${REMAINING[*]:-}]" >> "$GITHUB_OUTPUT"
 
           if [ -z "$TARGET" ]; then
+            echo ">>> TARGET empty — skip_compile=true"
             echo "skip_compile=true" >> "$GITHUB_OUTPUT"
             exit 0
           fi
 
           CPV="${TARGET#=}"
+          echo "CPV=[${CPV}]"
 
           # Always build if live ebuild or unversioned atom
           if [[ "$CPV" == *"-9999" ]] || [[ "$TARGET" != =* ]]; then
+            echo ">>> Live ebuild or unversioned — skip_compile=false"
             echo "skip_compile=false" >> "$GITHUB_OUTPUT"
             exit 0
           fi
 
           # Force rebuild (true = all, or specific atoms)
           if [[ "$FORCE" == "true" ]]; then
+            echo ">>> FORCE=true — skip_compile=false"
             echo "skip_compile=false" >> "$GITHUB_OUTPUT"
             exit 0
           fi
           for atom in $FORCE; do
             atom="${atom#=}"
             if [[ "$CPV" == "$atom"* ]]; then
+              echo ">>> FORCE atom [${atom}] matches CPV — skip_compile=false"
               echo "skip_compile=false" >> "$GITHUB_OUTPUT"
               exit 0
             fi
           done
 
-          # Skip if exact CPV already in Packages
+          # Skip if exact CPV already in Packages AND .gpkg.tar file exists
+          IN_PACKAGES=false
           if grep -qF "CPV: ${CPV}" binpkgs/Packages 2>/dev/null; then
+            IN_PACKAGES=true
+            echo ">>> CPV ${CPV} FOUND in binpkgs/Packages"
+          else
+            echo ">>> CPV ${CPV} NOT found in binpkgs/Packages"
+          fi
+
+          # Check if the actual .gpkg.tar exists in the workspace
+          PN="${CPV%%-*}"
+          GPKG_EXISTS=false
+          GPKG_PATH=$(find binpkgs -name "${PN}-[0-9]*.gpkg.tar" -print -quit 2>/dev/null || true)
+          if [ -n "$GPKG_PATH" ]; then
+            GPKG_EXISTS=true
+            echo ">>> Found .gpkg.tar: ${GPKG_PATH}"
+          else
+            echo ">>> No .gpkg.tar found for ${PN}"
+          fi
+
+          if [[ "$IN_PACKAGES" == "true" && "$GPKG_EXISTS" == "true" ]]; then
+            echo ">>> Both Packages and .gpkg.tar exist — skip_compile=true"
             echo "skip_compile=true" >> "$GITHUB_OUTPUT"
           else
+            echo ">>> Package missing (Packages=$IN_PACKAGES, gpkg=$GPKG_EXISTS) — skip_compile=false"
             echo "skip_compile=false" >> "$GITHUB_OUTPUT"
           fi
+          echo ">>> === END PARSE QUEUE DEBUG ==="
 
       - name: Write Docker Build Script
         if: steps.queue.outputs.skip_compile != 'true'

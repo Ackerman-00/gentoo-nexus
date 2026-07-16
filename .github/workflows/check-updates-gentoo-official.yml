@@ -126,7 +126,7 @@ jobs:
 
           BUILD_QUEUE="${BUILD_QUEUE# }"
           echo "build_list=$BUILD_QUEUE" >> "$GITHUB_OUTPUT"
-          echo "force_rebuild=" >> "$GITHUB_OUTPUT"
+          echo "force_rebuild=$BUILD_QUEUE" >> "$GITHUB_OUTPUT"
 
           if [ -z "$BUILD_QUEUE" ]; then
             echo ">>> All packages up to date. Nothing to build."
