@@ -332,12 +332,10 @@ CI handles version bumps, rebuilds, and index updates on its own — you just pu
 
 </details>
 
-<details>
-<summary><strong>▸ Troubleshooting</strong></summary>
-<br>
+**◆ Troubleshooting**
 
 <details>
-<summary>Portage keeps compiling instead of using the binhost</summary>
+<summary><strong>▸ Portage keeps compiling instead of using the binhost</strong></summary>
 <br>
 
 Check that `make.conf` has:
@@ -354,7 +352,7 @@ the binary.
 </details>
 
 <details>
-<summary>Signature verification errors</summary>
+<summary><strong>▸ Signature verification errors</strong></summary>
 <br>
 
 `nexus`'s own binaries are unsigned (`verify-signature = false`) — that's
@@ -364,7 +362,7 @@ once to trust it.
 </details>
 
 <details>
-<summary>Package not found / 404 after an update</summary>
+<summary><strong>▸ Package not found / 404 after an update</strong></summary>
 <br>
 
 Clear the local cache and resync:
@@ -377,7 +375,7 @@ nexus sync
 </details>
 
 <details>
-<summary>Mesa / Vulkan problems</summary>
+<summary><strong>▸ Mesa / Vulkan problems</strong></summary>
 <br>
 
 Make sure 32-bit support is enabled:
@@ -396,7 +394,7 @@ emerge -g --oneshot media-libs/mesa media-libs/vulkan-loader
 </details>
 
 <details>
-<summary>Duplicate repository error</summary>
+<summary><strong>▸ Duplicate repository error</strong></summary>
 <br>
 
 ```bash
@@ -404,8 +402,6 @@ eselect repository remove gentoo-nexus
 ```
 
 Then redo the overlay setup (**Manual install**, step 2).
-
-</details>
 
 </details>
 
