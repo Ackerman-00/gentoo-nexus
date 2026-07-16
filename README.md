@@ -41,15 +41,17 @@ tools around them.
 Open an [issue](https://github.com/Ackerman-00/gentoo-nexus/issues) or
 [PR](https://github.com/Ackerman-00/gentoo-nexus/pulls).
 
+</details>
+
 <details>
-<summary>Curious how it stays compatible with stock Gentoo?</summary>
+<summary><strong>◆ Compatibility with stock Gentoo</strong></summary>
 <br>
 
 Packages here are built with the **same compiler flags** as the
 [official Gentoo x86-64-v3 binhost](https://wiki.gentoo.org/wiki/Gentoo_binhost/Available_packages_and_configurations).
 That means your system can pull binaries from *both* sources at once without
 triggering a rebuild — as long as your `CPU_FLAGS_X86` matches (see
-[Configure make.conf](#-manual-install)).
+**Manual install** below).
 
 One nuance: nexus is built under an **OpenRC** profile, so its binaries default
 to `-systemd`. The official binhost also builds systemd profiles, so **systemd
@@ -59,7 +61,6 @@ niri, mangowm, or Hyprland regardless of init system or profile. Anything with
 USE flags that don't match gets rebuilt locally — nothing breaks, you just
 lose the binary shortcut for that one package.
 
-</details>
 </details>
 
 <details>
