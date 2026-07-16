@@ -85,7 +85,7 @@ jobs:
         run: |
           docker run --rm \
             -v "${{ github.workspace }}/binpkgs:/var/cache/binpkgs:rw" \
-            -v "${{ github.workspace }}/overlay:/var/db/repos/gentoo-nexus:ro" \
+            -v "${{ github.workspace }}:/var/db/repos/gentoo-nexus:ro" \
             gentoo/stage3:amd64-desktop-openrc \
             python3 -c "
           import os, shutil, re
@@ -102,19 +102,20 @@ jobs:
           repos = ['/var/db/repos/gentoo-nexus', '/var/db/repos/gentoo']
           pn_to_cat = {}
 
+          skip_top = {'metadata', 'profiles', 'eclass', 'scripts', 'binpkgs', 'distfiles', 'ccache', '.github'}
           for repo in repos:
               if not os.path.exists(repo): continue
               for cat in os.listdir(repo):
-                  if cat.startswith('.') or cat in ['metadata', 'profiles', 'eclass', 'scripts']: continue
+                  if cat.startswith('.') or cat in skip_top: continue
                   cat_path = os.path.join(repo, cat)
                   if not os.path.isdir(cat_path): continue
                   for pn in os.listdir(cat_path):
                       if pn not in pn_to_cat:
                           pn_to_cat[pn] = cat
 
-          # Fallback: parse Packages file for pn_to_cat (handles webrsync failure)
+          # Fallback: parse Packages file for pn_to_cat (for any pn still missing)
           packages_file = os.path.join(pkgdir, 'Packages')
-          if not pn_to_cat and os.path.exists(packages_file):
+          if os.path.exists(packages_file):
               with open(packages_file) as f:
                   for line in f:
                       if line.startswith('CPV: '):
@@ -532,6 +533,22 @@ jobs:
                       pn = m.group(1)
                       if pn not in pn_to_cat:
                           pn_to_cat[pn] = cat
+
+          # Also scan overlay ebuild tree for category resolution
+          skip_dirs = {'binpkgs', 'distfiles', 'ccache', '.git', '.github', 'profiles', 'metadata', 'eclass'}
+          for entry in sorted(os.listdir('.')):
+              if entry.startswith('.'): continue
+              if entry in skip_dirs: continue
+              cat_path = os.path.join('.', entry)
+              if not os.path.isdir(cat_path): continue
+              for pn in os.listdir(cat_path):
+                  pkg_path = os.path.join(cat_path, pn)
+                  if os.path.isdir(pkg_path):
+                      for fname in os.listdir(pkg_path):
+                          if fname.endswith('.ebuild'):
+                              if pn not in pn_to_cat:
+                                  pn_to_cat[pn] = entry
+                              break
 
           entries_to_add = []
           for root, dirs, files in os.walk(pkgdir):
