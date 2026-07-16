@@ -6,7 +6,7 @@
 
 **A pre-built Gentoo overlay and binary host for the Wayland desktop.**
 
-[![CI](https://img.shields.io/actions/workflow/status/Ackerman-00/gentoo-nexus/check-updates.yml?style=for-the-badge&label=CI&logo=githubactions&logoColor=white&color=8b5cf6)](https://github.com/Ackerman-00/gentoo-nexus/actions/workflows/check-updates.yml)
+[![Build](https://img.shields.io/github/actions/workflow/status/Ackerman-00/gentoo-nexus/build.yml?branch=main&style=for-the-badge&label=Build%20Relay&logo=githubactions&logoColor=white&color=8b5cf6)](https://github.com/Ackerman-00/gentoo-nexus/actions/workflows/build.yml)
 &nbsp;
 [![Binhost](https://img.shields.io/badge/BINHOST-rolling-8b5cf6?style=for-the-badge&logo=linux&logoColor=white)](https://github.com/Ackerman-00/gentoo-nexus/releases/tag/rolling)
 &nbsp;
