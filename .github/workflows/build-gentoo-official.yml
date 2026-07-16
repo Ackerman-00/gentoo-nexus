@@ -90,7 +90,11 @@ jobs:
 
           pkgdir = '/var/cache/binpkgs'
           os.makedirs('/var/db/repos/gentoo', exist_ok=True)
-          os.system('emerge-webrsync -q')
+
+          # Try emerge-webrsync; fallback gracefully if it fails
+          ret = os.system('emerge-webrsync -q 2>/dev/null')
+          if ret != 0:
+              ret = os.system('emerge-webrsync 2>/dev/null')
 
           repos = ['/var/db/repos/gentoo']
           pn_to_cat = {}
@@ -104,6 +108,21 @@ jobs:
                   for pn in os.listdir(cat_path):
                       if pn not in pn_to_cat:
                           pn_to_cat[pn] = cat
+
+          # Fallback: parse Packages file for pn_to_cat (handles webrsync failure)
+          packages_file = os.path.join(pkgdir, 'Packages')
+          if not pn_to_cat and os.path.exists(packages_file):
+              with open(packages_file) as f:
+                  for line in f:
+                      if line.startswith('CPV: '):
+                          cpv = line[5:].strip()
+                          if '/' in cpv:
+                              cat, pn_version = cpv.split('/', 1)
+                              split = pkgsplit(pn_version)
+                              if split:
+                                  pn, _, _ = split
+                                  if pn not in pn_to_cat:
+                                      pn_to_cat[pn] = cat
 
           for f in os.listdir(pkgdir):
               if not f.endswith('.gpkg.tar'): continue
@@ -348,6 +367,15 @@ jobs:
           echo ">>> Installing ccache..."
           FEATURES="-getbinpkg" emerge --oneshot --usepkg dev-util/ccache 2>/dev/null || true
 
+          echo ">>> Creating dummy kernel config for ebuild kernel-option checks..."
+          mkdir -p /usr/src/linux
+          cat > /usr/src/linux/.config << 'KCONFIG'
+CONFIG_FB=y
+CONFIG_FB_RADEON=m
+CONFIG_DRM_RADEON_UMS=m
+CONFIG_DRM_RADEON=y
+KCONFIG
+
           emaint binhost --fix
 
           emerge --oneshot --getbinpkg --backtrack=30 --quiet-build=y '>=dev-libs/gobject-introspection-1.86.0' 2>/dev/null || true
@@ -369,6 +397,14 @@ jobs:
               emerge --oneshot --getbinpkg --backtrack=30 --quiet-build=y "dev-libs/wayland" "dev-util/wayland-scanner" 2>/dev/null || {
                   emerge --oneshot --usepkg --getbinpkg --buildpkg --backtrack=30 --quiet-build=y "dev-libs/wayland" "dev-util/wayland-scanner" || true
               }
+          fi
+
+          # Pre-build xbitmaps from source for xorg targets (binary from official
+          # binhost can spuriously fail, cascading to drop xorg-server and drivers)
+          if echo "${TARGET}" | grep -qE "x11-drivers/|x11-base/xorg"; then
+              emerge --oneshot --buildpkg --getbinpkg=n --usepkg=n \
+                  --backtrack=30 --quiet-build=y \
+                  "x11-misc/xbitmaps" 2>/dev/null || true
           fi
 
           set +e
@@ -460,6 +496,77 @@ jobs:
       - name: Fix Permissions Post-Build
         if: steps.queue.outputs.skip_compile != 'true'
         run: sudo chown -R "$(id -u):$(id -g)" "${{ github.workspace }}"
+
+      - name: Reconcile Packages Index
+        if: steps.queue.outputs.skip_compile != 'true'
+        run: |
+          python3 << 'PYEOF'
+import os, re
+
+pkgdir = 'binpkgs'
+packages_file = os.path.join(pkgdir, 'Packages')
+
+existing_cpvs = set()
+if os.path.exists(packages_file):
+    with open(packages_file) as f:
+        for line in f:
+            if line.startswith('CPV: '):
+                existing_cpvs.add(line[5:].rstrip('\n'))
+
+# Build pn_to_cat from existing Packages entries
+pn_to_cat = {}
+for cpv in existing_cpvs:
+    if '/' in cpv:
+        cat, rest = cpv.split('/', 1)
+        m = re.match(r'^(.+?)-(\d[\w.*+-]*(?:-r\d+)?)$', rest)
+        if m:
+            pn = m.group(1)
+            if pn not in pn_to_cat:
+                pn_to_cat[pn] = cat
+
+entries_to_add = []
+for root, dirs, files in os.walk(pkgdir):
+    for f in files:
+        if not f.endswith('.gpkg.tar'):
+            continue
+        fullpath = os.path.join(root, f)
+        relpath = os.path.relpath(fullpath, pkgdir).replace('\\', '/')
+        parts = relpath.split('/')
+
+        if len(parts) >= 3:
+            # Structured: cat/pn/pf-buildid.gpkg.tar
+            cat, pn = parts[0], parts[1]
+            pf_buildid = parts[-1][:-9]  # strip .gpkg.tar
+            pf = re.sub(r'-\d+$', '', pf_buildid)
+            cpv = f"{cat}/{pf}"
+        elif len(parts) == 1:
+            # Flat: pf-buildid.gpkg.tar - try to determine category
+            pf_buildid = parts[-1][:-9]
+            pf = re.sub(r'-\d+$', '', pf_buildid)
+            m = re.match(r'^(.+?)-(\d[\w.*+-]*(?:-r\d+)?)$', pf)
+            if m and m.group(1) in pn_to_cat:
+                cat = pn_to_cat[m.group(1)]
+                cpv = f"{cat}/{pf}"
+            else:
+                print(f"  SKIP (no category): {relpath}")
+                continue
+        else:
+            print(f"  SKIP (ambiguous): {relpath}")
+            continue
+
+        if cpv not in existing_cpvs:
+            print(f"  ADD: {cpv}  ({relpath})")
+            entries_to_add.append((cpv, relpath))
+            existing_cpvs.add(cpv)
+
+if entries_to_add:
+    with open(packages_file, 'a') as pkgs:
+        for cpv, path in entries_to_add:
+            pkgs.write(f"\nCPV: {cpv}\nPATH: {path}\n")
+    print(f">>> Added {len(entries_to_add)} missing CPV entries to Packages")
+else:
+    print(">>> All .gpkg.tar files are already indexed in Packages")
+PYEOF
 
       # ---- topic: upload ----
       - name: Upload to GitHub Release
