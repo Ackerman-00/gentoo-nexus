@@ -249,7 +249,22 @@ emerge --getbinpkg gui-wm/niri
 
 `tools/nexus` is a small wrapper around Portage that lets you query and install
 from the `rolling` index without needing the full ebuild tree for the common
-set. Drop it on `PATH` (e.g. `/usr/local/bin/nexus`) and make it executable.
+set.
+
+Install it (one-liner):
+
+```bash
+curl -fsSL https://raw.githubusercontent.com/Ackerman-00/gentoo-nexus/main/tools/nexus \
+  -o /usr/local/bin/nexus && chmod +x /usr/local/bin/nexus
+```
+
+If you already synced the overlay, you can copy it locally instead:
+
+```bash
+install -m 0755 /var/db/repos/gentoo-nexus/tools/nexus /usr/local/bin/nexus
+```
+
+The `quickstart.sh` installer does this automatically (step 9).
 
 | command | what it does |
 | --- | --- |

@@ -672,6 +672,19 @@ wifi.backend=iwd
 NMC
 fi
 
+# 9. NEXUS CLI
+echo -e "${B}>>> INSTALLING nexus CLI${C}"
+install -d /usr/local/bin
+if [[ -f /var/db/repos/gentoo-nexus/tools/nexus ]]; then
+    install -m 0755 /var/db/repos/gentoo-nexus/tools/nexus /usr/local/bin/nexus
+    echo ">>> nexus CLI installed from synced overlay (/usr/local/bin/nexus)"
+else
+    curl -fsSL "${NEXUS_REPO_URL%.git}/raw/main/tools/nexus" -o /usr/local/bin/nexus 2>/dev/null \
+        && chmod 0755 /usr/local/bin/nexus \
+        && echo ">>> nexus CLI installed from GitHub (/usr/local/bin/nexus)" \
+        || echo ">>> WARNING: could not install nexus CLI"
+fi
+
 # COMPLETION
 INSTALL_COMPLETE="true"
 {
