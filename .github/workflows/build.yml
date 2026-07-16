@@ -303,6 +303,7 @@ jobs:
           llvm-core/llvm -xml abi_x86_32
           llvm-runtimes/compiler-rt abi_x86_32
           media-libs/mesa abi_x86_32
+          sys-apps/lm-sensors abi_x86_32
           media-libs/vulkan-loader abi_x86_32
           media-libs/alsa-lib abi_x86_32
           media-libs/libglvnd abi_x86_32 X
