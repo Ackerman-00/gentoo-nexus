@@ -395,7 +395,11 @@ jobs:
           # multilib flags on mesa).
           if echo "${TARGET}" | grep -qE "media-libs/mesa"; then
               echo ">>> Pre-building sysprof-capture with abi_x86_32 for mesa..."
-              FEATURES="-getbinpkg" emerge --oneshot --buildpkg --backtrack=30 --quiet-build=y \
+              # Force source build: override --usepkg/--getbinpkg from EMERGE_DEFAULT_OPTS
+              # and binpkg-respect-use so the locally-built binpkg with abi_x86_32 is
+              # used by the main mesa emerge.
+              emerge --oneshot --buildpkg --getbinpkg=n --usepkg=n --binpkg-respect-use=y \
+                  --backtrack=30 --quiet-build=y \
                   "dev-util/sysprof-capture" 2>/dev/null || true
           fi
 
