@@ -140,7 +140,7 @@ jobs:
           fi
 
           FORCE="${{ inputs.force_rebuild || github.event.inputs.force_rebuild }}"
-          echo "FORCE_REBUILD=[${FORCE}]" >> "$GITHUB_OUTPUT"
+          echo "FORCE_REBUILD=${FORCE}" >> "$GITHUB_OUTPUT"
           echo "FORCE=[${FORCE}]"
 
           read -r -a PKGS <<< "$INPUT"
@@ -150,8 +150,8 @@ jobs:
           TARGET="${PKGS[0]:-}"
           REMAINING=("${PKGS[@]:1}")
 
-          echo "TARGET_PKG=[${TARGET}]" >> "$GITHUB_OUTPUT"
-          echo "REMAINING_PKGS=[${REMAINING[*]:-}]" >> "$GITHUB_OUTPUT"
+          echo "TARGET_PKG=${TARGET}" >> "$GITHUB_OUTPUT"
+          echo "REMAINING_PKGS=${REMAINING[*]:-}" >> "$GITHUB_OUTPUT"
 
           if [ -z "$TARGET" ]; then
             echo ">>> TARGET empty — skip_compile=true"
