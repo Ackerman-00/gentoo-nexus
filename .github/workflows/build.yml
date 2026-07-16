@@ -379,12 +379,14 @@ jobs:
             done
           fi
 
+          CPV="${TARGET#=}"
           if [[ "$FORCE_MATCH" == "true" ]]; then
-            # Force rebuild: compile from SOURCE (no --usepkg/--getbinpkg) so new
-            # flags (e.g. VIDEO_CARDS) actually take effect. --buildpkgonly builds
-            # the .gpkg without installing into the throwaway container.
-            echo ">>> FORCE REBUILD: compiling ${TARGET} from source (no binpkg use)"
-            emerge --oneshot --buildpkg --buildpkgonly --backtrack=30 \
+            # Force rebuild: build the TARGET from SOURCE so new flags (e.g.
+            # VIDEO_CARDS) take effect, while dependencies are still fetched as
+            # binaries via --getbinpkg. --usepkg-exclude stops Portage reusing
+            # the existing target binary.
+            echo ">>> FORCE REBUILD: compiling ${TARGET} from source (deps from binpkg)"
+            emerge --oneshot --getbinpkg --buildpkg --usepkg-exclude "=${CPV}" \
               --binpkg-respect-use=y --quiet-build=y --keep-going \
               --autounmask=n \
               "${TARGET}" 2>&1 | tee /tmp/emerge.log
