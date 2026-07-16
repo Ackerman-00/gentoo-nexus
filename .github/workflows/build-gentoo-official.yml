@@ -187,7 +187,9 @@ jobs:
           set -euo pipefail
 
           TARGET="$1"
+          FORCE="${2:-}"
           echo ">>> Building single package: ${TARGET}"
+          echo ">>> Force rebuild flag: '${FORCE}'"
 
           echo ">>> Syncing Gentoo ebuild repository..."
           mkdir -p /var/db/repos/gentoo /etc/portage/repos.conf
@@ -325,10 +327,24 @@ jobs:
           touch /var/cache/binpkgs/.build_start
 
           # Safety skip check inside Docker (defense-in-depth):
+          # Only skip when NOT force-rebuilding. FORCE="true" forces all;
+          # a list of atoms forces only those matching the current CPV.
+          FORCE_MATCH="false"
+          if [[ "$FORCE" == "true" ]]; then
+            FORCE_MATCH="true"
+          else
+            for fatom in $FORCE; do
+              fatom="${fatom#=}"
+              if [[ "${TARGET#=}" == "$fatom"* ]]; then
+                FORCE_MATCH="true"
+                break
+              fi
+            done
+          fi
           if [[ "$TARGET" == =* ]]; then
             CPV="${TARGET#=}"
-            if grep -qF "CPV: ${CPV}" /var/cache/binpkgs/Packages 2>/dev/null; then
-              echo ">>> SKIPPING (already in Packages): $TARGET ($CPV)"
+            if [[ "$FORCE_MATCH" != "true" ]] && grep -qF "CPV: ${CPV}" /var/cache/binpkgs/Packages 2>/dev/null; then
+              echo ">>> SKIPPING (already in Packages, not force-rebuilding): $TARGET ($CPV)"
               echo ">>> Build skipped."
               exit 0
             fi
@@ -358,6 +374,7 @@ jobs:
 
           chmod +x build.sh
           echo "TARGET=${{ steps.queue.outputs.TARGET_PKG }}" >> "$GITHUB_ENV"
+          echo "FORCE_REBUILD=${{ steps.queue.outputs.FORCE_REBUILD }}" >> "$GITHUB_ENV"
 
       # ---- topic: docker-build ----
       - name: Build Package in Docker
@@ -370,7 +387,7 @@ jobs:
             -v "${{ github.workspace }}/ccache:/var/cache/ccache:rw" \
             -v "${{ github.workspace }}/build.sh:/build.sh:ro" \
             gentoo/stage3:amd64-desktop-openrc \
-            bash /build.sh "${{ env.TARGET }}"
+            bash /build.sh "${{ env.TARGET }}" "${{ env.FORCE_REBUILD }}"
 
       - name: Fix Permissions Post-Build
         if: steps.queue.outputs.skip_compile != 'true'
