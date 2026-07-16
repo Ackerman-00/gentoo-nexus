@@ -351,13 +351,15 @@ jobs:
           fi
 
           CPV="${TARGET#=}"
+          PN=$(echo "$CPV" | sed -E 's/-[0-9].*//')
           if [[ "$FORCE_MATCH" == "true" ]]; then
             # Force rebuild: build the TARGET from SOURCE so the new flags
             # (e.g. VIDEO_CARDS) actually take effect, while dependencies are
-            # still fetched as binaries via --getbinpkg. --usepkg-exclude keeps
-            # Portage from reusing the existing target binary.
+            # still fetched as binaries via --getbinpkg. --usepkg-exclude takes a
+            # package NAME (not a versioned atom) and stops Portage reusing the
+            # existing target binary.
             echo ">>> FORCE REBUILD: compiling ${TARGET} from source (deps from binpkg)"
-            emerge --oneshot --getbinpkg --buildpkg --usepkg-exclude "=${CPV}" \
+            emerge --oneshot --getbinpkg --buildpkg --usepkg-exclude "$PN" \
               --binpkg-respect-use=y --quiet-build=y --keep-going \
               --autounmask=n \
               "$TARGET" 2>&1 | tee /tmp/emerge.log
