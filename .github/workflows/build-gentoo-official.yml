@@ -350,26 +350,24 @@ jobs:
           emaint binhost --fix
 
           emerge --oneshot --getbinpkg --backtrack=30 --quiet-build=y '>=dev-libs/gobject-introspection-1.86.0' 2>/dev/null || true
+
+          # Pre-build sysprof-capture with abi_x86_32 when building mesa.
+          # Must run BEFORE gdbus-codegen emerge, which pulls sysprof-capture
+          # in as a glib dependency — otherwise the official binhost's binary
+          # (without abi_x86_32) gets cached and our rebuild attempt fails.
+          if echo "${TARGET}" | grep -qE "media-libs/mesa"; then
+              echo ">>> Pre-building sysprof-capture with abi_x86_32 for mesa..."
+              emerge --oneshot --buildpkg --getbinpkg=n --usepkg=n \
+                  --backtrack=30 --quiet-build=y \
+                  "dev-util/sysprof-capture" 2>/dev/null || true
+          fi
+
           emerge --oneshot --getbinpkg --backtrack=30 --quiet-build=y '>=dev-util/gdbus-codegen-2.88.1' 2>/dev/null || true
 
           if echo "${TARGET}" | grep -qE "media-libs/mesa|media-libs/libsdl2|media-video/ffmpeg|media-video/pipewire|x11-libs/gtk|gui-libs/libdecor|gui-wm/"; then
               emerge --oneshot --getbinpkg --backtrack=30 --quiet-build=y "dev-libs/wayland" "dev-util/wayland-scanner" 2>/dev/null || {
                   emerge --oneshot --usepkg --getbinpkg --buildpkg --backtrack=30 --quiet-build=y "dev-libs/wayland" "dev-util/wayland-scanner" || true
               }
-          fi
-
-          # Pre-build sysprof-capture with abi_x86_32 when building mesa,
-          # since the official Gentoo x86-64-v3 binhost does not provide
-          # a binary with that USE flag (it uses desktop profiles without
-          # multilib flags on mesa).
-          if echo "${TARGET}" | grep -qE "media-libs/mesa"; then
-              echo ">>> Pre-building sysprof-capture with abi_x86_32 for mesa..."
-              # Force source build: override --usepkg/--getbinpkg from EMERGE_DEFAULT_OPTS
-              # and binpkg-respect-use so the locally-built binpkg with abi_x86_32 is
-              # used by the main mesa emerge.
-              emerge --oneshot --buildpkg --getbinpkg=n --usepkg=n --binpkg-respect-use=y \
-                  --backtrack=30 --quiet-build=y \
-                  "dev-util/sysprof-capture" 2>/dev/null || true
           fi
 
           set +e
