@@ -305,11 +305,11 @@ jobs:
           echo ">>> Creating dummy kernel config for ebuild kernel-option checks..."
           mkdir -p /usr/src/linux
           cat > /usr/src/linux/.config << 'KCONFIG'
-CONFIG_FB=y
-CONFIG_FB_RADEON=m
-CONFIG_DRM_RADEON_UMS=m
-CONFIG_DRM_RADEON=y
-KCONFIG
+          CONFIG_FB=y
+          CONFIG_FB_RADEON=m
+          CONFIG_DRM_RADEON_UMS=m
+          CONFIG_DRM_RADEON=y
+          KCONFIG
 
           mkdir -p /etc/portage/binrepos.conf
           cat > /etc/portage/binrepos.conf/gentoo-official.conf << 'BINHOST'
