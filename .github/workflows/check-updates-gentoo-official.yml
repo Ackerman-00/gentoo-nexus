@@ -4,6 +4,17 @@ on:
   schedule:
     - cron: '0 8 * * *'
   workflow_dispatch:
+    inputs:
+      package_list:
+        description: 'Space-separated list of =cat/pkg-ver to build manually (e.g. "=media-libs/mesa-26.1.5 =sys-apps/portage-3.0.81.2"). Overrides auto-detect when provided.'
+        required: false
+        default: ''
+        type: string
+      force_rebuild:
+        description: 'Force rebuild of the provided package_list even if already present in rolling (true, or space-separated atom list). Only applies when package_list is set.'
+        required: false
+        default: ''
+        type: string
 
 concurrency:
   group: ${{ github.workflow }}-${{ github.ref }}
@@ -40,9 +51,25 @@ jobs:
           GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
           REPO: ${{ github.repository }}
         run: |
-          TRACKED_PKGS="llvm-core/llvm llvm-core/clang llvm-runtimes/compiler-rt sys-devel/gcc dev-libs/roct-thunk-interface dev-libs/rocr-runtime dev-libs/rocm-opencl-runtime sys-kernel/linux-firmware x11-drivers/xf86-video-amdgpu media-libs/vulkan-loader sys-kernel/gentoo-kernel sys-apps/portage media-libs/mesa media-libs/libva-intel-media-driver dev-util/mesa_clc media-video/ffmpeg games-util/heroic-bin app-editors/zed dev-util/rustup media-gfx/blender-bin dev-games/godot"
+           TRACKED_PKGS="llvm-core/llvm llvm-core/clang llvm-runtimes/compiler-rt sys-devel/gcc dev-libs/roct-thunk-interface dev-libs/rocr-runtime dev-libs/rocm-opencl-runtime sys-kernel/linux-firmware x11-drivers/xf86-video-amdgpu media-libs/vulkan-loader sys-kernel/gentoo-kernel sys-apps/portage media-libs/mesa media-libs/libva-intel-media-driver dev-util/mesa_clc media-video/ffmpeg games-util/heroic-bin app-editors/zed dev-util/rustup media-gfx/blender-bin dev-games/godot"
 
-          echo ">>> Fetching rolling release assets..."
+           MANUAL_LIST="${{ github.event.inputs.package_list }}"
+           MANUAL_FORCE="${{ github.event.inputs.force_rebuild }}"
+
+           if [ -n "$MANUAL_LIST" ]; then
+             echo ">>> Manual package_list provided — skipping auto-detect."
+             BUILD_QUEUE=""
+             for atom in $MANUAL_LIST; do
+               BUILD_QUEUE="$BUILD_QUEUE $atom"
+             done
+             BUILD_QUEUE="${BUILD_QUEUE# }"
+             echo "build_list=$BUILD_QUEUE" >> "$GITHUB_OUTPUT"
+             echo "force_rebuild=$MANUAL_FORCE" >> "$GITHUB_OUTPUT"
+             echo ">>> Manual packages to build: $BUILD_QUEUE (force: '${MANUAL_FORCE:-false}')"
+             exit 0
+           fi
+
+           echo ">>> Fetching rolling release assets..."
           EXISTING_ASSETS=$(gh release view rolling --json assets --jq '.assets[].name' 2>/dev/null || echo "")
 
           echo ">>> Resolving latest versions from Gentoo tree..."

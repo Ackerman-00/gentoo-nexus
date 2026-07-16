@@ -4,6 +4,17 @@ on:
   schedule:
     - cron: '0 6 * * 1,3,5'
   workflow_dispatch:
+    inputs:
+      package_list:
+        description: 'Space-separated list of =cat/pkg-ver to build manually (e.g. "=sys-apps/portage-3.0.81.2 =app-editors/zed-1.10.3"). Overrides auto-detect when provided.'
+        required: false
+        default: ''
+        type: string
+      force_rebuild:
+        description: 'Force rebuild of the provided package_list even if already present in rolling (true, or space-separated atom list). Only applies when package_list is set.'
+        required: false
+        default: ''
+        type: string
 
 concurrency:
   group: check-updates-${{ github.ref }}
@@ -386,7 +397,18 @@ jobs:
         env:
           GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
           REPO: ${{ github.repository }}
-        run: |
+         run: |
+          MANUAL_LIST="${{ github.event.inputs.package_list }}"
+          MANUAL_FORCE="${{ github.event.inputs.force_rebuild }}"
+
+          if [ -n "$MANUAL_LIST" ]; then
+            echo ">>> Manual package_list provided — skipping auto-detect."
+            echo "build_list=$MANUAL_LIST" >> "$GITHUB_OUTPUT"
+            echo "force_required=$MANUAL_FORCE" >> "$GITHUB_OUTPUT"
+            echo ">>> Manual packages to build: $MANUAL_LIST (force: '${MANUAL_FORCE:-false}')"
+            exit 0
+          fi
+
           EXISTING_ASSETS=$(gh release view rolling --json assets --jq '.assets[].name' 2>/dev/null || echo "")
           COMMITS_JSON=$(gh release download rolling -p 'commits.json' --repo "$REPO" --clobber -O /tmp/commits.json 2>/dev/null && cat /tmp/commits.json || echo '{}')
           CHANGED=$(cat changed_packages.txt 2>/dev/null || echo "")
