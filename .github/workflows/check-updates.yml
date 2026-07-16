@@ -397,59 +397,59 @@ jobs:
         env:
           GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
           REPO: ${{ github.repository }}
-          run: |
-            MANUAL_LIST="${{ github.event.inputs.package_list }}"
-            MANUAL_FORCE="${{ github.event.inputs.force_rebuild }}"
+        run: |
+          MANUAL_LIST="${{ github.event.inputs.package_list }}"
+          MANUAL_FORCE="${{ github.event.inputs.force_rebuild }}"
 
-            if [ -n "$MANUAL_LIST" ]; then
-              echo ">>> Manual package_list provided — skipping auto-detect."
-              echo "build_list=$MANUAL_LIST" >> "$GITHUB_OUTPUT"
-              echo "force_required=$MANUAL_FORCE" >> "$GITHUB_OUTPUT"
-              echo ">>> Manual packages to build: $MANUAL_LIST (force: '${MANUAL_FORCE:-false}')"
-              exit 0
-            fi
+          if [ -n "$MANUAL_LIST" ]; then
+            echo ">>> Manual package_list provided — skipping auto-detect."
+            echo "build_list=$MANUAL_LIST" >> "$GITHUB_OUTPUT"
+            echo "force_required=$MANUAL_FORCE" >> "$GITHUB_OUTPUT"
+            echo ">>> Manual packages to build: $MANUAL_LIST (force: '${MANUAL_FORCE:-false}')"
+            exit 0
+          fi
 
-            EXISTING_ASSETS=$(gh release view rolling --json assets --jq '.assets[].name' 2>/dev/null || echo "")
-            COMMITS_JSON=$(gh release download rolling -p 'commits.json' --repo "$REPO" --clobber -O /tmp/commits.json 2>/dev/null && cat /tmp/commits.json || echo '{}')
-            CHANGED=$(cat changed_packages.txt 2>/dev/null || echo "")
-            > packages_to_build.txt
-            CHANGED_ATOMS=""
+          EXISTING_ASSETS=$(gh release view rolling --json assets --jq '.assets[].name' 2>/dev/null || echo "")
+          COMMITS_JSON=$(gh release download rolling -p 'commits.json' --repo "$REPO" --clobber -O /tmp/commits.json 2>/dev/null && cat /tmp/commits.json || echo '{}')
+          CHANGED=$(cat changed_packages.txt 2>/dev/null || echo "")
+          > packages_to_build.txt
+          CHANGED_ATOMS=""
 
-            while IFS= read -r CPV; do
-               [ -z "$CPV" ] && continue
-               PN_PV="${CPV#*/}"
-               ATOM=$(python3 -c "import re,sys;cpv=sys.argv[1];m=re.match(r'^(.*?)-[0-9]',cpv);print(m.group(1)) if m else print(cpv)" "$CPV")
-               CATEGORY="${CPV%%/*}"
-               PN="${ATOM#*/}"
+          while IFS= read -r CPV; do
+             [ -z "$CPV" ] && continue
+             PN_PV="${CPV#*/}"
+             ATOM=$(python3 -c "import re,sys;cpv=sys.argv[1];m=re.match(r'^(.*?)-[0-9]',cpv);print(m.group(1)) if m else print(cpv)" "$CPV")
+             CATEGORY="${CPV%%/*}"
+             PN="${ATOM#*/}"
 
-               # Check 9999 live ebuilds: compare EGIT_COMMIT against stored commit
-               if echo "$CPV" | grep -q '\-9999$'; then
-                 EBUILD_PATH="${CATEGORY}/${PN}/${PN}-9999.ebuild"
-                 if [ -f "$EBUILD_PATH" ]; then
-                   EGIT_COMMIT=$(grep -oP '^EGIT_COMMIT="\K[a-fA-F0-9]+' "$EBUILD_PATH" 2>/dev/null || true)
-                   if [ -n "$EGIT_COMMIT" ]; then
-                     STORED_COMMIT=$(echo "$COMMITS_JSON" | python3 -c "import json,sys; d=json.load(sys.stdin); print(d.get('${ATOM}','') or '')" 2>/dev/null || true)
-                     if ( [ -z "$STORED_COMMIT" ] || [ "$STORED_COMMIT" != "$EGIT_COMMIT" ] ) && ! echo "$CHANGED" | grep -q "^${ATOM}$"; then
-                       echo "=$CPV" >> packages_to_build.txt
-                       echo "  [*] Stale commit for ${ATOM}: stored=${STORED_COMMIT} current=${EGIT_COMMIT}"
-                       continue
-                     fi
+             # Check 9999 live ebuilds: compare EGIT_COMMIT against stored commit
+             if echo "$CPV" | grep -q '\-9999$'; then
+               EBUILD_PATH="${CATEGORY}/${PN}/${PN}-9999.ebuild"
+               if [ -f "$EBUILD_PATH" ]; then
+                 EGIT_COMMIT=$(grep -oP '^EGIT_COMMIT="\K[a-fA-F0-9]+' "$EBUILD_PATH" 2>/dev/null || true)
+                 if [ -n "$EGIT_COMMIT" ]; then
+                   STORED_COMMIT=$(echo "$COMMITS_JSON" | python3 -c "import json,sys; d=json.load(sys.stdin); print(d.get('${ATOM}','') or '')" 2>/dev/null || true)
+                   if ( [ -z "$STORED_COMMIT" ] || [ "$STORED_COMMIT" != "$EGIT_COMMIT" ] ) && ! echo "$CHANGED" | grep -q "^${ATOM}$"; then
+                     echo "=$CPV" >> packages_to_build.txt
+                     echo "  [*] Stale commit for ${ATOM}: stored=${STORED_COMMIT} current=${EGIT_COMMIT}"
+                     continue
                    fi
                  fi
                fi
+             fi
 
-               if echo "$CHANGED" | grep -q "^${ATOM}$"; then
-                 echo "=$CPV" >> packages_to_build.txt
-                 CHANGED_ATOMS="$CHANGED_ATOMS =$CPV"
-               elif ! echo "$EXISTING_ASSETS" | grep -qE "^${PN_PV//./\\.}(-[0-9]+)?\.gpkg\.tar$"; then
-                 echo "=$CPV" >> packages_to_build.txt
-               fi
-            done < desired_state.txt
+             if echo "$CHANGED" | grep -q "^${ATOM}$"; then
+               echo "=$CPV" >> packages_to_build.txt
+               CHANGED_ATOMS="$CHANGED_ATOMS =$CPV"
+             elif ! echo "$EXISTING_ASSETS" | grep -qE "^${PN_PV//./\\.}(-[0-9]+)?\.gpkg\.tar$"; then
+               echo "=$CPV" >> packages_to_build.txt
+             fi
+          done < desired_state.txt
 
-            UNIQUE_BUILD_LIST=$(tr '\n' ' ' < packages_to_build.txt | tr ' ' '\n' | sort -u | xargs)
-            echo "build_list=$UNIQUE_BUILD_LIST" >> "$GITHUB_OUTPUT"
-            UNIQUE_CHANGED_ATOMS=$(echo $CHANGED_ATOMS | tr ' ' '\n' | sort -u | xargs)
-            echo "force_required=$UNIQUE_CHANGED_ATOMS" >> "$GITHUB_OUTPUT"
+          UNIQUE_BUILD_LIST=$(tr '\n' ' ' < packages_to_build.txt | tr ' ' '\n' | sort -u | xargs)
+          echo "build_list=$UNIQUE_BUILD_LIST" >> "$GITHUB_OUTPUT"
+          UNIQUE_CHANGED_ATOMS=$(echo $CHANGED_ATOMS | tr ' ' '\n' | sort -u | xargs)
+          echo "force_required=$UNIQUE_CHANGED_ATOMS" >> "$GITHUB_OUTPUT"
 
       # ---- topic: trigger-relay ----
       - name: Trigger Relay
