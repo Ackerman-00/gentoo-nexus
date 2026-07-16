@@ -199,6 +199,7 @@ jobs:
           set -euo pipefail
 
           RAW_TARGET="$1"
+          FORCE="${2:-}"
 
           echo ">>> Syncing Gentoo ebuild repository..."
           mkdir -p /var/db/repos/gentoo /etc/portage/repos.conf
@@ -364,11 +365,37 @@ jobs:
 
           set +e
           touch /var/cache/binpkgs/.build_start
-          emerge --oneshot --usepkg --getbinpkg --buildpkg --backtrack=30 \
-            --binpkg-respect-use=y --quiet-build=y --keep-going \
-            --autounmask=n \
-            "${TARGET}" 2>&1 | tee /tmp/emerge.log
-          BUILD_EXIT=${PIPESTATUS[0]}
+
+          FORCE_MATCH="false"
+          if [[ "$FORCE" == "true" ]]; then
+            FORCE_MATCH="true"
+          else
+            for fatom in $FORCE; do
+              fatom="${fatom#=}"
+              if [[ "${TARGET#=}" == "$fatom"* ]]; then
+                FORCE_MATCH="true"
+                break
+              fi
+            done
+          fi
+
+          if [[ "$FORCE_MATCH" == "true" ]]; then
+            # Force rebuild: compile from SOURCE (no --usepkg/--getbinpkg) so new
+            # flags (e.g. VIDEO_CARDS) actually take effect. --buildpkgonly builds
+            # the .gpkg without installing into the throwaway container.
+            echo ">>> FORCE REBUILD: compiling ${TARGET} from source (no binpkg use)"
+            emerge --oneshot --buildpkg --buildpkgonly --backtrack=30 \
+              --binpkg-respect-use=y --quiet-build=y --keep-going \
+              --autounmask=n \
+              "${TARGET}" 2>&1 | tee /tmp/emerge.log
+            BUILD_EXIT=${PIPESTATUS[0]}
+          else
+            emerge --oneshot --usepkg --getbinpkg --buildpkg --backtrack=30 \
+              --binpkg-respect-use=y --quiet-build=y --keep-going \
+              --autounmask=n \
+              "${TARGET}" 2>&1 | tee /tmp/emerge.log
+            BUILD_EXIT=${PIPESTATUS[0]}
+          fi
           set -e
 
           if [ "$BUILD_EXIT" -ne 0 ]; then
@@ -381,6 +408,7 @@ jobs:
 
           chmod +x build.sh
           echo "TARGET=${{ steps.queue.outputs.TARGET_PKG }}" >> "$GITHUB_ENV"
+          echo "FORCE_REBUILD=${{ github.event.inputs.force_rebuild }}" >> "$GITHUB_ENV"
 
       # ---- topic: docker-build ----
       - name: Build Package in Docker
@@ -394,7 +422,7 @@ jobs:
             -v "${{ github.workspace }}/ccache:/var/cache/ccache:rw" \
             -v "${{ github.workspace }}/build.sh:/build.sh:ro" \
             gentoo/stage3:amd64-desktop-openrc \
-            bash /build.sh "${{ env.TARGET }}"
+            bash /build.sh "${{ env.TARGET }}" "${{ env.FORCE_REBUILD }}"
 
       - name: Fix Permissions Post-Build
         if: steps.queue.outputs.skip_compile != 'true'

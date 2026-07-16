@@ -350,20 +350,37 @@ jobs:
             fi
           fi
 
-          emerge --oneshot --usepkg --getbinpkg --buildpkg --backtrack=30 \
-            --binpkg-respect-use=y --quiet-build=y --keep-going \
-            --autounmask=n \
-            "$TARGET" 2>&1 | tee /tmp/emerge.log
-          BUILD_EXIT=${PIPESTATUS[0]}
+          if [[ "$FORCE_MATCH" == "true" ]]; then
+            # Force rebuild: compile the target (and its deps) FROM SOURCE so the
+            # new flags (e.g. VIDEO_CARDS) actually take effect. No --usepkg /
+            # --getbinpkg, and --buildpkgonly builds the .gpkg without installing
+            # into the throwaway container.
+            echo ">>> FORCE REBUILD: compiling ${TARGET} from source (no binpkg use)"
+            emerge --oneshot --buildpkg --buildpkgonly --backtrack=30 \
+              --binpkg-respect-use=y --quiet-build=y --keep-going \
+              --autounmask=n \
+              "$TARGET" 2>&1 | tee /tmp/emerge.log
+            BUILD_EXIT=${PIPESTATUS[0]}
+          else
+            # Normal build: reuse existing binaries where possible, build target.
+            emerge --oneshot --usepkg --getbinpkg --buildpkg --backtrack=30 \
+              --binpkg-respect-use=y --quiet-build=y --keep-going \
+              --autounmask=n \
+              "$TARGET" 2>&1 | tee /tmp/emerge.log
+            BUILD_EXIT=${PIPESTATUS[0]}
+          fi
           set -e
 
           if [ "$BUILD_EXIT" -ne 0 ]; then
             echo ">>> BUILD FAILED with exit code $BUILD_EXIT"
             echo ">>> WARNING: emerge failed for ${TARGET} (exit $BUILD_EXIT). Check logs above."
           else
-            echo ">>> Creating binary package for upload..."
-            PN=$(echo "${TARGET#=}" | sed 's/-[0-9].*//')
-            quickpkg "$PN" 2>/dev/null || true
+            if [[ "$FORCE_MATCH" != "true" ]]; then
+              # Non-force path installed the binary; make sure a gpkg exists.
+              echo ">>> Creating binary package for upload..."
+              PN=$(echo "${TARGET#=}" | sed 's/-[0-9].*//')
+              quickpkg "$PN" 2>/dev/null || true
+            fi
             echo ">>> SUCCESS: ${TARGET} built"
           fi
 
