@@ -361,6 +361,7 @@ jobs:
           app-arch/bzip2 abi_x86_32
           app-arch/xz-utils abi_x86_32
           media-libs/freetype brotli
+          dev-util/sysprof-capture abi_x86_32
           GAMING
 
           mkdir -p /etc/portage/package.mask
