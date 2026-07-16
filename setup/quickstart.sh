@@ -674,6 +674,13 @@ fi
 
 # 9. NEXUS CLI
 echo -e "${B}>>> INSTALLING nexus CLI${C}"
+# nexus is a Python 3 script (stdlib only) — ensure python3 is present first.
+if ! command -v python3 >/dev/null 2>&1; then
+    echo ">>> python3 not found, installing dev-lang/python:3.13"
+    emerge --getbinpkg -q dev-lang/python:3.13 2>/dev/null || \
+        emerge -q dev-lang/python:3.13 2>/dev/null || \
+        echo ">>> WARNING: could not install python3"
+fi
 install -d /usr/local/bin
 if [[ -f /var/db/repos/gentoo-nexus/tools/nexus ]]; then
     install -m 0755 /var/db/repos/gentoo-nexus/tools/nexus /usr/local/bin/nexus
@@ -683,6 +690,9 @@ else
         && chmod 0755 /usr/local/bin/nexus \
         && echo ">>> nexus CLI installed from GitHub (/usr/local/bin/nexus)" \
         || echo ">>> WARNING: could not install nexus CLI"
+fi
+if command -v nexus >/dev/null 2>&1; then
+    echo ">>> nexus CLI ready: $(nexus --help >/dev/null 2>&1 && echo ok)"
 fi
 
 # COMPLETION

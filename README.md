@@ -249,22 +249,46 @@ emerge --getbinpkg gui-wm/niri
 
 `tools/nexus` is a small wrapper around Portage that lets you query and install
 from the `rolling` index without needing the full ebuild tree for the common
-set.
+set. It is a single Python 3 script using only the standard library (no pip
+packages), so the only dependency is a `python3` interpreter.
 
-Install it (one-liner):
+### 1. Make sure Python 3 is installed
+
+On a freshly installed Gentoo (or any minimal box), ensure `python3` exists:
+
+```bash
+# As root
+if ! command -v python3 >/dev/null 2>&1; then
+  emerge --getbinpkg -a dev-lang/python:3.13
+fi
+python3 --version   # must print Python 3.x
+```
+
+(The nexus ebuild tree already pulls in Python via `@world`, but if you are
+installing the CLI standalone on a non-nexus machine, run the emerge above.)
+
+### 2. Install the script
+
+One-liner (download from GitHub):
 
 ```bash
 curl -fsSL https://raw.githubusercontent.com/Ackerman-00/gentoo-nexus/main/tools/nexus \
   -o /usr/local/bin/nexus && chmod +x /usr/local/bin/nexus
 ```
 
-If you already synced the overlay, you can copy it locally instead:
+If you already synced the overlay, copy it locally instead:
 
 ```bash
 install -m 0755 /var/db/repos/gentoo-nexus/tools/nexus /usr/local/bin/nexus
 ```
 
-The `quickstart.sh` installer does this automatically (step 9).
+### 3. Verify
+
+```bash
+nexus --help
+```
+
+The `quickstart.sh` installer does steps 1–2 automatically (step 9).
 
 | command | what it does |
 | --- | --- |
