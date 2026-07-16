@@ -361,13 +361,21 @@ jobs:
           verify-signature = true
           BINHOST
 
+          # Portage >=3.0.81 ships a default [gentoo] binrepo at
+          # /usr/share/portage/config/binrepos.conf/gentoo.conf with
+          # x86-64 paths. Override it here (higher priority dir) to
+          # use x86-64-v3 instead of deleting the shipped file.
+          cat > /etc/portage/binrepos.conf/gentoo.conf << 'BINHOST'
+          [gentoo]
+          priority = 0
+          sync-uri = https://distfiles.gentoo.org/releases/amd64/binpackages/23.0/x86-64-v3/
+          location = /var/cache/binhost/gentoo-official-v3
+          verify-signature = true
+          BINHOST
+
           echo ">>> Updating Portage to latest version..."
           emaint binhost --fix
           FEATURES="-getbinpkg" emerge --oneshot sys-apps/portage
-          # Portage >=3.0.81 ships a default [gentoo] binrepo at
-          # /usr/share/portage/config/binrepos.conf/gentoo.conf which
-          # overrides our custom [gentoo-official-v3] with x86-64 paths.
-          rm -f /usr/share/portage/config/binrepos.conf/gentoo.conf
           quickpkg sys-apps/portage 2>/dev/null || true
 
           echo ">>> Installing ccache..."
