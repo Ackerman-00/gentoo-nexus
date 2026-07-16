@@ -358,6 +358,16 @@ jobs:
               }
           fi
 
+          # Pre-build sysprof-capture with abi_x86_32 when building mesa,
+          # since the official Gentoo x86-64-v3 binhost does not provide
+          # a binary with that USE flag (it uses desktop profiles without
+          # multilib flags on mesa).
+          if echo "${TARGET}" | grep -qE "media-libs/mesa"; then
+              echo ">>> Pre-building sysprof-capture with abi_x86_32 for mesa..."
+              FEATURES="-getbinpkg" emerge --oneshot --buildpkg --backtrack=30 --quiet-build=y \
+                  "dev-util/sysprof-capture" 2>/dev/null || true
+          fi
+
           set +e
           touch /var/cache/binpkgs/.build_start
 
