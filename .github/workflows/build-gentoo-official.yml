@@ -364,6 +364,10 @@ jobs:
           echo ">>> Updating Portage to latest version..."
           emaint binhost --fix
           FEATURES="-getbinpkg" emerge --oneshot sys-apps/portage
+          # Portage >=3.0.81 ships a default [gentoo] binrepo at
+          # /usr/share/portage/config/binrepos.conf/gentoo.conf which
+          # overrides our custom [gentoo-official-v3] with x86-64 paths.
+          rm -f /usr/share/portage/config/binrepos.conf/gentoo.conf
           quickpkg sys-apps/portage 2>/dev/null || true
 
           echo ">>> Installing ccache..."
@@ -401,13 +405,13 @@ jobs:
               }
           fi
 
-          # Pre-build xbitmaps from source for xorg targets (binary from official
-          # binhost can spuriously fail, cascading to drop xorg-server and drivers)
-          if echo "${TARGET}" | grep -qE "x11-drivers/|x11-base/xorg"; then
-              emerge --oneshot --buildpkg --getbinpkg=n --usepkg=n \
-                  --backtrack=30 --quiet-build=y \
-                  "x11-misc/xbitmaps" 2>/dev/null || true
-          fi
+          # Pre-build xbitmaps from source (binary from official binhost can
+          # spuriously fail, cascading to drop xorg-server and drivers).
+          # Always run because transitive deps (e.g. media-gfx/blender-bin
+          # pulling xorg-server) are not caught by a TARGET-based grep.
+          emerge --oneshot --buildpkg --getbinpkg=n --usepkg=n \
+              --backtrack=30 --quiet-build=y \
+              "x11-misc/xbitmaps" 2>/dev/null || true
 
           set +e
           touch /var/cache/binpkgs/.build_start
