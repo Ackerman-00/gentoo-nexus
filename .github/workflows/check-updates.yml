@@ -4,12 +4,6 @@ on:
   schedule:
     - cron: '0 6 * * 1,3,5'
   workflow_dispatch:
-    inputs:
-      force_rebuild:
-        description: 'Force rebuild of all tracked packages (ignores existing binpkgs). Set to true after global flag changes (e.g. VIDEO_CARDS).'
-        required: false
-        default: 'false'
-        type: string
 
 concurrency:
   group: check-updates-${{ github.ref }}
@@ -398,7 +392,6 @@ jobs:
           CHANGED=$(cat changed_packages.txt 2>/dev/null || echo "")
           > packages_to_build.txt
           CHANGED_ATOMS=""
-          FORCE_ALL="${{ github.event.inputs.force_rebuild }}"
 
           while IFS= read -r CPV; do
              [ -z "$CPV" ] && continue
@@ -426,8 +419,6 @@ jobs:
               if echo "$CHANGED" | grep -q "^${ATOM}$"; then
                  echo "=$CPV" >> packages_to_build.txt
                  CHANGED_ATOMS="$CHANGED_ATOMS =$CPV"
-              elif [[ "$FORCE_ALL" == "true" ]]; then
-                 echo "=$CPV" >> packages_to_build.txt
               elif ! echo "$EXISTING_ASSETS" | grep -qE "^${PN_PV//./\\.}(-[0-9]+)?\.gpkg\.tar$"; then
                  echo "=$CPV" >> packages_to_build.txt
               fi
@@ -436,11 +427,7 @@ jobs:
           UNIQUE_BUILD_LIST=$(tr '\n' ' ' < packages_to_build.txt | tr ' ' '\n' | sort -u | xargs)
           echo "build_list=$UNIQUE_BUILD_LIST" >> "$GITHUB_OUTPUT"
           UNIQUE_CHANGED_ATOMS=$(echo $CHANGED_ATOMS | tr ' ' '\n' | sort -u | xargs)
-          if [[ "${{ github.event.inputs.force_rebuild }}" == "true" ]]; then
-            echo "force_required=true" >> "$GITHUB_OUTPUT"
-          else
-            echo "force_required=$UNIQUE_CHANGED_ATOMS" >> "$GITHUB_OUTPUT"
-          fi
+          echo "force_required=$UNIQUE_CHANGED_ATOMS" >> "$GITHUB_OUTPUT"
 
       # ---- topic: trigger-relay ----
       - name: Trigger Relay
