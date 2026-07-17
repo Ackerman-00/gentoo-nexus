@@ -530,7 +530,17 @@ jobs:
         run: |
           python3 -m pip install --quiet zstandard 2>/dev/null || true
           python3 << 'PYEOF'
-          import os, re, io, gzip, tarfile, subprocess
+          # Reconcile the Packages index against the .gpkg.tar files on disk.
+          #
+          # Source of truth is the Packages index that `emaint binhost --fix`
+          # regenerated inside the build container (it indexes every local
+          # .gpkg.tar with correct metadata, and is already complete). We only
+          # APPEND entries for .gpkg.tar files that exist on disk but are NOT
+          # already in that index (e.g. files pulled from the rolling release
+          # whose category/path the build-time emaint could not resolve). We
+          # never rewrite existing entries, so re-running reconcile is
+          # idempotent: a second run adds nothing.
+          import os, re, io, tarfile, subprocess
 
           try:
               import zstandard
@@ -541,127 +551,145 @@ jobs:
           pkgdir = 'binpkgs'
           packages_file = os.path.join(pkgdir, 'Packages')
 
-          # Preserve the header block (everything before the first blank line)
-          # so portage consumers keep TIMESTAMP / arch metadata.
-          header = []
-          if os.path.exists(packages_file):
-              with open(packages_file) as f:
-                  for line in f:
-                      if line.strip() == '':
-                          break
-                      header.append(line.rstrip('\n'))
+          def _decompress(data):
+              if HAVE_ZSTD:
+                  return zstandard.ZstdDecompressor().decompressobj().decompress(data)
+              tf = '/tmp/meta.zst'
+              with open(tf, 'wb') as o:
+                  o.write(data)
+              raw = subprocess.check_output(['zstd', '-d', '-c', tf])
+              os.unlink(tf)
+              return raw
 
-          # Read existing entries (with full metadata) into a dict keyed by CPV.
-          existing = {}
+          def read_gpkg_metadata(gpkg_path):
+              """Return dict of the gpkg metadata/ directory contents (CATEGORY,
+              CPV, USE, BUILD_ID, BUILD_TIME, ...). Reading the metadata archive
+              near the front of the container keeps this cheap."""
+              try:
+                  with open(gpkg_path, 'rb') as fh:
+                      with tarfile.open(fileobj=fh, mode='r|') as tar:
+                          for m in tar:
+                              if m.name.endswith(('.tar.zst', '.tar.gz', '.tar.bz2')):
+                                  if 'metadata' not in m.name:
+                                      continue
+                                  raw = _decompress(tar.extractfile(m).read())
+                                  meta = {}
+                                  with tarfile.open(fileobj=io.BytesIO(raw)) as mt:
+                                      for mm in mt.getmembers():
+                                          if mm.name.startswith('metadata/') and not mm.isdir():
+                                              name = mm.name.split('/', 1)[1]
+                                              meta[name] = mt.extractfile(mm).read().decode('utf-8', 'replace').strip()
+                                  return meta
+              except Exception as e:
+                  print(f"  WARN: cannot read metadata from {gpkg_path}: {e}")
+              return {}
+
+          # --- Parse the (emaint-generated) Packages index as ground truth ---
+          header = []
+          entries = []
           if os.path.exists(packages_file):
               with open(packages_file) as f:
                   text = f.read()
-              for blk in text.split('\n\n')[1:]:
+              blocks = text.split('\n\n')
+              header = blocks[0].splitlines() if blocks else []
+              for blk in blocks[1:]:
                   d = {}
                   for line in blk.splitlines():
                       if ':' in line:
                           k, v = line.split(':', 1)
                           d[k.strip()] = v.strip()
                   if 'CPV' in d:
-                      existing[d['CPV']] = d
+                      entries.append(d)
 
-          # Build pn_to_cat by scanning the overlay ebuild tree for category
-          # resolution of flat-layout .gpkg.tar files.
-          skip_dirs = {'binpkgs', 'distfiles', 'ccache', '.git', '.github', 'profiles', 'metadata', 'eclass'}
+          # Index by (CPV, BUILD_ID) so binpkg-multi-instance builds (same CPV,
+          # different BUILD_ID) are all preserved, never collapsed.
+          indexed = {}
+          for d in entries:
+              key = (d.get('CPV', ''), d.get('BUILD_ID', ''))
+              indexed[key] = d
+
+          # Category fallback: scan local overlay ebuild tree.
+          skip_dirs = {'binpkgs', 'distfiles', 'ccache', '.git', '.github',
+                       'profiles', 'metadata', 'eclass'}
           pn_to_cat = {}
           for entry in sorted(os.listdir('.')):
-              if entry.startswith('.'): continue
-              if entry in skip_dirs: continue
+              if entry.startswith('.') or entry in skip_dirs:
+                  continue
               cat_path = os.path.join('.', entry)
-              if not os.path.isdir(cat_path): continue
+              if not os.path.isdir(cat_path):
+                  continue
               for pn in os.listdir(cat_path):
                   pkg_path = os.path.join(cat_path, pn)
-                  if os.path.isdir(pkg_path):
-                      for fname in os.listdir(pkg_path):
-                          if fname.endswith('.ebuild'):
-                              if pn not in pn_to_cat:
-                                  pn_to_cat[pn] = entry
-                              break
+                  if os.path.isdir(pkg_path) and os.path.exists(os.path.join(pkg_path, pn + '.ebuild')):
+                      pn_to_cat.setdefault(pn, entry)
 
           META_KEYS = ('BUILD_ID', 'BUILD_TIME', 'USE', 'CHOST', 'CBUILD',
                        'CFLAGS', 'CXXFLAGS', 'LDFLAGS', 'FEATURES', 'LICENSE',
                        'KEYWORDS', 'REQUIRED_USE', 'PROPERTIES', 'RESTRICT',
-                       'DEFINED_PHASES', 'IUSE', 'SLOT', 'EAPI', 'REPO_REVISIONS')
+                       'DEFINED_PHASES', 'IUSE', 'SLOT', 'EAPI', 'REPO_REVISIONS',
+                       'SIZE', 'MD5', 'SHA1', 'SHA512')
 
-          def read_gpkg_metadata(gpkg_path):
-              with open(gpkg_path, 'rb') as fh:
-                  with tarfile.open(fileobj=fh, mode='r|') as tar:
-                      for m in tar:
-                          if m.name.endswith('metadata.tar.zst'):
-                              data = tar.extractfile(m).read()
-                              if HAVE_ZSTD:
-                                  raw = zstandard.ZstdDecompressor().decompressobj().decompress(data)
-                              else:
-                                  tf = '/tmp/meta.zst'
-                                  with open(tf, 'wb') as o:
-                                      o.write(data)
-                                  raw = subprocess.check_output(['zstd', '-d', '-c', tf])
-                                  os.unlink(tf)
-                              meta = {}
-                              with tarfile.open(fileobj=io.BytesIO(raw)) as mt:
-                                  for mm in mt.getmembers():
-                                      if mm.name.startswith('metadata/') and not mm.isdir():
-                                          name = mm.name.split('/', 1)[1]
-                                          meta[name] = mt.extractfile(mm).read().decode('utf-8', 'replace').strip()
-                              return meta
-              return {}
+          def resolve_cat(cpv, meta, pn):
+              # 1) gpkg CATEGORY metadata (authoritative, GLEP 78).
+              if meta.get('CATEGORY'):
+                  return meta['CATEGORY']
+              # 2) overlay ebuild tree scan.
+              if pn in pn_to_cat:
+                  return pn_to_cat[pn]
+              return None
 
-          entries = []
-          seen = set()
-          skipped = 0
           added = 0
-          for root, dirs, files in os.walk(pkgdir):
+          for root, _dirs, files in os.walk(pkgdir):
               for f in files:
                   if not f.endswith('.gpkg.tar'):
                       continue
                   fullpath = os.path.join(root, f)
                   relpath = os.path.relpath(fullpath, pkgdir).replace('\\', '/')
-                  parts = relpath.split('/')
 
-                  if len(parts) >= 3:
-                      # Structured: cat/pn/pf-buildid.gpkg.tar
-                      cat, pn = parts[0], parts[1]
-                      pf = re.sub(r'-\d+$', '', parts[-1][:-9])
-                      cpv = f"{cat}/{pf}"
-                  elif len(parts) == 1:
-                      # Flat: pf-buildid.gpkg.tar - try to determine category
-                      pf = re.sub(r'-\d+$', '', parts[-1][:-9])
-                      m = re.match(r'^(.+?)-(\d[\w.*+-]*(?:-r\d+)?)$', pf)
-                      if m and m.group(1) in pn_to_cat:
-                          cpv = f"{pn_to_cat[m.group(1)]}/{pf}"
-                      else:
-                          print(f"  SKIP (no category): {relpath}")
-                          skipped += 1
+                  # Build CPV from the gpkg's own metadata when available; the
+                  # filename's prefix already encodes cat/pn/version for the
+                  # structured layout, but the metafile is authoritative.
+                  meta = read_gpkg_metadata(fullpath)
+                  cpv = meta.get('CPV')
+                  if not cpv:
+                      # Fall back to parsing the filename.
+                      base = f[:-9]  # strip .gpkg.tar
+                      base = re.sub(r'-\d+$', '', base)  # strip BUILD_ID
+                      m = re.match(r'^(.+?)-(\d[\w.*+-]*(?:-r\d+)?)$', base)
+                      if not m:
+                          print(f"  SKIP (unparseable): {relpath}")
                           continue
-                  else:
-                      print(f"  SKIP (ambiguous): {relpath}")
-                      skipped += 1
-                      continue
+                      pn = m.group(1)
+                      ver = m.group(2)
+                      cat = meta.get('CATEGORY') or pn_to_cat.get(pn)
+                      if not cat:
+                          print(f"  SKIP (no category): {relpath}")
+                          continue
+                      cpv = f"{cat}/{pn}-{ver}"
 
-                  if cpv in seen:
-                      print(f"  DUP: {cpv}  ({relpath})")
-                      continue
-                  seen.add(cpv)
+                  bid = meta.get('BUILD_ID', '')
+                  key = (cpv, bid)
+                  if key in indexed:
+                      continue  # already in the emaint index - keep as-is
 
-                  if cpv in existing:
-                      # Keep the previously indexed entry (full metadata).
-                      entries.append(existing[cpv])
-                  else:
-                      # Genuinely new: pull metadata from the gpkg container so
-                      # the index stays complete and portage/nexus stay happy.
-                      meta = read_gpkg_metadata(fullpath)
-                      block = {'CPV': cpv, 'PATH': relpath}
-                      for key in META_KEYS:
-                          if key in meta:
-                              block[key] = meta[key]
-                      entries.append(block)
-                      added += 1
-                      print(f"  ADD: {cpv}  ({relpath})")
+                  # Genuinely missing from the index: append it with full metadata
+                  # so the index stays complete and portage/nexus stay happy.
+                  block = {'CPV': cpv, 'PATH': relpath}
+                  for k in META_KEYS:
+                      if k in meta:
+                          block[k] = meta[k]
+                  if 'BUILD_ID' not in block and bid:
+                      block['BUILD_ID'] = bid
+                  # Ensure a BUILD_TIME exists (clients sort on it).
+                  if 'BUILD_TIME' not in block:
+                      try:
+                          block['BUILD_TIME'] = str(int(os.path.getmtime(fullpath)))
+                      except Exception:
+                          pass
+                  indexed[key] = block
+                  entries.append(block)
+                  added += 1
+                  print(f"  ADD: {cpv} (BUILD_ID={bid})  ({relpath})")
 
           with open(packages_file, 'w') as pkgs:
               for line in header:
@@ -673,11 +701,9 @@ jobs:
                   pkgs.write('\n')
 
           if added:
-              print(f">>> Reconciled Packages index: {len(entries)} CPV entries ({added} added, {skipped} skipped)")
-          elif skipped:
-              print(f">>> Reconciled Packages index: {len(entries)} CPV entries ({skipped} skipped, no category)")
+              print(f">>> Reconciled Packages index: {len(entries)} entries ({added} added)")
           else:
-              print(f">>> Reconciled Packages index: {len(entries)} CPV entries (no changes)")
+              print(f">>> Reconciled Packages index: {len(entries)} entries (no changes)")
           PYEOF
 
       # ---- topic: upload ----
