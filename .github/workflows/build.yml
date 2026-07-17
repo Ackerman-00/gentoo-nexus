@@ -494,6 +494,12 @@ jobs:
             echo ">>> WARNING: emerge failed for ${TARGET}. Check logs above."
           fi
 
+          # Force a FULL re-scan of the binary package directory. With the
+          # pkgdir-index-trusted FEATURE (set in the profile), emaint otherwise
+          # trusts the downloaded Packages index and silently drops any CPV
+          # whose .gpkg.tar is present but not already indexed -- causing the
+          # reconcile step to re-add the same "missing" entries every run.
+          rm -f /var/cache/binpkgs/Packages /var/cache/binpkgs/Packages.gz
           emaint binhost --fix
           BUILDSCRIPT
 
@@ -522,32 +528,47 @@ jobs:
       - name: Reconcile Packages Index
         if: steps.queue.outputs.skip_compile != 'true'
         run: |
+          python3 -m pip install --quiet zstandard 2>/dev/null || true
           python3 << 'PYEOF'
-          import os, re
+          import os, re, io, gzip, tarfile, subprocess
+
+          try:
+              import zstandard
+              HAVE_ZSTD = True
+          except ImportError:
+              HAVE_ZSTD = False
 
           pkgdir = 'binpkgs'
           packages_file = os.path.join(pkgdir, 'Packages')
 
-          existing_cpvs = set()
+          # Preserve the header block (everything before the first blank line)
+          # so portage consumers keep TIMESTAMP / arch metadata.
+          header = []
           if os.path.exists(packages_file):
               with open(packages_file) as f:
                   for line in f:
-                      if line.startswith('CPV: '):
-                          existing_cpvs.add(line[5:].rstrip('\n'))
+                      if line.strip() == '':
+                          break
+                      header.append(line.rstrip('\n'))
 
-          # Build pn_to_cat from existing Packages entries
-          pn_to_cat = {}
-          for cpv in existing_cpvs:
-              if '/' in cpv:
-                  cat, rest = cpv.split('/', 1)
-                  m = re.match(r'^(.+?)-(\d[\w.*+-]*(?:-r\d+)?)$', rest)
-                  if m:
-                      pn = m.group(1)
-                      if pn not in pn_to_cat:
-                          pn_to_cat[pn] = cat
+          # Read existing entries (with full metadata) into a dict keyed by CPV.
+          existing = {}
+          if os.path.exists(packages_file):
+              with open(packages_file) as f:
+                  text = f.read()
+              for blk in text.split('\n\n')[1:]:
+                  d = {}
+                  for line in blk.splitlines():
+                      if ':' in line:
+                          k, v = line.split(':', 1)
+                          d[k.strip()] = v.strip()
+                  if 'CPV' in d:
+                      existing[d['CPV']] = d
 
-          # Also scan overlay ebuild tree for category resolution
+          # Build pn_to_cat by scanning the overlay ebuild tree for category
+          # resolution of flat-layout .gpkg.tar files.
           skip_dirs = {'binpkgs', 'distfiles', 'ccache', '.git', '.github', 'profiles', 'metadata', 'eclass'}
+          pn_to_cat = {}
           for entry in sorted(os.listdir('.')):
               if entry.startswith('.'): continue
               if entry in skip_dirs: continue
@@ -562,7 +583,38 @@ jobs:
                                   pn_to_cat[pn] = entry
                               break
 
-          entries_to_add = []
+          META_KEYS = ('BUILD_ID', 'BUILD_TIME', 'USE', 'CHOST', 'CBUILD',
+                       'CFLAGS', 'CXXFLAGS', 'LDFLAGS', 'FEATURES', 'LICENSE',
+                       'KEYWORDS', 'REQUIRED_USE', 'PROPERTIES', 'RESTRICT',
+                       'DEFINED_PHASES', 'IUSE', 'SLOT', 'EAPI', 'REPO_REVISIONS')
+
+          def read_gpkg_metadata(gpkg_path):
+              with open(gpkg_path, 'rb') as fh:
+                  with tarfile.open(fileobj=fh, mode='r|') as tar:
+                      for m in tar:
+                          if m.name.endswith('metadata.tar.zst'):
+                              data = tar.extractfile(m).read()
+                              if HAVE_ZSTD:
+                                  raw = zstandard.ZstdDecompressor().decompressobj().decompress(data)
+                              else:
+                                  tf = '/tmp/meta.zst'
+                                  with open(tf, 'wb') as o:
+                                      o.write(data)
+                                  raw = subprocess.check_output(['zstd', '-d', '-c', tf])
+                                  os.unlink(tf)
+                              meta = {}
+                              with tarfile.open(fileobj=io.BytesIO(raw)) as mt:
+                                  for mm in mt.getmembers():
+                                      if mm.name.startswith('metadata/') and not mm.isdir():
+                                          name = mm.name.split('/', 1)[1]
+                                          meta[name] = mt.extractfile(mm).read().decode('utf-8', 'replace').strip()
+                              return meta
+              return {}
+
+          entries = []
+          seen = set()
+          skipped = 0
+          added = 0
           for root, dirs, files in os.walk(pkgdir):
               for f in files:
                   if not f.endswith('.gpkg.tar'):
@@ -574,36 +626,58 @@ jobs:
                   if len(parts) >= 3:
                       # Structured: cat/pn/pf-buildid.gpkg.tar
                       cat, pn = parts[0], parts[1]
-                      pf_buildid = parts[-1][:-9]  # strip .gpkg.tar
-                      pf = re.sub(r'-\d+$', '', pf_buildid)
+                      pf = re.sub(r'-\d+$', '', parts[-1][:-9])
                       cpv = f"{cat}/{pf}"
                   elif len(parts) == 1:
                       # Flat: pf-buildid.gpkg.tar - try to determine category
-                      pf_buildid = parts[-1][:-9]
-                      pf = re.sub(r'-\d+$', '', pf_buildid)
+                      pf = re.sub(r'-\d+$', '', parts[-1][:-9])
                       m = re.match(r'^(.+?)-(\d[\w.*+-]*(?:-r\d+)?)$', pf)
                       if m and m.group(1) in pn_to_cat:
-                          cat = pn_to_cat[m.group(1)]
-                          cpv = f"{cat}/{pf}"
+                          cpv = f"{pn_to_cat[m.group(1)]}/{pf}"
                       else:
                           print(f"  SKIP (no category): {relpath}")
+                          skipped += 1
                           continue
                   else:
                       print(f"  SKIP (ambiguous): {relpath}")
+                      skipped += 1
                       continue
 
-                  if cpv not in existing_cpvs:
-                      print(f"  ADD: {cpv}  ({relpath})")
-                      entries_to_add.append((cpv, relpath))
-                      existing_cpvs.add(cpv)
+                  if cpv in seen:
+                      print(f"  DUP: {cpv}  ({relpath})")
+                      continue
+                  seen.add(cpv)
 
-          if entries_to_add:
-              with open(packages_file, 'a') as pkgs:
-                  for cpv, path in entries_to_add:
-                      pkgs.write(f"\nCPV: {cpv}\nPATH: {path}\n")
-              print(f">>> Added {len(entries_to_add)} missing CPV entries to Packages")
+                  if cpv in existing:
+                      # Keep the previously indexed entry (full metadata).
+                      entries.append(existing[cpv])
+                  else:
+                      # Genuinely new: pull metadata from the gpkg container so
+                      # the index stays complete and portage/nexus stay happy.
+                      meta = read_gpkg_metadata(fullpath)
+                      block = {'CPV': cpv, 'PATH': relpath}
+                      for key in META_KEYS:
+                          if key in meta:
+                              block[key] = meta[key]
+                      entries.append(block)
+                      added += 1
+                      print(f"  ADD: {cpv}  ({relpath})")
+
+          with open(packages_file, 'w') as pkgs:
+              for line in header:
+                  pkgs.write(line + '\n')
+              pkgs.write('\n')
+              for block in entries:
+                  for k, v in block.items():
+                      pkgs.write(f"{k}: {v}\n")
+                  pkgs.write('\n')
+
+          if added:
+              print(f">>> Reconciled Packages index: {len(entries)} CPV entries ({added} added, {skipped} skipped)")
+          elif skipped:
+              print(f">>> Reconciled Packages index: {len(entries)} CPV entries ({skipped} skipped, no category)")
           else:
-              print(">>> All .gpkg.tar files are already indexed in Packages")
+              print(f">>> Reconciled Packages index: {len(entries)} CPV entries (no changes)")
           PYEOF
 
       # ---- topic: upload ----
@@ -614,15 +688,21 @@ jobs:
           REPO: ${{ github.repository }}
         run: |
           echo ">>> Ensuring rolling release exists..."
-          gh release view rolling --repo "$REPO" 2>/dev/null || \
-            gh release create rolling \
-              --repo "$REPO" \
-              --title "Nexus Rolling Binaries" \
-              --prerelease
+          if ! gh release view rolling --repo "$REPO" >/dev/null 2>&1; then
+            for i in 1 2 3; do
+              gh release create rolling \
+                --repo "$REPO" \
+                --title "Nexus Rolling Binaries" \
+                --prerelease 2>&1 && break
+              sleep 5
+            done
+          fi
 
           retry_upload() {
             for i in 1 2 3; do
-              gh release upload rolling "$1" --repo "$REPO" 2>&1 && return 0
+              # --clobber replaces an existing asset with the same name, so the
+              # Packages index is always refreshed even if the delete step missed.
+              gh release upload rolling --clobber "$1" --repo "$REPO" 2>&1 && return 0
               sleep 5
             done
             return 1
