@@ -85,46 +85,54 @@ jobs:
             -v "${{ github.workspace }}/binpkgs:/var/cache/binpkgs:rw" \
             -v "${{ github.workspace }}:/var/db/repos/gentoo-nexus:ro" \
             gentoo/stage3:amd64-desktop-openrc \
-            python3 -c "
-          import os, shutil, re, io, tarfile, subprocess
+            sh -c "
+          python3 -m pip install --quiet zstandard 2>/dev/null || true
+          python3 -c '
+          import os, shutil, io, tarfile
 
-          pkgdir = '/var/cache/binpkgs'
+          pkgdir = \"/var/cache/binpkgs\"
+
+          HAVE_ZSTD = False
+          try:
+              import zstandard
+              HAVE_ZSTD = True
+          except ImportError:
+              pass
 
           def _decompress(data):
-              tf = '/tmp/meta.zst'
-              with open(tf, 'wb') as o:
+              if HAVE_ZSTD:
+                  return zstandard.ZstdDecompressor().decompressobj().decompress(data)
+              import subprocess as sp
+              tf = \"/tmp/meta.zst\"
+              with open(tf, \"wb\") as o:
                   o.write(data)
-              raw = subprocess.check_output(['zstd', '-d', '-c', tf])
+              raw = sp.check_output([\"zstd\", \"-d\", \"-c\", tf])
               os.unlink(tf)
               return raw
 
           def gpkg_category(path):
-              # Authoritative category comes from the gpkg's own metadata/CATEGORY
-              # file (GLEP 78). Guessing the category from a pn->cat map in the
-              # ebuild tree mis-categorizes packages (e.g. json->dev-haskell,
-              # git->dev-ruby) so emaint indexes them at the wrong path and
-              # reconcile re-adds them every run.
               try:
-                  with open(path, 'rb') as fh:
-                      with tarfile.open(fileobj=fh, mode='r|') as tar:
+                  with open(path, \"rb\") as fh:
+                      with tarfile.open(fileobj=fh, mode=\"r|\") as tar:
                           for m in tar:
-                              if m.name.endswith(('.tar.zst', '.tar.gz', '.tar.bz2')) and 'metadata' in m.name:
+                              if m.name.endswith((\".tar.zst\", \".tar.gz\", \".tar.bz2\")) and \"metadata\" in m.name:
                                   raw = _decompress(tar.extractfile(m).read())
                                   with tarfile.open(fileobj=io.BytesIO(raw)) as mt:
                                       for mm in mt.getmembers():
-                                          if mm.name == 'metadata/CATEGORY':
-                                              return mt.extractfile(mm).read().decode('utf-8', 'replace').strip()
+                                          if mm.name == \"metadata/CATEGORY\":
+                                              return mt.extractfile(mm).read().decode(\"utf-8\", \"replace\").strip()
               except Exception as e:
-                  print(f'  WARN: cannot read CATEGORY from {path}: {e}')
+                  print(f\"  WARN: cannot read CATEGORY from {path}: {e}\")
               return None
 
           moved = 0
           for f in sorted(os.listdir(pkgdir)):
-              if not f.endswith('.gpkg.tar'): continue
+              if not f.endswith(\".gpkg.tar\"):
+                  continue
               path = os.path.join(pkgdir, f)
               cat = gpkg_category(path)
               if not cat:
-                  print(f'  SKIP (no CATEGORY): {f}')
+                  print(f\"  SKIP (no CATEGORY): {f}\")
                   continue
               target_dir = os.path.join(pkgdir, cat)
               target_path = os.path.join(target_dir, f)
@@ -132,7 +140,8 @@ jobs:
                   os.makedirs(target_dir, exist_ok=True)
                   shutil.move(path, target_path)
                   moved += 1
-          print(f'>>> Restored layout: {moved} file(s) placed under gpkg CATEGORY dirs')
+          print(f\">>> Restored layout: {moved} file(s) placed under gpkg CATEGORY dirs\")
+          '
           "
 
       - name: Fix Workspace Permissions
@@ -513,16 +522,10 @@ jobs:
         run: |
           python3 -m pip install --quiet zstandard 2>/dev/null || true
           python3 << 'PYEOF'
-          # Reconcile the Packages index against the .gpkg.tar files on disk.
-          #
-          # Source of truth is the Packages index that `emaint binhost --fix`
-          # regenerated inside the build container (it indexes every local
-          # .gpkg.tar with correct metadata, and is already complete). We only
-          # APPEND entries for .gpkg.tar files that exist on disk but are NOT
-          # already in that index (e.g. files pulled from the rolling release
-          # whose category/path the build-time emaint could not resolve). We
-          # never rewrite existing entries, so re-running reconcile is
-          # idempotent: a second run adds nothing.
+          # Regenerate the complete Packages index from scratch. Every .gpkg.tar
+          # file on disk contributes one entry with metadata read from the gpkg
+          # itself (GLEP 78). This is purely deterministic -- same files produce
+          # the same index, making a second run a no-op.
           import os, re, io, tarfile, subprocess
 
           try:
@@ -545,9 +548,6 @@ jobs:
               return raw
 
           def read_gpkg_metadata(gpkg_path):
-              """Return dict of the gpkg metadata/ directory contents (CATEGORY,
-              CPV, USE, BUILD_ID, BUILD_TIME, ...). Reading the metadata archive
-              near the front of the container keeps this cheap."""
               try:
                   with open(gpkg_path, 'rb') as fh:
                       with tarfile.open(fileobj=fh, mode='r|') as tar:
@@ -567,68 +567,13 @@ jobs:
                   print(f"  WARN: cannot read metadata from {gpkg_path}: {e}")
               return {}
 
-          # --- Parse the (emaint-generated) Packages index as ground truth ---
-          header = []
-          entries = []
-          if os.path.exists(packages_file):
-              with open(packages_file) as f:
-                  text = f.read()
-              blocks = text.split('\n\n')
-              header = blocks[0].splitlines() if blocks else []
-              for blk in blocks[1:]:
-                  d = {}
-                  for line in blk.splitlines():
-                      if ':' in line:
-                          k, v = line.split(':', 1)
-                          d[k.strip()] = v.strip()
-                  if 'CPV' in d:
-                      entries.append(d)
-
-          # Index by the on-disk PATH (relative to PKGDIR). emaint already
-          # records the true PATH + correct CPV for every real .gpkg.tar, so a
-          # file whose PATH is present is NOT re-added -- even when the gpkg's
-          # self-declared CPV (e.g. dev-ruby/rubygems) differs from the index
-          # CPV (e.g. virtual/rubygems). Keying by CPV would cause phantom
-          # re-adds every run; keying by PATH is exact and idempotent.
-          #
-          # Secondary key: (CPV, BUILD_ID). This catches the case where emaint
-          # indexed a file under a slightly different on-disk path than the one
-          # reconcile now sees (e.g. a file moved between flat and subdir
-          # layout). Matching on the file's own CPV+BUILD_ID avoids re-adding an
-          # entry that already represents this exact build.
-          indexed_paths = set()
-          indexed_cpv_bid = set()
-          for d in entries:
-              p = d.get('PATH', '')
-              if p:
-                  indexed_paths.add(p.replace('\\', '/'))
-              c = d.get('CPV', '')
-              b = d.get('BUILD_ID', '')
-              if c:
-                  indexed_cpv_bid.add((c, b))
-
-          # Category fallback: scan local overlay ebuild tree.
-          skip_dirs = {'binpkgs', 'distfiles', 'ccache', '.git', '.github',
-                       'profiles', 'metadata', 'eclass'}
-          pn_to_cat = {}
-          for entry in sorted(os.listdir('.')):
-              if entry.startswith('.') or entry in skip_dirs:
-                  continue
-              cat_path = os.path.join('.', entry)
-              if not os.path.isdir(cat_path):
-                  continue
-              for pn in os.listdir(cat_path):
-                  pkg_path = os.path.join(cat_path, pn)
-                  if os.path.isdir(pkg_path) and os.path.exists(os.path.join(pkg_path, pn + '.ebuild')):
-                      pn_to_cat.setdefault(pn, entry)
-
           META_KEYS = ('BUILD_ID', 'BUILD_TIME', 'USE', 'CHOST', 'CBUILD',
                        'CFLAGS', 'CXXFLAGS', 'LDFLAGS', 'FEATURES', 'LICENSE',
                        'KEYWORDS', 'REQUIRED_USE', 'PROPERTIES', 'RESTRICT',
                        'DEFINED_PHASES', 'IUSE', 'SLOT', 'EAPI', 'REPO_REVISIONS',
                        'SIZE', 'MD5', 'SHA1', 'SHA512')
 
-          added = 0
+          entries = []
           for root, _dirs, files in os.walk(pkgdir):
               for f in files:
                   if not f.endswith('.gpkg.tar'):
@@ -636,59 +581,44 @@ jobs:
                   fullpath = os.path.join(root, f)
                   relpath = os.path.relpath(fullpath, pkgdir).replace('\\', '/')
 
-                  # Read the gpkg's own metadata up front so we can match on
-                  # either the on-disk PATH or this build's (CPV, BUILD_ID).
                   meta = read_gpkg_metadata(fullpath)
                   cpv = meta.get('CPV')
                   if not cpv:
-                      base = re.sub(r'-\d+$', '', f[:-9])  # strip BUILD_ID + .gpkg.tar
+                      base = re.sub(r'-\d+$', '', f[:-9])
                       m = re.match(r'^(.+?)-(\d[\w.*+-]*(?:-r\d+)?)$', base)
                       if not m:
                           print(f"  SKIP (unparseable): {relpath}")
                           continue
-                      pn, ver = m.group(1), m.group(2)
-                      cat = meta.get('CATEGORY') or pn_to_cat.get(pn)
+                      cat = meta.get('CATEGORY')
                       if not cat:
                           print(f"  SKIP (no category): {relpath}")
                           continue
-                      cpv = f"{cat}/{pn}-{ver}"
+                      cpv = f"{cat}/{base}"
 
                   bid = meta.get('BUILD_ID', '')
-
-                  # If emaint already indexed this exact file (by PATH) or this
-                  # exact build (by CPV+BUILD_ID), keep it as-is.
-                  if relpath in indexed_paths or (cpv, bid) in indexed_cpv_bid:
-                      continue
-
                   block = {'CPV': cpv, 'PATH': relpath}
                   for k in META_KEYS:
                       if k in meta:
                           block[k] = meta[k]
                   if 'BUILD_ID' not in block and bid:
                       block['BUILD_ID'] = bid
-                  # Ensure a BUILD_TIME exists (clients sort on it).
                   if 'BUILD_TIME' not in block:
                       try:
                           block['BUILD_TIME'] = str(int(os.path.getmtime(fullpath)))
                       except Exception:
                           pass
                   entries.append(block)
-                  added += 1
-                  print(f"  ADD: {cpv} (BUILD_ID={bid})  ({relpath})")
 
+          header_line = f"'file' '{os.uname().sysname}/{os.uname().machine}' '1'"
           with open(packages_file, 'w') as pkgs:
-              for line in header:
-                  pkgs.write(line + '\n')
+              pkgs.write(header_line + '\n')
               pkgs.write('\n')
               for block in entries:
                   for k, v in block.items():
                       pkgs.write(f"{k}: {v}\n")
                   pkgs.write('\n')
 
-          if added:
-              print(f">>> Reconciled Packages index: {len(entries)} entries ({added} added)")
-          else:
-              print(f">>> Reconciled Packages index: {len(entries)} entries (no changes)")
+          print(f">>> Reconciled Packages index: {len(entries)} entries (total, regenerated from scratch)")
           PYEOF
 
       # ---- topic: upload ----
