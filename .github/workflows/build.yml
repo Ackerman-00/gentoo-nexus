@@ -267,7 +267,7 @@ jobs:
           # profile defaults + */* CPU_FLAGS_X86), so we match it here for binary
           # compatibility. ffmpeg codec flags are set per-package in package.use below.
           
-          FEATURES="getbinpkg buildpkg ccache binpkg-ignore-signature -sandbox -usersandbox -ipc-sandbox -network-sandbox -pid-sandbox"
+          FEATURES="getbinpkg buildpkg ccache binpkg-ignore-signature -pkgdir-index-trusted -sandbox -usersandbox -ipc-sandbox -network-sandbox -pid-sandbox"
           CCACHE_DIR="/var/cache/ccache"
           BINPKG_FORMAT="gpkg"
           PKGDIR="/var/cache/binpkgs"
