@@ -593,12 +593,17 @@ jobs:
                   if 'CPV' in d:
                       entries.append(d)
 
-          # Index by (CPV, BUILD_ID) so binpkg-multi-instance builds (same CPV,
-          # different BUILD_ID) are all preserved, never collapsed.
-          indexed = {}
+          # Index by the on-disk PATH (relative to PKGDIR). emaint already
+          # records the true PATH + correct CPV for every real .gpkg.tar, so a
+          # file whose PATH is present is NOT re-added -- even when the gpkg's
+          # self-declared CPV (e.g. dev-ruby/rubygems) differs from the index
+          # CPV (e.g. virtual/rubygems). Keying by CPV would cause phantom
+          # re-adds every run; keying by PATH is exact and idempotent.
+          indexed_paths = set()
           for d in entries:
-              key = (d.get('CPV', ''), d.get('BUILD_ID', ''))
-              indexed[key] = d
+              p = d.get('PATH', '')
+              if p:
+                  indexed_paths.add(p.replace('\\', '/'))
 
           # Category fallback: scan local overlay ebuild tree.
           skip_dirs = {'binpkgs', 'distfiles', 'ccache', '.git', '.github',
@@ -621,15 +626,6 @@ jobs:
                        'DEFINED_PHASES', 'IUSE', 'SLOT', 'EAPI', 'REPO_REVISIONS',
                        'SIZE', 'MD5', 'SHA1', 'SHA512')
 
-          def resolve_cat(cpv, meta, pn):
-              # 1) gpkg CATEGORY metadata (authoritative, GLEP 78).
-              if meta.get('CATEGORY'):
-                  return meta['CATEGORY']
-              # 2) overlay ebuild tree scan.
-              if pn in pn_to_cat:
-                  return pn_to_cat[pn]
-              return None
-
           added = 0
           for root, _dirs, files in os.walk(pkgdir):
               for f in files:
@@ -638,21 +634,21 @@ jobs:
                   fullpath = os.path.join(root, f)
                   relpath = os.path.relpath(fullpath, pkgdir).replace('\\', '/')
 
-                  # Build CPV from the gpkg's own metadata when available; the
-                  # filename's prefix already encodes cat/pn/version for the
-                  # structured layout, but the metafile is authoritative.
+                  # If emaint already indexed this exact file, keep it as-is.
+                  if relpath in indexed_paths:
+                      continue
+
+                  # Genuinely missing from the index: derive CPV from the gpkg's
+                  # own metadata (authoritative for the file's true category).
                   meta = read_gpkg_metadata(fullpath)
                   cpv = meta.get('CPV')
                   if not cpv:
-                      # Fall back to parsing the filename.
-                      base = f[:-9]  # strip .gpkg.tar
-                      base = re.sub(r'-\d+$', '', base)  # strip BUILD_ID
+                      base = re.sub(r'-\d+$', '', f[:-9])  # strip BUILD_ID + .gpkg.tar
                       m = re.match(r'^(.+?)-(\d[\w.*+-]*(?:-r\d+)?)$', base)
                       if not m:
                           print(f"  SKIP (unparseable): {relpath}")
                           continue
-                      pn = m.group(1)
-                      ver = m.group(2)
+                      pn, ver = m.group(1), m.group(2)
                       cat = meta.get('CATEGORY') or pn_to_cat.get(pn)
                       if not cat:
                           print(f"  SKIP (no category): {relpath}")
@@ -660,12 +656,6 @@ jobs:
                       cpv = f"{cat}/{pn}-{ver}"
 
                   bid = meta.get('BUILD_ID', '')
-                  key = (cpv, bid)
-                  if key in indexed:
-                      continue  # already in the emaint index - keep as-is
-
-                  # Genuinely missing from the index: append it with full metadata
-                  # so the index stays complete and portage/nexus stay happy.
                   block = {'CPV': cpv, 'PATH': relpath}
                   for k in META_KEYS:
                       if k in meta:
@@ -678,7 +668,6 @@ jobs:
                           block['BUILD_TIME'] = str(int(os.path.getmtime(fullpath)))
                       except Exception:
                           pass
-                  indexed[key] = block
                   entries.append(block)
                   added += 1
                   print(f"  ADD: {cpv} (BUILD_ID={bid})  ({relpath})")
