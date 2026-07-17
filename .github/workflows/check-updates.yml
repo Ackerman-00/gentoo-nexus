@@ -6,7 +6,7 @@ on:
   workflow_dispatch:
     inputs:
       package_list:
-        description: 'Space-separated list of =cat/pkg-ver to build manually (e.g. "=sys-apps/portage-3.0.81.2 =app-editors/zed-1.10.3"). Overrides auto-detect when provided.'
+        description: 'Space-separated list of =cat/pkg-ver to build manually (e.g. "=gui-wm/niri-25.02 =www-client/brave-origin-bin-1.75.0"). Overrides auto-detect when provided.'
         required: false
         default: ''
         type: string
