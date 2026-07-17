@@ -1,3 +1,8 @@
 __pycache__/
 *.pyc
 *.pyo
+scan.py
+changed_packages.txt
+packages_to_build.txt
+sync_overlay.sh
+desired_state.txt
