@@ -61,7 +61,7 @@ jobs:
           mkdir -p binpkgs overlay/metadata overlay/profiles distfiles ccache
           chmod -R 777 binpkgs overlay distfiles ccache
           rsync -a --exclude='.git' --exclude='binpkgs' --exclude='overlay' ./ overlay/
-          printf 'masters = gentoo\nthin-manifests = true\nsign-manifests = false\nmanifest-required-hashes = BLAKE2B SHA512\ncache-formats = md5-dict\nprofile-formats = portage-2\n' > overlay/metadata/layout.conf
+          printf 'masters = gentoo\nthin-manifests = true\nsign-manifests = false\nmanifest-required-hashes = BLAKE2B SHA512\nmanifest-hashes = BLAKE2B SHA512\ncache-formats = md5-dict\nprofile-formats = portage-2\n' > overlay/metadata/layout.conf
           echo "gentoo-nexus" > overlay/profiles/repo_name
 
       - name: Download Release Binaries
@@ -221,7 +221,7 @@ jobs:
             echo ">>> CPV ${CPV} NOT found in binpkgs/Packages"
           fi
 
-          PN="${CPV%%-*}"
+          PN=$(echo "$CPV" | sed -E 's/-[0-9].*//')
           GPKG_EXISTS=false
           GPKG_PATH=$(find binpkgs -name "${PN}-[0-9]*.gpkg.tar" -print -quit 2>/dev/null || true)
           if [ -n "$GPKG_PATH" ]; then
@@ -238,6 +238,47 @@ jobs:
             echo ">>> Package missing (Packages=$IN_PACKAGES, gpkg=$GPKG_EXISTS) — skip_compile=false"
             echo "skip_compile=false" >> "$GITHUB_OUTPUT"
           fi
+
+      - name: Clean Up Corrupt Assets From Rolling Release
+        if: steps.queue.outputs.skip_compile != 'true'
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+          REPO: ${{ github.repository }}
+        run: |
+          echo ">>> Cleaning corrupt assets from rolling release..."
+          if ! gh release view rolling --repo "$REPO" >/dev/null 2>&1; then
+            echo "  No rolling release yet — nothing to clean."
+            exit 0
+          fi
+
+          # Download the current Packages as a size reference for validation
+          gh release download rolling -p 'Packages' --repo "$REPO" --clobber -O /tmp/rl-Packages 2>/dev/null || touch /tmp/rl-Packages
+
+          echo "  Scanning existing assets..."
+          gh release view rolling --json assets --jq '.[] | .[] | "\(.name)|\(.size)"' --repo "$REPO" 2>/dev/null | while IFS='|' read name size; do
+            case "$name" in
+              *.gpkg.tar)
+                expected=$(grep -B1 "^PATH: ${name}$" /tmp/rl-Packages 2>/dev/null | head -1 | grep -oP '^SIZE: \K\d+' || true)
+                if [ -n "$expected" ] && [ "$size" -lt "$((expected * 8 / 10))" ]; then
+                  echo "  CORRUPT: $name (remote ${size}B < 80% of expected ${expected}B) — deleting"
+                  gh release delete-asset rolling "$name" --repo "$REPO" -y 2>&1 || true
+                elif [ "$size" -lt 512 ]; then
+                  echo "  CORRUPT: $name (too small: ${size}B) — deleting"
+                  gh release delete-asset rolling "$name" --repo "$REPO" -y 2>&1 || true
+                else
+                  echo "  OK: $name (${size}B)"
+                fi
+                ;;
+              Packages|Packages.gz)
+                echo "  Deleting stale index: $name"
+                gh release delete-asset rolling "$name" --repo "$REPO" -y 2>&1 || true
+                ;;
+              commits.json)
+                # Keep — will be updated later
+                ;;
+            esac
+          done
+          rm -f /tmp/rl-Packages
 
       - name: Write Monolithic Docker Build Script
         if: steps.queue.outputs.skip_compile != 'true'
@@ -427,16 +468,18 @@ jobs:
 
           emerge --oneshot --getbinpkg --backtrack=30 --quiet-build=y '>=dev-libs/gobject-introspection-1.86.0' 2>/dev/null || true
 
-          # Pre-build sysprof-capture with abi_x86_32 when building mesa.
-          # Must run BEFORE gdbus-codegen emerge, which pulls sysprof-capture
-          # in as a glib dependency — otherwise the official binhost's binary
-          # (without abi_x86_32) gets cached and our rebuild attempt fails.
-          if echo "${TARGET}" | grep -qE "media-libs/mesa"; then
-              echo ">>> Pre-building sysprof-capture with abi_x86_32 for mesa..."
-              emerge --oneshot --buildpkg --getbinpkg=n --usepkg=n \
-                  --backtrack=30 --quiet-build=y \
-                  "dev-util/sysprof-capture" 2>/dev/null || true
-          fi
+          # Pre-build sysprof-capture with abi_x86_32 before any target that
+          # might transitively pull in glib (e.g. via gdbus-codegen).
+          # Must run BEFORE gdbus-codegen emerge — otherwise the official
+          # binhost's binary (without abi_x86_32) gets cached and the rebuild
+          # attempt fails.  The local binrepo (priority 15) ensures the
+          # pre-built package is found by --getbinpkg before remote repos.
+          echo ">>> Pre-building sysprof-capture with abi_x86_32..."
+          emerge --oneshot --buildpkg --getbinpkg=n --usepkg=n \
+              --backtrack=30 --quiet-build=y \
+              "dev-util/sysprof-capture" 2>/dev/null || true
+          rm -f /var/cache/binpkgs/Packages /var/cache/binpkgs/Packages.gz
+          emaint binhost --fix
 
           emerge --oneshot --getbinpkg --backtrack=30 --quiet-build=y '>=dev-util/gdbus-codegen-2.88.1' 2>/dev/null || true
 
@@ -607,7 +650,7 @@ jobs:
                       cpv = f"{cat}/{base}"
 
                   bid = meta.get('BUILD_ID', '')
-                  block = {'CPV': cpv, 'PATH': relpath}
+                  block = {'CPV': cpv, 'PATH': relpath, 'URI': os.path.basename(relpath)}
                   for k in META_KEYS:
                       if k in meta:
                           block[k] = meta[k]
@@ -632,7 +675,34 @@ jobs:
           print(f">>> Reconciled Packages index: {len(entries)} entries ({len(entries)} total, regenerated from scratch)")
           PYEOF
 
-      # ---- topic: upload ----
+      # ---- topic: validate-and-upload ----
+      - name: Validate Binary Packages Before Upload
+        if: steps.queue.outputs.skip_compile != 'true'
+        run: |
+          echo ">>> Validating .gpkg.tar files before upload..."
+          CORRUPT=0
+          for f in $(find binpkgs -name '*.gpkg.tar' -type f); do
+            size=$(stat -c%s "$f" 2>/dev/null || echo 0)
+            if [ "$size" -lt 1000 ]; then
+              echo "  CORRUPT (too small: ${size}B): $f"
+              rm -f "$f"
+              CORRUPT=$((CORRUPT + 1))
+              continue
+            fi
+            if ! tar -tf "$f" >/dev/null 2>&1; then
+              echo "  CORRUPT (invalid tar): $f"
+              rm -f "$f"
+              CORRUPT=$((CORRUPT + 1))
+              continue
+            fi
+            echo "  OK (${size}B): $f"
+          done
+          if [ "$CORRUPT" -gt 0 ]; then
+            echo ">>> WARNING: Removed $CORRUPT corrupt package(s). Rerun reconcile to update Packages."
+          else
+            echo ">>> All packages valid."
+          fi
+
       - name: Upload to GitHub Release
         if: steps.queue.outputs.skip_compile != 'true'
         env:

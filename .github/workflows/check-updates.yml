@@ -279,7 +279,7 @@ jobs:
           REPOEOF
 
           mkdir -p /overlay/metadata /overlay/profiles
-          printf 'masters = gentoo\nthin-manifests = true\nsign-manifests = false\nmanifest-required-hashes = BLAKE2B SHA512\ncache-formats = md5-dict\nprofile-formats = portage-2\n' > /overlay/metadata/layout.conf
+          printf 'masters = gentoo\nthin-manifests = true\nsign-manifests = false\nmanifest-required-hashes = BLAKE2B SHA512\nmanifest-hashes = BLAKE2B SHA512\ncache-formats = md5-dict\nprofile-formats = portage-2\n' > /overlay/metadata/layout.conf
           find /overlay -mindepth 1 -maxdepth 1 -type d | grep -v -E '\.git|\.github|metadata|profiles|binpkgs|distfiles|ccache|setup' | sed 's|/overlay/||' > /overlay/profiles/categories
 
           # === Generate Manifests ===
