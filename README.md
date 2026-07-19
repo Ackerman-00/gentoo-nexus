@@ -17,11 +17,23 @@ an overlay plus a binary host, so `emerge` installs finished packages instead.
 
 </div>
 
-<br>
+---
 
-<details>
-<summary><strong>◆ What this is</strong></summary>
-<br>
+### Contents
+
+- [What this is](#what-this-is)
+- [Compatibility with stock Gentoo](#compatibility-with-stock-gentoo)
+- [Quick install](#quick-install)
+- [What's included](#whats-included)
+- [Manual install](#manual-install)
+- [The `nexus` CLI](#the-nexus-cli)
+- [Staying updated](#staying-updated)
+- [Contributing](#contributing)
+- [Troubleshooting](#troubleshooting)
+
+---
+
+## What this is
 
 Targets the **x86-64-v3** CPU baseline (Haswell-class Intel or Excavator/Ryzen-class AMD,
 2013+) and focuses on the Wayland desktop stack — compositors, shells, and the everyday
@@ -40,17 +52,13 @@ tools around them.
 > Open an [issue](https://github.com/Ackerman-00/gentoo-nexus/issues) or
 > [PR](https://github.com/Ackerman-00/gentoo-nexus/pulls).
 
-</details>
-
-<details>
-<summary><strong>◆ Compatibility with stock Gentoo</strong></summary>
-<br>
+## Compatibility with stock Gentoo
 
 Packages here are built with the **same compiler flags** as the
 [official Gentoo x86-64-v3 binhost](https://wiki.gentoo.org/wiki/Gentoo_binhost/Available_packages_and_configurations).
 That means your system can pull binaries from *both* sources at once without
 triggering a rebuild — as long as your `CPU_FLAGS_X86` matches (see
-**Manual install** below).
+[Manual install](#manual-install)).
 
 One nuance: nexus is built under an **OpenRC** profile, so its binaries default
 to `-systemd`. The official binhost also builds systemd profiles, so **systemd
@@ -60,11 +68,7 @@ niri, mangowm, or Hyprland regardless of init system or profile. Anything with
 USE flags that don't match gets rebuilt locally — nothing breaks, you just
 lose the binary shortcut for that one package.
 
-</details>
-
-<details>
-<summary><strong>▸ Quick install</strong></summary>
-<br>
+## Quick install
 
 One command. Partitions the disk, installs Gentoo, and lands you at a working
 Wayland desktop.
@@ -84,13 +88,9 @@ bash <(curl -Ls https://raw.githubusercontent.com/Ackerman-00/gentoo-nexus/main/
 | **Desktop** | Your choice of compositor — niri, mangowm, Hyprland, GNOME, or KDE |
 | **Services** | Greetd, Elogind, Seatd, PipeWire, Zram, Doas |
 
-Prefer to do it by hand? See **Manual install** below.
+Prefer to do it by hand? See [Manual install](#manual-install).
 
-</details>
-
-<details>
-<summary><strong>▸ What's included</strong></summary>
-<br>
+## What's included
 
 Everything below tracks upstream automatically — when a new release or commit
 lands, CI rebuilds it.
@@ -120,11 +120,7 @@ On top of these, the `rolling` binary host also mirrors the **official** Gentoo
 x86-64-v3 rebuilds — mesa, gcc, llvm, ffmpeg, ROCm, and most of a typical
 desktop `@world` — so almost everything installs pre-built.
 
-</details>
-
-<details>
-<summary><strong>▸ Manual install</strong></summary>
-<br>
+## Manual install
 
 **Prerequisites:** an x86-64-v3 CPU, a Gentoo LiveCD or existing install,
 internet access, and root.
@@ -137,26 +133,22 @@ internet access, and root.
 > Don't add extra flags (like `bmi`) even if your CPU supports them.
 
 ```bash
-# x86-64-v3 baseline — matches nexus + official v3 binhost
 COMMON_FLAGS="-O2 -pipe -march=x86-64-v3"
 CFLAGS="${COMMON_FLAGS}"
 CXXFLAGS="${COMMON_FLAGS}"
 FCFLAGS="${COMMON_FLAGS}"
 FFLAGS="${COMMON_FLAGS}"
 
-# Must match exactly — this is the USE-flag key Portage checks against binaries.
 CPU_FLAGS_X86="avx avx2 f16c fma3 mmx mmxext popcnt sse sse2 sse3 sse4_1 sse4_2 ssse3"
 
-# Global USE is left unset on purpose, for binary compatibility.
-# Set package-specific flags in /etc/portage/package.use instead, e.g.:
+# Package-specific USE goes in /etc/portage/package.use, e.g.:
 #   media-video/ffmpeg x264 x265 vpx opus dav1d vaapi vdpau
 
-# --- Pick ONE VIDEO_CARDS line ---
+# Pick ONE:
 VIDEO_CARDS="-* amdgpu radeonsi"        # AMD
 VIDEO_CARDS="-* intel"                  # Intel
 VIDEO_CARDS="-* amdgpu radeonsi intel"  # Both
 
-# Binary host consumption (nexus is unsigned)
 FEATURES="getbinpkg parallel-install binpkg-ignore-signature"
 EMERGE_DEFAULT_OPTS="--getbinpkg --quiet-build=y --keep-going"
 BINPKG_FORMAT="gpkg"
@@ -237,11 +229,7 @@ emerge --config sys-kernel/gentoo-kernel
 emerge --getbinpkg gui-wm/niri
 ```
 
-</details>
-
-<details>
-<summary><strong>▸ The nexus CLI</strong></summary>
-<br>
+## The `nexus` CLI
 
 `tools/nexus` is a thin wrapper around Portage — a faster way to browse and
 install from the `rolling` index without pulling the whole ebuild tree. It's a
@@ -297,11 +285,7 @@ By default, `install`/`update` are **strict**: if a binary isn't in `rolling`,
 the command fails rather than silently compiling. Add `--fallback` to also
 allow the official binhost, or a source build as a last resort.
 
-</details>
-
-<details>
-<summary><strong>▸ Staying updated</strong></summary>
-<br>
+## Staying updated
 
 ```bash
 nexus update
@@ -311,19 +295,15 @@ emerge --getbinpkg -uDN @world
 
 CI handles version bumps, rebuilds, and index updates on its own — you just pull.
 
-</details>
-
-<details>
-<summary><strong>▸ Contributing</strong></summary>
-<br>
+## Contributing
 
 **Ways to help**
 
 | | |
 |---|---|
-| ▸ [Request a package](https://github.com/Ackerman-00/gentoo-nexus/issues/new) | Open an issue with the atom name and upstream URL |
-| ▸ [Submit one yourself](https://github.com/Ackerman-00/gentoo-nexus/pulls) | Follow the existing folder structure, include a `metadata.xml` |
-| ▸ [Report a build failure](https://github.com/Ackerman-00/gentoo-nexus/actions) | Run the **Build Relay** workflow from the Actions tab |
+| [Request a package](https://github.com/Ackerman-00/gentoo-nexus/issues/new) | Open an issue with the atom name and upstream URL |
+| [Submit one yourself](https://github.com/Ackerman-00/gentoo-nexus/pulls) | Follow the existing folder structure, include a `metadata.xml` |
+| [Report a build failure](https://github.com/Ackerman-00/gentoo-nexus/actions) | Run the **Build Relay** workflow from the Actions tab |
 
 **Adding a package**
 
@@ -332,12 +312,12 @@ CI handles version bumps, rebuilds, and index updates on its own — you just pu
 3. Add a `metadata.xml` with maintainer + upstream info
 4. Open a [pull request](https://github.com/Ackerman-00/gentoo-nexus/pulls)
 
-</details>
+## Troubleshooting
 
-**◆ Troubleshooting**
+Click whichever matches what you're seeing:
 
 <details>
-<summary><strong>▸ Portage keeps compiling instead of using the binhost</strong></summary>
+<summary>Portage keeps compiling instead of using the binhost</summary>
 <br>
 
 Check that `make.conf` has:
@@ -354,7 +334,7 @@ the binary.
 </details>
 
 <details>
-<summary><strong>▸ Signature verification errors</strong></summary>
+<summary>Signature verification errors</summary>
 <br>
 
 `nexus`'s own binaries are unsigned (`verify-signature = false`) — that's
@@ -364,7 +344,7 @@ once to trust it.
 </details>
 
 <details>
-<summary><strong>▸ Package not found / 404 after an update</strong></summary>
+<summary>Package not found / 404 after an update</summary>
 <br>
 
 Clear the local cache and resync:
@@ -377,7 +357,7 @@ nexus sync
 </details>
 
 <details>
-<summary><strong>▸ Mesa / Vulkan problems</strong></summary>
+<summary>Mesa / Vulkan problems</summary>
 <br>
 
 Make sure 32-bit support is enabled:
@@ -396,18 +376,18 @@ emerge -g --oneshot media-libs/mesa media-libs/vulkan-loader
 </details>
 
 <details>
-<summary><strong>▸ Duplicate repository error</strong></summary>
+<summary>Duplicate repository error</summary>
 <br>
 
 ```bash
 eselect repository remove gentoo-nexus
 ```
 
-Then redo the overlay setup (**Manual install**, step 2).
+Then redo the overlay setup ([Manual install](#manual-install), step 2).
 
 </details>
 
-<br>
+---
 
 <div align="center">
 
