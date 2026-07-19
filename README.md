@@ -1,10 +1,8 @@
 <div align="center">
 
-<img src="https://www.gentoo.org/assets/img/logo/gentoo-signet.svg" width="80px" />
+<img src="https://capsule-render.vercel.app/api?type=soft&color=0:0f0c29,50:44337a,100:8b5cf6&height=200&section=header&text=gentoo-nexus&fontSize=54&fontColor=ffffff&fontAlignY=36&animation=fadeIn&desc=A%20pre-built%20Gentoo%20overlay%20and%20binary%20host%20for%20the%20Wayland%20desktop&descAlignY=60&descSize=16" width="100%" alt="gentoo-nexus — a pre-built Gentoo overlay and binary host for the Wayland desktop" />
 
-# gentoo-nexus
-
-**A pre-built Gentoo overlay and binary host for the Wayland desktop.**
+<img src="https://www.gentoo.org/assets/img/logo/gentoo-signet.svg" width="48px" />
 
 [![Build](https://img.shields.io/github/actions/workflow/status/Ackerman-00/gentoo-nexus/build.yml?branch=main&style=for-the-badge&label=Build%20Relay&logo=githubactions&logoColor=white&color=8b5cf6)](https://github.com/Ackerman-00/gentoo-nexus/actions/workflows/build.yml)
 &nbsp;
@@ -12,14 +10,14 @@
 &nbsp;
 [![License](https://img.shields.io/github/license/Ackerman-00/gentoo-nexus?style=for-the-badge&label=LICENSE&color=8b5cf6)](LICENSE)
 
-No compiling · Nightly rebuilds · Drop-in Portage overlay
+`No compiling` · `Nightly rebuilds` · `Drop-in Portage overlay`
 
 Gentoo normally means building everything from source. **gentoo-nexus skips that** —
 an overlay plus a binary host, so `emerge` installs finished packages instead.
 
 </div>
 
----
+<br>
 
 <details>
 <summary><strong>◆ What this is</strong></summary>
@@ -36,10 +34,11 @@ tools around them.
 | **CI** | Rebuilds automatically every night, or whenever upstream ships something new |
 | **Setup** | One script sets up the overlay, binary host, and package signing together |
 
-**Hardware:** x86-64-v3 CPUs only (Intel Haswell+ / AMD Excavator+).
-**GPUs:** AMD ✓ · Intel ✓ · NVIDIA ✗ — not supported. Want it added?
-Open an [issue](https://github.com/Ackerman-00/gentoo-nexus/issues) or
-[PR](https://github.com/Ackerman-00/gentoo-nexus/pulls).
+> [!IMPORTANT]
+> **Hardware:** x86-64-v3 CPUs only (Intel Haswell+ / AMD Excavator+).
+> **GPUs:** AMD ✓ · Intel ✓ · NVIDIA ✗ — not supported. Want it added?
+> Open an [issue](https://github.com/Ackerman-00/gentoo-nexus/issues) or
+> [PR](https://github.com/Ackerman-00/gentoo-nexus/pulls).
 
 </details>
 
@@ -70,8 +69,9 @@ lose the binary shortcut for that one package.
 One command. Partitions the disk, installs Gentoo, and lands you at a working
 Wayland desktop.
 
-> **Heads up —** this script assumes specific hardware and hasn't been tested
-> broadly. Read it before running it on anything you care about.
+> [!WARNING]
+> This script assumes specific hardware and hasn't been tested broadly. Read
+> it before running it on anything you care about.
 
 ```bash
 bash <(curl -Ls https://raw.githubusercontent.com/Ackerman-00/gentoo-nexus/main/setup/quickstart.sh)
@@ -131,12 +131,13 @@ internet access, and root.
 
 ### 1 · Configure make.conf
 
+> [!IMPORTANT]
 > Binaries are matched by `CPU_FLAGS_X86`. If yours doesn't match the official
 > x86-64-v3 set exactly, Portage rejects the binary and rebuilds from source.
 > Don't add extra flags (like `bmi`) even if your CPU supports them.
 
 ```bash
-# x86-64-v3 baseline — matches nexus + the official v3 binhost
+# x86-64-v3 baseline — matches nexus + official v3 binhost
 COMMON_FLAGS="-O2 -pipe -march=x86-64-v3"
 CFLAGS="${COMMON_FLAGS}"
 CXXFLAGS="${COMMON_FLAGS}"
@@ -259,9 +260,9 @@ fi
 python3 --version   # must print Python 3.x
 ```
 
-> **Note —** a normal Gentoo install already pulls in Python via `@world`.
-> This step only matters if you're running the CLI standalone on a
-> non-nexus machine.
+> [!NOTE]
+> A normal Gentoo install already pulls in Python via `@world`. This step
+> only matters if you're running the CLI standalone on a non-nexus machine.
 
 ### 2 · Install the script
 
@@ -278,8 +279,9 @@ Already synced the overlay? Copy it locally instead:
 install -m 0755 /var/db/repos/gentoo-nexus/tools/nexus /usr/local/bin/nexus
 ```
 
-> **Note —** `quickstart.sh` installs this for you automatically (step 9) —
-> nothing to do here if you used the one-liner.
+> [!TIP]
+> `quickstart.sh` installs this for you automatically (step 9) — nothing to
+> do here if you used the one-liner.
 
 | Command | Does |
 |---|---|
@@ -405,9 +407,11 @@ Then redo the overlay setup (**Manual install**, step 2).
 
 </details>
 
----
+<br>
 
 <div align="center">
+
+<img src="https://capsule-render.vercel.app/api?type=soft&color=0:0f0c29,50:44337a,100:8b5cf6&height=120&section=footer" width="100%" alt="" />
 
 <sub>built on Gentoo · powered by Portage · automated with GitHub Actions</sub>
 
