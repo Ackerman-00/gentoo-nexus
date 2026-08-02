@@ -410,21 +410,25 @@ jobs:
                  changes when the workflows change, and you can edit those
                  workflows.
                - For each discovered package, GET the rolling release assets and
-                 confirm BOTH the x86-64 AND the x86-32 binary exist at the SAME
-                 version/revision. Missing, stale, or mismatched 32-bit twin =
-                 fix it yourself: trigger the appropriate build, or fix the
-                 workflow's USE/atom list if a needed 32-bit build is not being
-                 produced at all. Verify the fix lands in the release.
+                 check whether BOTH the x86-64 AND the x86-32 binary exist at the
+                 SAME version/revision. Then YOU decide whether anything needs
+                 fixing: if a 32-bit twin is missing, stale, or mismatched, judge
+                 whether a fix is warranted (trigger the appropriate build, or fix
+                 the workflow's USE/atom list if a needed 32-bit build is not
+                 being produced at all) and verify any fix lands in the release.
+                 If everything is consistent, that is a valid result - you do not
+                 need to manufacture work.
                - Web-search current Gentoo multilib / abi_x86_32 policy and
                  common 32-bit dependency chains (wine/steam/gaming tooling) to
                  catch core packages that conventionally need a 32-bit variant
-                 even if no workflow lists them yet - decide whether to enable
-                 abi_x86_32 for them and do it.
+                 even if no workflow lists them yet - then decide whether enabling
+                 abi_x86_32 for them is actually needed.
                - For any NEW or bumped core package, decide yourself whether it
                  needs a 32-bit variant and whether the workflows produce it.
                - Never assume the check workflows cover 32-bit: a package can
                  build fine in 64-bit while its 32-bit twin silently fails or is
-                 never triggered. Verify against the actual release assets.
+                 never triggered. Verify against the actual release assets, then
+                 apply your own judgment on what to do.
 
             4. REPAIR RELEASE CONSISTENCY.
                GET https://api.github.com/repos/Ackerman-00/gentoo-nexus/releases/tags/rolling,

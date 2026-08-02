@@ -80,11 +80,13 @@ jobs:
             check-updates.yml), find every place they enable abi_x86_32
             (package.use / gaming USE lists, ABI handling), extract the exact
             set of packages expected to ship a 32-bit variant, then GET the
-            rolling release assets and confirm BOTH the x86-64 and x86-32
-            binary exist at the SAME version/revision for each. Fix or rebuild
-            missing/mismatched 32-bit variants yourself (including fixing the
-            workflows' USE/atom lists if a 32-bit build is never produced),
-            and web-search current Gentoo multilib/abi_x86_32 policy plus
-            common 32-bit dependency chains to catch core packages that should
-            have a 32-bit variant even if none is listed yet. Decide 32-bit
-            needs for any new/bumped core package.
+            rolling release assets and check whether BOTH the x86-64 and x86-32
+            binary exist at the SAME version/revision for each. Then YOU decide
+            whether anything needs fixing: fix or rebuild missing/mismatched
+            32-bit variants only if you judge a fix is warranted (including
+            fixing the workflows' USE/atom lists if a 32-bit build is never
+            produced), and web-search current Gentoo multilib/abi_x86_32 policy
+            plus common 32-bit dependency chains to catch core packages that
+            should have a 32-bit variant even if none is listed yet. Decide
+            32-bit needs for any new/bumped core package - and if everything is
+            consistent, that is a valid result, no manufactured work needed.
