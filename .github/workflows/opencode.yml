@@ -58,3 +58,15 @@ jobs:
             packages) - but first web-search and grep the whole repo to confirm
             nothing references them, and never delete anything that is still
             needed for builds or actually used.
+
+            TIME BUDGET & SELF-RELAY: this job can run up to ~6 hours (GitHub
+            hard cap 360 min). If the requested work is larger than your remaining
+            time, do not lose progress: commit a persistent checklist to
+            `AUTONOMOUS_STATE.md` at the repo root (exact unfinished packages,
+            half-edited files, pending commits, triggered build IDs, decisions
+            made), push it, then re-trigger a fresh run yourself with:
+              gh workflow run opencode-schedule.yml --ref main \
+                --repo Ackerman-00/gentoo-nexus
+            On any run, FIRST check for `AUTONOMOUS_STATE.md` and continue that
+            leftover work; delete it once everything is finished. Cap relaying at
+            2-3 handoffs, then escalate to an issue with a clear diagnosis.

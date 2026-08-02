@@ -14,12 +14,12 @@ permissions:
 
 concurrency:
   group: opencode-schedule
-  cancel-in-progress: true
+  cancel-in-progress: false
 
 jobs:
   opencode:
     runs-on: ubuntu-latest
-    timeout-minutes: 120
+    timeout-minutes: 355
     permissions:
       contents: write
       pull-requests: write
@@ -48,6 +48,44 @@ jobs:
             review or merge anything. Act like an experienced Gentoo developer /
             proxy maintainer (think of the Gentoo devmanual, pkgcheck, pkgdev,
             and the binary-package guide as your operating manual).
+
+            TIME BUDGET & SELF-RELAY - YOU DECIDE HOW LONG YOU RUN. This job is
+            allowed to run up to ~6 hours (GitHub's hard cap is 360 min). You
+            control your own schedule and can extend your work across MULTIPLE
+            runs: when you judge you are running low on time, or a build chain you
+            started will take longer than your remaining budget, do NOT just stop
+            and lose work. Instead:
+            - Track your elapsed time throughout the run (e.g. `date +%s` at start
+              vs. now, or the run started_at from the Actions API).
+            - Before the deadline (aim to hand off with at least ~10-15 min left),
+              dump ALL unfinished work into a single persistent state file at the
+              repo root: `AUTONOMOUS_STATE.md`. Write it as a precise checklist the
+              NEXT run can continue from with zero context loss: exact packages
+              still to do, files half-edited, pending commits, builds you triggered
+              and their run IDs, issues/PRs left open, decisions made so far, and
+              anything a fresh run must know. Then commit and push it:
+                  git fetch origin && git pull --rebase origin main
+                  git add AUTONOMOUS_STATE.md
+                  git commit -m "chore(autonomous): checkpoint unfinished work for next run"
+                  git push origin main
+            - Then re-trigger a fresh run of this same workflow to continue:
+                  gh workflow run opencode-schedule.yml --ref main \
+                    --repo Ackerman-00/gentoo-nexus
+              The next run will pick up AUTONOMOUS_STATE.md from the repo and
+              continue from exactly where you stopped.
+            - When you START a run, FIRST check for AUTONOMOUS_STATE.md. If it
+              exists and has content, continue that leftover work before anything
+              else (after still doing the mandatory repo-health audit below). When
+              you finish everything, DELETE AUTONOMOUS_STATE.md (git rm) and push,
+              so no leftover checklist lingers. If you need to relay again, update
+              the file's leftover tasks and re-trigger once more.
+            - Cap your relaying sensibly: keep chaining runs to finish real work,
+              but do not run indefinitely - if after 2-3 handoffs the same task
+              still cannot finish, leave a clear diagnosis in the state file and
+              open an issue instead of relaying forever.
+            - You may also relay earlier than the deadline if you realize the
+              remaining work is huge (e.g. a massive rebuild queue) - decide it
+              yourself, you have the access.
 
             UNDERSTAND WHAT THIS REPO IS TRYING TO DO. It is not a generic
             package dump: it is a curated, pre-built Wayland-desktop overlay and
@@ -494,4 +532,6 @@ jobs:
             - End every run with a concise final summary: the repo-working verdict
               (does the overlay/binhost actually work on Gentoo now?), what you
               fixed, which issues you closed, which PRs you merged/rejected, which
-              builds you triggered and their result, and what remains.
+              builds you triggered and their result, and what remains. If you had
+              to hand off leftover work, also state that you left it in
+              AUTONOMOUS_STATE.md and relayed a new run.
