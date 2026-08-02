@@ -780,22 +780,22 @@ jobs:
                           pass
                   entries.append(block)
 
-           # Deduplicate by CPV: when several build-ids of the same CPV exist on
-           # disk (restored old build + freshly built one, or packages restored
-           # from the release into different directories), keep only the entry
-           # with the newest BUILD_ID so the index never advertises two
-           # conflicting metadata blocks for one CPV.
-           by_cpv = {}
-           for b in entries:
-               cur = by_cpv.get(b['CPV'])
-               if cur is None:
-                   by_cpv[b['CPV']] = b
-                   continue
-               cur_bid = int(cur.get('BUILD_ID', '0') or 0)
-               new_bid = int(b.get('BUILD_ID', '0') or 0)
-               if new_bid > cur_bid:
-                   by_cpv[b['CPV']] = b
-           entries = sorted(by_cpv.values(), key=lambda b: b['CPV'])
+          # Deduplicate by CPV: when several build-ids of the same CPV exist on
+          # disk (restored old build + freshly built one, or packages restored
+          # from the release into different directories), keep only the entry
+          # with the newest BUILD_ID so the index never advertises two
+          # conflicting metadata blocks for one CPV.
+          by_cpv = {}
+          for b in entries:
+              cur = by_cpv.get(b['CPV'])
+              if cur is None:
+                  by_cpv[b['CPV']] = b
+                  continue
+              cur_bid = int(cur.get('BUILD_ID', '0') or 0)
+              new_bid = int(b.get('BUILD_ID', '0') or 0)
+              if new_bid > cur_bid:
+                  by_cpv[b['CPV']] = b
+          entries = sorted(by_cpv.values(), key=lambda b: b['CPV'])
 
            # Portage's PackageIndex.readHeader only understands 'Key: value'
           # pairs. A bare "'file' 'ARCH' 'N'" line yields an empty header and
