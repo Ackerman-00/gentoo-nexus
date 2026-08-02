@@ -28,6 +28,7 @@ DEPEND="
     media-libs/fontconfig
     media-libs/freetype
     media-libs/harfbuzz
+    media-libs/libepoxy
     media-libs/libglvnd
     media-libs/libjxl
     media-libs/libsndfile
@@ -37,8 +38,6 @@ DEPEND="
     media-video/wireplumber
     dev-libs/md4c
     dev-cpp/tomlplusplus
-    dev-libs/libical
-    dev-libs/libsodium
     dev-libs/stb
     net-misc/curl
     sci-libs/libqalculate

@@ -30,6 +30,7 @@ RDEPEND="
 	net-print/cups
 	sys-apps/dbus
 	sys-libs/glibc
+	virtual/libudev
 	x11-libs/cairo
 	x11-libs/gdk-pixbuf:2
 	x11-libs/gtk+:3[X]
@@ -46,6 +47,7 @@ RDEPEND="
 	x11-libs/libXrender
 	x11-libs/libXScrnSaver
 	x11-libs/libXtst
+	x11-libs/libxkbcommon
 	x11-libs/pango
 	x11-misc/xdg-utils
 "

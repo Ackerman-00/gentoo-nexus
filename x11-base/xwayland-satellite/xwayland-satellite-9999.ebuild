@@ -16,6 +16,7 @@ PROPERTIES="live"
 RESTRICT="network-sandbox"
 
 DEPEND="
+    dev-libs/wayland
     x11-libs/libxcb:=
     x11-libs/xcb-util-cursor
 "
