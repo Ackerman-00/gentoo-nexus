@@ -620,7 +620,7 @@ jobs:
           #  2. When several build-ids of the same CPV are on disk (restored old
           #     build + freshly built one), only the newest build-id is indexed,
           #     because the upload step deletes the older assets by PN.
-          import os, re, io, tarfile, subprocess
+          import os, re, io, time, tarfile, subprocess
 
           try:
               import zstandard
@@ -759,8 +759,16 @@ jobs:
                       continue
 
                   block = {'CPV': cpv, 'PATH': relpath, 'URI': base}
+                  # SIZE must be the actual on-disk file size (portage verifies
+                  # downloads against it). The gpkg metadata SIZE is the
+                  # uncompressed size and causes digest verification failures.
+                  block['SIZE'] = str(os.path.getsize(fullpath))
+                  # MTIME is required by download_required()/remote sync; it is
+                  # compared against the cached file's mtime to decide whether
+                  # to re-download. Without it portage crashes with KeyError.
+                  block['MTIME'] = str(int(mtime))
                   for k in META_KEYS:
-                      if k in meta:
+                      if k in meta and k != 'SIZE':
                           block[k] = meta[k]
                   bid = _bid_key(meta, f)
                   if 'BUILD_ID' not in block and bid:
@@ -774,9 +782,16 @@ jobs:
 
           entries.sort(key=lambda b: b['CPV'])
 
-          header_line = f"'file' '{os.uname().sysname}/{os.uname().machine}' '1'"
+          # Portage's PackageIndex.readHeader only understands 'Key: value'
+          # pairs. A bare "'file' 'ARCH' 'N'" line yields an empty header and
+          # remote binrepo sync is rejected (VERSION=None). Write a proper
+          # header with VERSION/TIMESTAMP/PACKAGES so --getbinpkg consumers
+          # (see machine/binrepos.conf) can fetch from the release.
           with open(packages_file, 'w') as pkgs:
-              pkgs.write(header_line + '\n')
+              pkgs.write(f"PACKAGES: {len(entries)}\n")
+              pkgs.write(f"TIMESTAMP: {int(time.time())}\n")
+              pkgs.write(f"VERSION: 0\n")
+              pkgs.write("CHOST: x86_64-pc-linux-gnu\n")
               pkgs.write('\n')
               for block in entries:
                   for k, v in block.items():
