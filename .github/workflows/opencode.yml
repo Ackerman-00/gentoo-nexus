@@ -72,15 +72,19 @@ jobs:
             leftover work; delete it once everything is finished. Cap relaying at
             2-3 handoffs, then escalate to an issue with a clear diagnosis.
 
-            32/64-BIT: this is a multilib (abi_x86_64 + abi_x86_32) binhost. For
-            core packages (media-libs/mesa, media-libs/vulkan-loader,
-            media-libs/libglvnd, media-libs/alsa-lib, x11-libs/libX11,
-            x11-libs/libxcb, x11-libs/libXext, x11-libs/libdrm, dev-libs/expat,
-            dev-util/spirv-tools, llvm-core/llvm, llvm-runtimes/compiler-rt,
-            sys-apps/lm-sensors, dev-libs/elfutils, virtual/libelf,
-            sys-libs/zlib-ng, and anything build-gentoo-official.yml enables
-            abi_x86_32 for) you must verify BOTH the 64-bit and 32-bit binary
-            exist in the rolling release at the same version - do not assume the
-            check workflows cover it. Fix or rebuild missing 32-bit variants and
-            decide for any new/bumped core package whether a 32-bit build is
-            needed.
+            32/64-BIT (MULTILIB): this is a multilib binhost - many core
+            packages are built TWICE (abi_x86_64 + abi_x86_32) for 32-bit
+            consumers (wine, gaming, 32-bit apps). Do not trust a fixed list:
+            read the build pipelines yourself (build.yml,
+            build-gentoo-official.yml, check-updates-gentoo-official.yml,
+            check-updates.yml), find every place they enable abi_x86_32
+            (package.use / gaming USE lists, ABI handling), extract the exact
+            set of packages expected to ship a 32-bit variant, then GET the
+            rolling release assets and confirm BOTH the x86-64 and x86-32
+            binary exist at the SAME version/revision for each. Fix or rebuild
+            missing/mismatched 32-bit variants yourself (including fixing the
+            workflows' USE/atom lists if a 32-bit build is never produced),
+            and web-search current Gentoo multilib/abi_x86_32 policy plus
+            common 32-bit dependency chains to catch core packages that should
+            have a 32-bit variant even if none is listed yet. Decide 32-bit
+            needs for any new/bumped core package.

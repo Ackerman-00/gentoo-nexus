@@ -396,34 +396,35 @@ jobs:
                builds publish to the same rolling release; broken ones must be
                fixed too.
 
-               ALSO - VERIFY 64-BIT AND 32-BIT BOTH EXIST FOR CORE PACKAGES.
-               This repo is a 32/64-bit (abi_x86_64 + abi_x86_32 / multilib)
-               binhost - many core packages are built TWICE: a 64-bit variant and
-               a 32-bit variant for 32-bit consumers (gaming, wine, 32-bit apps).
-               YOU must check and decide, for every core package, that BOTH
-               variants exist in the rolling release - do not assume the check
-               workflows do it for you:
-               - Core packages that MUST have a 32-bit variant (because the
-                 build-gentoo-official.yml gaming USE list enables abi_x86_32 for
-                 them): media-libs/mesa, media-libs/vulkan-loader,
-                 media-libs/libglvnd, media-libs/alsa-lib, x11-libs/libX11,
-                 x11-libs/libxcb, x11-libs/libXext, x11-libs/libdrm,
-                 dev-libs/expat, dev-util/spirv-tools, llvm-core/llvm,
-                 llvm-runtimes/compiler-rt, sys-apps/lm-sensors,
-                 dev-libs/elfutils, virtual/libelf, sys-libs/zlib-ng, and anything
-                 else the workflows' package.use gaming files enable abi_x86_32
-                 for.
-               - For each such package, GET the rolling release assets and confirm
-                 BOTH the x86-64 AND the x86-32 binary exist and are at the same
-                 version/revision. If the 32-bit variant is missing or stale,
-                 decide how to fix it (trigger the appropriate build, or fix the
-                 workflow's package.use/atom list if a needed 32-bit build is not
-                 being produced at all), and verify it lands in the release.
-               - Do not just trust the spec/ebuild: a package can build fine in
-                 64-bit while its 32-bit twin silently fails or never gets
-                 triggered. Check the actual release assets.
-               - Also decide whether any NEW core package you add (or bump) needs
-                 a 32-bit variant and whether the build workflows produce it.
+               ALSO - VERIFY 32-BIT (MULTILIB) INTEGRITY - YOU DISCOVER WHAT
+               NEEDS IT YOURSELF. This is a multilib binhost: many core packages
+               are built TWICE (abi_x86_64 + abi_x86_32) for 32-bit consumers
+               (wine, gaming, 32-bit apps). Do NOT rely on a fixed list - derive
+               the requirements from the repo every run:
+               - Read the build pipelines yourself: .github/workflows/build.yml,
+                 build-gentoo-official.yml, check-updates-gentoo-official.yml and
+                 check-updates.yml. Find every place the binhost enables
+                 abi_x86_32 (package.use / gaming USE lists, ABI handling,
+                 binrepos configs) and extract the exact set of packages that are
+                 expected to ship a 32-bit variant. Do not hardcode it - the list
+                 changes when the workflows change, and you can edit those
+                 workflows.
+               - For each discovered package, GET the rolling release assets and
+                 confirm BOTH the x86-64 AND the x86-32 binary exist at the SAME
+                 version/revision. Missing, stale, or mismatched 32-bit twin =
+                 fix it yourself: trigger the appropriate build, or fix the
+                 workflow's USE/atom list if a needed 32-bit build is not being
+                 produced at all. Verify the fix lands in the release.
+               - Web-search current Gentoo multilib / abi_x86_32 policy and
+                 common 32-bit dependency chains (wine/steam/gaming tooling) to
+                 catch core packages that conventionally need a 32-bit variant
+                 even if no workflow lists them yet - decide whether to enable
+                 abi_x86_32 for them and do it.
+               - For any NEW or bumped core package, decide yourself whether it
+                 needs a 32-bit variant and whether the workflows produce it.
+               - Never assume the check workflows cover 32-bit: a package can
+                 build fine in 64-bit while its 32-bit twin silently fails or is
+                 never triggered. Verify against the actual release assets.
 
             4. REPAIR RELEASE CONSISTENCY.
                GET https://api.github.com/repos/Ackerman-00/gentoo-nexus/releases/tags/rolling,
