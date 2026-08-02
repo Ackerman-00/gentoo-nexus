@@ -396,6 +396,35 @@ jobs:
                builds publish to the same rolling release; broken ones must be
                fixed too.
 
+               ALSO - VERIFY 64-BIT AND 32-BIT BOTH EXIST FOR CORE PACKAGES.
+               This repo is a 32/64-bit (abi_x86_64 + abi_x86_32 / multilib)
+               binhost - many core packages are built TWICE: a 64-bit variant and
+               a 32-bit variant for 32-bit consumers (gaming, wine, 32-bit apps).
+               YOU must check and decide, for every core package, that BOTH
+               variants exist in the rolling release - do not assume the check
+               workflows do it for you:
+               - Core packages that MUST have a 32-bit variant (because the
+                 build-gentoo-official.yml gaming USE list enables abi_x86_32 for
+                 them): media-libs/mesa, media-libs/vulkan-loader,
+                 media-libs/libglvnd, media-libs/alsa-lib, x11-libs/libX11,
+                 x11-libs/libxcb, x11-libs/libXext, x11-libs/libdrm,
+                 dev-libs/expat, dev-util/spirv-tools, llvm-core/llvm,
+                 llvm-runtimes/compiler-rt, sys-apps/lm-sensors,
+                 dev-libs/elfutils, virtual/libelf, sys-libs/zlib-ng, and anything
+                 else the workflows' package.use gaming files enable abi_x86_32
+                 for.
+               - For each such package, GET the rolling release assets and confirm
+                 BOTH the x86-64 AND the x86-32 binary exist and are at the same
+                 version/revision. If the 32-bit variant is missing or stale,
+                 decide how to fix it (trigger the appropriate build, or fix the
+                 workflow's package.use/atom list if a needed 32-bit build is not
+                 being produced at all), and verify it lands in the release.
+               - Do not just trust the spec/ebuild: a package can build fine in
+                 64-bit while its 32-bit twin silently fails or never gets
+                 triggered. Check the actual release assets.
+               - Also decide whether any NEW core package you add (or bump) needs
+                 a 32-bit variant and whether the build workflows produce it.
+
             4. REPAIR RELEASE CONSISTENCY.
                GET https://api.github.com/repos/Ackerman-00/gentoo-nexus/releases/tags/rolling,
                list the assets, and compare against every ebuild's current
