@@ -703,7 +703,21 @@ jobs:
               except Exception:
                   return 0
 
-          candidates = []
+          # Package names that will be (re)built this run. The upload step deletes
+          # every existing asset of that package name when publishing the new build,
+          # so restored assets under those names must be dropped from the index.
+          new_pns = set()
+          for root, _dirs, files in os.walk(pkgdir):
+              for f in files:
+                  if not f.endswith('.gpkg.tar'):
+                      continue
+                  try:
+                      if os.path.getmtime(os.path.join(root, f)) > marker_mtime:
+                          new_pns.add(re.sub(r'-\d+$', '', f[:-9]))
+                  except Exception:
+                      pass
+
+          entries = []
           for root, _dirs, files in os.walk(pkgdir):
               for f in files:
                   if not f.endswith('.gpkg.tar'):
@@ -730,38 +744,35 @@ jobs:
                   except Exception:
                       mtime = 0
                   base = os.path.basename(relpath)
-                  will_upload = mtime > marker_mtime
-                  if not will_upload and base not in release_assets and cpv not in release_assets:
-                      print(f"  SKIP (pre-marker build not in release): {relpath}")
+                  pn = re.sub(r'-\d+$', '', f[:-9])
+                  # A file is indexed only if it will exist in the release after
+                  # this run's upload: either it is freshly built (uploaded now),
+                  # or it is already published and no new build of the same package
+                  # name will replace it. Everything else is dropped so the index
+                  # never points at an asset that is missing or about to be deleted.
+                  if mtime > marker_mtime:
+                      pass
+                  elif base in release_assets and pn not in new_pns:
+                      pass
+                  else:
+                      print(f"  SKIP (not published after upload): {relpath}")
                       continue
 
-                  candidates.append((cpv, _bid_key(meta, f), will_upload, fullpath, relpath, meta))
+                  block = {'CPV': cpv, 'PATH': relpath, 'URI': base}
+                  for k in META_KEYS:
+                      if k in meta:
+                          block[k] = meta[k]
+                  bid = _bid_key(meta, f)
+                  if 'BUILD_ID' not in block and bid:
+                      block['BUILD_ID'] = str(bid)
+                  if 'BUILD_TIME' not in block:
+                      try:
+                          block['BUILD_TIME'] = str(int(mtime))
+                      except Exception:
+                          pass
+                  entries.append(block)
 
-          best = {}
-          for cpv, bid, will_upload, fullpath, relpath, meta in candidates:
-              cur = best.get(cpv)
-              # Prefer the file the upload step will actually publish (newer than
-              # the marker), then the higher build id. Otherwise a stale restored
-              # build (e.g. noctalia -2) can beat a fresh build that got a lower
-              # build id, and the old asset is deleted during upload, leaving a
-              # dangling index entry.
-              if cur is None or (will_upload and not cur[0]) or (will_upload == cur[0] and bid > cur[1]):
-                  best[cpv] = (will_upload, bid, fullpath, relpath, meta)
-
-          entries = []
-          for cpv, (_will_upload, bid, fullpath, relpath, meta) in sorted(best.items()):
-              block = {'CPV': cpv, 'PATH': relpath, 'URI': os.path.basename(relpath)}
-              for k in META_KEYS:
-                  if k in meta:
-                      block[k] = meta[k]
-              if 'BUILD_ID' not in block and bid:
-                  block['BUILD_ID'] = str(bid)
-              if 'BUILD_TIME' not in block:
-                  try:
-                      block['BUILD_TIME'] = str(int(os.path.getmtime(fullpath)))
-                  except Exception:
-                      pass
-              entries.append(block)
+          entries.sort(key=lambda b: b['CPV'])
 
           header_line = f"'file' '{os.uname().sysname}/{os.uname().machine}' '1'"
           with open(packages_file, 'w') as pkgs:
@@ -772,7 +783,7 @@ jobs:
                       pkgs.write(f"{k}: {v}\n")
                   pkgs.write('\n')
 
-          print(f">>> Reconciled Packages index: {len(entries)} entries (filtered {len(candidates) - len(entries)} duplicate/pre-marker)")
+          print(f">>> Reconciled Packages index: {len(entries)} entries")
           PYEOF
 
       # ---- topic: validate-and-upload ----
