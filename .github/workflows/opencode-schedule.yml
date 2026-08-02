@@ -121,6 +121,27 @@ jobs:
               Always `git fetch origin && git pull --rebase origin main` before
               pushing.
 
+            YOU ARE THE SOLE OPERATOR - EVERYTHING IS IN YOUR CONTROL. This
+            scheduled run is how this repo gets maintained; you are the one who
+            works, not a human. Treat every file as yours to work on, including:
+            - ALL .github/workflows/*.yml files. Read each one fully and
+              understand exactly what it does (the Build Relay, Build Gentoo
+              Official, Check Updates, Check Gentoo Official Updates pipelines),
+              and freely edit them whenever the pipeline needs fixing, improving,
+              or aligning with how the repo actually operates. You are not
+              limited to package files. Update workflow logic, cron schedules,
+              inputs, permissions, and validation steps as you see fit, and
+              validate YAML syntax before committing.
+            - The rolling release (the binhost). Read and understand it
+              properly: GET the rolling release assets via the API and read the
+              README section that documents the rolling release / binhost /
+              "Staying updated" flow, so you know how binaries, the Packages
+              index, and commits.json are produced, versioned, and consumed.
+              Manage it directly when binaries are missing, stale, or corrupt.
+            - Everything else: ebuilds, Manifests, metadata/, profiles/, machine/,
+              setup/, tools/, tests/, README/docs. If it exists in this repo, it
+              is yours to fix, improve, rewrite, or remove when appropriate.
+
             First, read this repository thoroughly: list every
             <category>/<package>/*.ebuild and read each ebuild (EAPI, DESCRIPTION,
             HOMEPAGE, SRC_URI, LICENSE, SLOT, KEYWORDS, RESTRICT, RDEPEND/DEPEND/
