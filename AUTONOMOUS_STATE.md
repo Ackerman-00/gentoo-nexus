@@ -1,6 +1,7 @@
 # Autonomous Run State
 
-Last fully-verified run: **2026-08-02** (opencode dispatch; Build Relay #30760011122).
+Last fully-verified run: **2026-08-02** (opencode dispatch; Build Relays #30767217752,
+#30768298050, #30769041803, #30770062165 all SUCCESS).
 
 ## Goal
 Keep the gentoo-nexus overlay + rolling binhost working: ebuilds correct, live
@@ -8,21 +9,45 @@ packages pinned to current commits, and the rolling `Packages` index an exact,
 dangling-free mirror of the published assets.
 
 ## Status: HEALTHY
-- Rolling index: 505 entries, **0 dangling** (no entry references a missing asset),
-  **0 genuinely missing** (every non-acct release `.gpkg.tar` is indexed; the 3
-  acct-group/acct-user packages `cuse`, `plugdev`, `seat` are intentionally
+- Rolling index: **480 unique CPV entries, 0 duplicates, 0 dangling** (no entry
+  references a missing asset, and every non-acct release `.gpkg.tar` is indexed;
+  the 3 acct-group/acct-user packages `cuse`, `plugdev`, `seat` are intentionally
   filtered from the served index by the upload step).
 - `Packages` and `Packages.gz` are identical; both uploaded by the Build Relay.
-- Key packages indexed: mesa 26.1.5, llvm 22.1.8, gcc 16.1.1_p20260718,
-  gentoo-kernel 7.1.5, portage 3.0.81.2-6, perl 5.44.0, dav1d 1.5.1 (both -1/-2).
-- `commits.json` (live 9999 packages): `gui-wm/noctalia-v5`=f0ac340a58f0,
+- Release: 510 assets (~4.5 GB) on the `rolling` release.
+- `commits.json` (live 9999 packages): `gui-wm/noctalia-v5`=0f30499c6131,
   `x11-base/xwayland-satellite`=8d135d3b2854, `gui-wm/niri`=7f26c3ee804f.
+- All 18 overlay packages have matching `.gpkg.tar` assets in `rolling`.
+
+## What changed this run
+- `gui-wm/noctalia-v5`: EGIT_COMMIT bumped to upstream main HEAD `0f30499c`;
+  added `media-libs/libepoxy` (meson requires `dependency('epoxy')` for
+  EGL/GLES); removed duplicate `libical`/`libsodium` atoms.
+- `www-client/brave-origin-bin`: added `virtual/libudev` + `x11-libs/libxkbcommon`
+  (verified via `readelf` on the shipped Chromium binary).
+- `x11-base/xwayland-satellite`: added `dev-libs/wayland` (wayland-sys links the
+  system libwayland via pkg-config, confirmed from Cargo.lock).
+- **Workflow fixes** (both `build.yml` and `build-gentoo-official.yml`):
+  1. Reconcile now dedupes by CPV keeping the highest BUILD_ID. Before, multiple
+     build-ids of the same CPV were all indexed, producing duplicate `CPV:` blocks
+     with conflicting `SIZE`/`BUILD_TIME` (e.g. `libffi-3.7.1-1.gpkg.tar` twice).
+  2. Upload derives the package name from the filename (`sed -E 's/\.gpkg\.tar$//;
+     s/-[0-9]+$//'`) instead of `awk -F/ '{print $3}'`, which returned the arch on
+     the gpkg layout path and silently broke the old-asset delete step, letting
+     stale build-ids accumulate in the release.
+- **Audited and confirmed NO change needed** (claims from an automated dep audit
+  were checked against the shipped binaries and found wrong): `rootapp-bin`
+  (no expat/libxshmfence linkage), `zen-browser` (bundles self-contained
+  libmozavcodec, no ffmpeg-compat needed; all ELFs already 0755),
+  `matugen` (upstream LICENSE is GPL-2, ebuild correct), `cliphist`
+  (vendored fork is deliberate; RDEPEND correct).
 
 ## Recurring gotchas (read before touching the build)
 1. **Noctalia deps**: `gui-wm/noctalia-v5-9999.ebuild` needs
    `dev-cpp/nlohmann_json` (underscore!), `dev-libs/stb` (for
-   `stb/stb_image_resize2.h` + `stb_image_write.h`), plus libsodium, libsecret,
-   libjxl, libsndfile, libical. Missing any -> meson configure fails.
+   `stb/stb_image_resize2.h` + `stb_image_write.h`), `media-libs/libepoxy`,
+   plus libsodium, libsecret, libjxl, libsndfile, libical. Missing any ->
+   meson configure fails.
 2. **md5-cache**: regenerate with `egencache --update --repo gentoo-nexus` in a
    container with the overlay at `/var/db/repos/gentoo-nexus` and a
    `/etc/portage/repos.conf/gentoo-nexus.conf` (masters=gentoo). The first
@@ -33,23 +58,44 @@ dangling-free mirror of the published assets.
 4. **Reconcile contract**: the index must match the release *after* upload. Newly
    built files (mtime > `.build_start`) are always indexed; restored assets are
    indexed only if still present in the release and no new build of the same
-   package name replaces them (the upload deletes `${PN}-[0-9]*.gpkg.tar` old
-   assets). Do NOT dedup by CPV — the release intentionally retains multiple
-   build-ids per CPV (e.g. `dav1d-1.5.1-1` and `dav1d-1.5.1-2`) as separate assets.
-5. **Git push**: must use the OpenCode App token via OIDC exchange
-   (see `.git/config` extraheader). Renew by POSTing an OIDC token
-   (audience `opencode-github-action`) to `https://api.opencode.ai/exchange_github_app_token`.
-   Node's TLS fingerprint passes Cloudflare; Python's urllib gets HTTP 403/1010.
+   package name replaces them. **Dedup by CPV keeping the highest BUILD_ID** — the
+   upload step deletes `${PN}-[0-9]*.gpkg.tar` old assets, so only one build-id
+   per CPV survives; failing to dedup produces duplicate CPV blocks with
+   conflicting metadata. The dedup block lives in the Reconcile heredoc — if you
+   touch it, keep its indentation at the same level as `entries.sort()` (10 spaces
+   inside the YAML literal block) or the Reconcile step raises IndentationError
+   and the served index silently shrinks to a partial rebuild.
+5. **Git push**: the OpenCode App token embedded in the git remote expires ~1h.
+   Renew by (a) POSTing to `$ACTIONS_ID_TOKEN_REQUEST_URL` with
+   `&audience=opencode-github-action` and `Authorization: Bearer
+   $ACTIONS_ID_TOKEN_REQUEST_TOKEN`, then (b) POSTing
+   `{"oidc_token": "<that JWT>", "audience": "opencode-github-action"}` to
+   `https://api.opencode.ai/exchange_github_app_token` with
+   `Authorization: Bearer <the SAME oidc JWT>`. Node's TLS fingerprint passes
+   Cloudflare; Python's urllib gets HTTP 403/1010. `gh`/`git ls-remote` also work
+   with `GITHUB_TOKEN` (API + dispatch, but GITHUB_TOKEN cannot git-push).
+   Note: a global `url.<old-token>@github.com/.insteadOf` may exist and must be
+   removed (or the URL pushed to explicitly) after renewal.
+6. **Relay queue**: `build.yml` processes one package per dispatch and relays the
+   remainder, so a multi-package `package_list` produces a chain of Build Relays.
+   `force_rebuild=true` forces a full dep rebuild from source — only use it when
+   the deps themselves changed; plain rebuilds take deps from the binhost.
 
 ## Package build proofs (last verified)
-- `gui-wm/noctalia-v5-9999` builds from source at f0ac340a; binary uploaded as
-  `noctalia-v5-9999-1.gpkg.tar` (17MB, valid stripped x86-64 ELF).
-- `x11-misc/xcur2png-0.7.1-r3` builds (SRC_URI fixed to the no-`-r3` upstream tag).
+- `gui-wm/noctalia-v5-9999` builds from source at 0f30499c (55 of 55 emerged
+  OK, incl. new libepoxy dep); binary uploaded as `noctalia-v5-9999-1.gpkg.tar`.
+- `www-client/brave-origin-bin-1.93.129` rebuilds with libudev+libxkbcommon;
+  `brave-origin-bin-1.93.129-3.gpkg.tar` uploaded and indexed.
+- `x11-base/xwayland-satellite-9999` rebuilds with dev-libs/wayland;
+  `xwayland-satellite-9999-2.gpkg.tar` uploaded and indexed.
+- `x11-misc/xcur2png-0.7.1-r3` rebuilds clean; `xcur2png-0.7.1-r3-2.gpkg.tar`
+  uploaded and indexed (SRC_URI fixed to the no-`-r3` upstream tag).
 - stage3 container proof earlier: brightnessctl 0.5.1, cliphist 0.7.0, niri 9999
   compiled from source; binaries produced.
-- perl 5.44.0 + rebuilt perl modules uploaded to rolling by the self-heal.
 
 ## Known acceptable state
 - `spirv-tools` lacks abi_x86_32 binaries; no overlay target pulls it as a dep,
   so source fallback is acceptable.
 - ccache binary is present and used; not a blocker.
+- main history contains two content-neutral noise commits (d5b0cee "t",
+  e4ede4a "remove test file") left over from a token-permission probe; harmless.
