@@ -276,7 +276,8 @@ jobs:
                 ;;
             esac
           done
-          rm -f /tmp/rl-Packages
+          # /tmp/rl-Packages is intentionally kept: the Reconcile step reads it
+          # to distinguish restored release binaries from pre-build artifacts.
 
       - name: Write Docker Build Script
         if: steps.queue.outputs.skip_compile != 'true'
@@ -595,6 +596,16 @@ jobs:
           # file on disk contributes one entry with metadata read from the gpkg
           # itself (GLEP 78). This is purely deterministic -- same files produce
           # the same index, making a second run a no-op.
+          #
+          # Two safety filters keep the index aligned with what the upload step
+          # actually publishes to the rolling release:
+          #  1. Pre-build artifacts (portage/ccache/sysprof-capture/etc. built
+          #     BEFORE the .build_start marker) are never uploaded, so they are
+          #     dropped here unless they already exist in the release. Without
+          #     this they would become dangling index entries.
+          #  2. When several build-ids of the same CPV are on disk (restored old
+          #     build + freshly built one), only the newest build-id is indexed,
+          #     because the upload step deletes the older assets by PN.
           import os, re, io, tarfile, subprocess
 
           try:
@@ -605,6 +616,21 @@ jobs:
 
           pkgdir = 'binpkgs'
           packages_file = os.path.join(pkgdir, 'Packages')
+
+          release_cpvs = set()
+          try:
+              for _l in open('/tmp/rl-Packages'):
+                  _l = _l.strip()
+                  if _l.startswith('CPV: '):
+                      release_cpvs.add(_l[5:])
+          except Exception:
+              pass
+
+          marker = os.path.join(pkgdir, '.build_start')
+          try:
+              marker_mtime = os.path.getmtime(marker)
+          except Exception:
+              marker_mtime = 0
 
           def _decompress(data):
               if HAVE_ZSTD:
@@ -642,7 +668,18 @@ jobs:
                        'DEFINED_PHASES', 'IUSE', 'SLOT', 'EAPI', 'REPO_REVISIONS',
                        'SIZE', 'MD5', 'SHA1', 'SHA512')
 
-          entries = []
+          def _bid_key(meta, f):
+              bid = meta.get('BUILD_ID', '')
+              if not bid:
+                  bid = re.sub(r'-\d+$', '', f[:-9])
+                  m2 = re.search(r'-(\d+)$', bid)
+                  bid = m2.group(1) if m2 else '0'
+              try:
+                  return int(bid)
+              except Exception:
+                  return 0
+
+          candidates = []
           for root, _dirs, files in os.walk(pkgdir):
               for f in files:
                   if not f.endswith('.gpkg.tar'):
@@ -664,19 +701,35 @@ jobs:
                           continue
                       cpv = f"{cat}/{base}"
 
-                  bid = meta.get('BUILD_ID', '')
-                  block = {'CPV': cpv, 'PATH': relpath, 'URI': os.path.basename(relpath)}
-                  for k in META_KEYS:
-                      if k in meta:
-                          block[k] = meta[k]
-                  if 'BUILD_ID' not in block and bid:
-                      block['BUILD_ID'] = bid
-                  if 'BUILD_TIME' not in block:
-                      try:
-                          block['BUILD_TIME'] = str(int(os.path.getmtime(fullpath)))
-                      except Exception:
-                          pass
-                  entries.append(block)
+                  try:
+                      mtime = os.path.getmtime(fullpath)
+                  except Exception:
+                      mtime = 0
+                  if mtime <= marker_mtime and cpv not in release_cpvs:
+                      print(f"  SKIP (pre-marker build not in release): {relpath}")
+                      continue
+
+                  candidates.append((cpv, _bid_key(meta, f), fullpath, relpath, meta))
+
+          best = {}
+          for cpv, bid, fullpath, relpath, meta in candidates:
+              if cpv not in best or bid > best[cpv][0]:
+                  best[cpv] = (bid, fullpath, relpath, meta)
+
+          entries = []
+          for cpv, (bid, fullpath, relpath, meta) in sorted(best.items()):
+              block = {'CPV': cpv, 'PATH': relpath, 'URI': os.path.basename(relpath)}
+              for k in META_KEYS:
+                  if k in meta:
+                      block[k] = meta[k]
+              if 'BUILD_ID' not in block and bid:
+                  block['BUILD_ID'] = str(bid)
+              if 'BUILD_TIME' not in block:
+                  try:
+                      block['BUILD_TIME'] = str(int(os.path.getmtime(fullpath)))
+                  except Exception:
+                      pass
+              entries.append(block)
 
           header_line = f"'file' '{os.uname().sysname}/{os.uname().machine}' '1'"
           with open(packages_file, 'w') as pkgs:
@@ -687,7 +740,7 @@ jobs:
                       pkgs.write(f"{k}: {v}\n")
                   pkgs.write('\n')
 
-          print(f">>> Reconciled Packages index: {len(entries)} entries (total, regenerated from scratch)")
+          print(f">>> Reconciled Packages index: {len(entries)} entries (filtered {len(candidates) - len(entries)} duplicate/pre-marker)")
           PYEOF
 
       # ---- topic: validate-and-upload ----
