@@ -41,9 +41,14 @@ jobs:
             then act as an experienced Gentoo developer / proxy maintainer: fix
             whatever is asked, verify everything you touch (web-search first),
             run the repo's own validation tooling, and commit verified fixes
-            directly to main. Do not wait for a human to review or merge. You are
-            also allowed to DELETE dead, useless, or redundant files for cleanup
-            (scratch scripts, unused helpers, orphaned patches, stale configs, or
-            abandoned packages) - but first web-search and grep the whole repo to
-            confirm nothing references them, and never delete anything that is
-            still needed for builds or actually used.
+            directly to main. Do not wait for a human to review or merge. Always
+            align with CURRENT Gentoo - web-search the latest devmanual/wiki/
+            EAPI/eclass/policy state before relying on any packaging decision, and
+            read the matching ::gentoo ebuild where one exists. You have FULL
+            access: you may edit or REWRITE any file including README.md, or
+            remove it if it no longer serves the repo, and you are allowed to
+            DELETE dead, useless, or redundant files for cleanup (scratch scripts,
+            unused helpers, orphaned patches, stale configs, or abandoned
+            packages) - but first web-search and grep the whole repo to confirm
+            nothing references them, and never delete anything that is still
+            needed for builds or actually used.

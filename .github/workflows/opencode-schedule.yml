@@ -49,6 +49,34 @@ jobs:
             proxy maintainer (think of the Gentoo devmanual, pkgcheck, pkgdev,
             and the binary-package guide as your operating manual).
 
+            UNDERSTAND WHAT THIS REPO IS TRYING TO DO. It is not a generic
+            package dump: it is a curated, pre-built Wayland-desktop overlay and
+            x86-64-v3 binhost for compositors/shells (niri, mangowm, noctalia-v5,
+            scenefx), gaming tools, and daily-driver apps, rebuilt for a binary
+            install model. Before changing anything, read README.md fully and
+            make every decision align with that goal: packages here must be
+            modern, buildable, and installable via the binhost - not just "exist".
+
+            STAY CURRENT WITH GENTOO ITSELF. Gentoo policy and tooling move fast;
+            a package can stop building simply because Gentoo deprecated its EAPI,
+            changed an eclass, or moved a dependency. So, as a standing duty in
+            every run, web-search the LATEST Gentoo state before relying on any
+            packaging decision:
+            - The Gentoo devmanual (devmanual.gentoo.org) and the Gentoo Wiki for
+              current policy (EAPI deprecations and the current recommended EAPI,
+              eclass changes/renames, KEYWORDS policy, SLOT/revbump rules, USE and
+              dependency-flag syntax like >= / || / ? use deps).
+            - pkgcheck/pkgdev release notes and the binary-package guide (GLEP 78)
+              for binhost tooling changes.
+            - Read the ::gentoo ebuild for any package we also carry (it is the
+              best ground truth for correct EAPI, deps, and how upstream is
+              packaged), and align our ebuild with it where sensible - but keep
+              our own x86-64-v3 binhost goals in mind.
+            - If a package we carry is no longer aligned with current Gentoo (e.g.
+              deprecated EAPI, renamed eclass, outdated KEYWORDS, dependencies
+              that no longer resolve), fix it so it builds again today, not per
+              whatever is easiest.
+
             THE REPO HAS A KNOWN PROBLEM: the owner reports it "doesn't even want
             to work on Gentoo". Your single most important job is to prove the
             repo actually WORKS on Gentoo - every ebuild parses, every Manifest is
@@ -136,7 +164,9 @@ jobs:
                - Required vars present and sane: DESCRIPTION, HOMEPAGE, SRC_URI
                  (or EGIT_REPO_URI/EGIT_COMMIT for live), LICENSE, SLOT, KEYWORDS
                  (expect "-* ~amd64" or "~amd64" here), RDEPEND/DEPEND/BDEPEND.
-               - EAPI is current (8 or 9; not banned/deprecated).
+               - EAPI must be current (web-search what Gentoo currently allows;
+                 do not hardcode: EAPIs get deprecated over time). Prefer the
+                 EAPI used by the matching ::gentoo ebuild.
                - Run `pkgcheck scan` on the overlay (install pkgcheck/pkgdev via
                  pip if needed, or run it inside the gentoo stage3 container; if
                  neither is possible, do the equivalent manual checks: bash -n,
@@ -350,16 +380,18 @@ jobs:
                  reasonable fix.
 
             7. MAINTAIN DOCUMENTATION & GENERAL REPO HEALTH.
-               You have FULL control over this repository: you may edit any file
-               that needs fixing or updating - ebuilds, Manifests, workflows,
-               machine/* configs, setup/quickstart.sh, tools/nexus, tests, other
-               code/config, and documentation. Review README.md and other docs for
-               anything stale or incorrect (package lists, versions, install
-               instructions, links, binhost URLs, usage examples) and update them
-                to match the actual state of the repo after any changes you or
-                others made. Verify every fact with web search before editing docs,
-                and keep your edits accurate and minimal. Make sure the docs match
-                what `setup/quickstart.sh` and `tools/nexus` actually do.
+               You have FULL control over this repository: you may edit, REWRITE,
+               or REMOVE any file that needs fixing or updating - ebuilds,
+               Manifests, workflows, machine/* configs, setup/quickstart.sh,
+               tools/nexus, tests, other code/config, and documentation. That
+               includes README.md: if it is wrong, misleading, badly worded, or no
+               longer matches the repo, rewrite it; if the project's purpose has
+               moved on and the README no longer serves anyone, you may trim or
+               remove entire sections, and only in an extreme case remove the file
+               itself. Verify every fact with web search before editing docs, and
+               keep your edits accurate and minimal. Make sure the docs match
+               what `setup/quickstart.sh` and `tools/nexus` actually do, and that
+               the README's package table exactly mirrors the overlay.
 
                REPO CLEANUP - REMOVE WHAT IS UNNECESSARY. You are explicitly
                allowed and encouraged to DELETE dead, useless, or redundant files
@@ -426,6 +458,9 @@ jobs:
               auto-create a PR from leftover changes).
             - Web-search FIRST, then act. Deeply verify every version, URL, and
               checksum online before touching anything; do not rely on memory.
+            - Always align with CURRENT Gentoo (devmanual, wiki, current EAPI,
+              eclass and policy changes): web-search before trusting any packaging
+              assumption, and keep every package buildable on Gentoo today.
             - Close issues only AFTER the fix is verified by a passing build.
             - Merge PRs only AFTER verifying correctness (web search) AND a passing
               build; use squash merge.
