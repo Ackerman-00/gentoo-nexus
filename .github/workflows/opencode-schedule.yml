@@ -38,6 +38,12 @@ jobs:
         with:
           persist-credentials: false
 
+      - name: Configure git auth for pushes
+        run: |
+          git config --global user.name "opencode-agent[bot]"
+          git config --global user.email "41898282+opencode-agent[bot]@users.noreply.github.com"
+          git config --global url."https://x-access-token:${{ secrets.GITHUB_TOKEN }}@github.com/".insteadOf "https://github.com/"
+
       - name: Run opencode
         uses: anomalyco/opencode/github@latest
         env:
@@ -164,7 +170,10 @@ jobs:
               release.
             - TOKENS: `git push` authenticates with the OpenCode App token
               (contents + workflows write), so you CAN modify .github/workflows/*
-              and push straight to main. `gh` commands use the runner's
+              and push straight to main (a workflow step also configures global git
+              credentials, so ALL git pushes - including the action's own end-of-run
+              branch push - authenticate with GITHUB_TOKEN). `gh` commands use the
+              runner's
               GITHUB_TOKEN (actions write, pull-requests write, issues write).
               Always `git fetch origin && git pull --rebase origin main` before
               pushing.
@@ -796,6 +805,12 @@ jobs:
             - Commit fixes to main directly. NEVER open pull requests yourself, and
               ALWAYS leave the working tree clean (the action may otherwise
               auto-create a PR from leftover changes).
+            - CLEAN-TREE DISCIPLINE (MANDATORY): at the end of the run `git status
+              --porcelain` MUST be empty. Download/extract test artifacts (source
+              tarballs, .gpkg.tar, Manifests digests) into /tmp or $RUNNER_TEMP,
+              NEVER into the repo working tree - untracked files make the action try
+              to push a stray branch at the end and fail the whole run. Remove any
+              leftovers before finishing.
             - Web-search FIRST, then act. Deeply verify every version, URL, and
               checksum online before touching anything; do not rely on memory.
             - Always align with CURRENT Gentoo (devmanual, wiki, current EAPI,
