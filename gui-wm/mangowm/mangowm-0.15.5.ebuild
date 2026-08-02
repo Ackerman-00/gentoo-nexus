@@ -15,11 +15,14 @@ DEPEND="
     >=gui-libs/wlroots-0.20:0.20=[libinput,session,X?]
     >=gui-libs/scenefx-0.5:=[X?]
     dev-libs/cJSON
+    dev-libs/glib:2
     dev-libs/libinput:=
     dev-libs/libpcre2
     dev-libs/wayland
+    x11-libs/cairo
     x11-libs/libdrm
     x11-libs/libxkbcommon
+    x11-libs/pango
     x11-libs/pixman
     X? (
         x11-libs/libxcb:=
