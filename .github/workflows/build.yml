@@ -270,8 +270,11 @@ jobs:
                 fi
                 ;;
               Packages|Packages.gz)
-                echo "  Deleting stale index: $name"
-                gh release delete-asset rolling "$name" --repo "$REPO" -y 2>&1 || true
+                # Keep the index intact. Deleting it here and then failing the
+                # build (before the upload step) leaves the binhost WITHOUT a
+                # Packages index, which makes every consumer --getbinpkg 404 and
+                # causes cascading build failures. The upload step replaces it.
+                echo "  Keeping $name (index regeneration happens at upload)"
                 ;;
               commits.json)
                 # Keep — will be updated later
@@ -573,7 +576,7 @@ jobs:
         run: sudo chown -R "$(id -u):$(id -g)" "${{ github.workspace }}"
 
       - name: Reconcile Packages Index
-        if: steps.queue.outputs.skip_compile != 'true'
+        if: ${{ always() && steps.queue.outputs.skip_compile != 'true' }}
         run: |
           python3 -m pip install --quiet zstandard 2>/dev/null || true
           python3 << 'PYEOF'
@@ -678,7 +681,7 @@ jobs:
 
       # ---- topic: validate-and-upload ----
       - name: Validate Binary Packages Before Upload
-        if: steps.queue.outputs.skip_compile != 'true'
+        if: ${{ always() && steps.queue.outputs.skip_compile != 'true' }}
         run: |
           echo ">>> Validating .gpkg.tar files before upload..."
           CORRUPT=0
@@ -705,7 +708,7 @@ jobs:
           fi
 
       - name: Upload to GitHub Release
-        if: steps.queue.outputs.skip_compile != 'true'
+        if: ${{ always() && steps.queue.outputs.skip_compile != 'true' }}
         env:
           GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
           REPO: ${{ github.repository }}

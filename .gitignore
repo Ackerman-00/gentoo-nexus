@@ -6,3 +6,7 @@ changed_packages.txt
 packages_to_build.txt
 sync_overlay.sh
 desired_state.txt
+binpkgs/
+overlay/
+distfiles/
+ccache/
