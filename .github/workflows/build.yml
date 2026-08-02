@@ -601,6 +601,8 @@ jobs:
 
       - name: Reconcile Packages Index
         if: ${{ always() && steps.queue.outputs.skip_compile != 'true' }}
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
         run: |
           python3 -m pip install --quiet zstandard 2>/dev/null || true
           python3 << 'PYEOF'
@@ -629,14 +631,24 @@ jobs:
           pkgdir = 'binpkgs'
           packages_file = os.path.join(pkgdir, 'Packages')
 
-          release_cpvs = set()
+          release_assets = set()
           try:
-              for _l in open('/tmp/rl-Packages'):
-                  _l = _l.strip()
-                  if _l.startswith('CPV: '):
-                      release_cpvs.add(_l[5:])
+              out = subprocess.check_output(
+                  ['gh', 'release', 'view', 'rolling', '--json', 'assets',
+                   '--jq', '.assets[].name'],
+                  stderr=subprocess.DEVNULL, timeout=120)
+              release_assets = {l for l in out.decode().splitlines() if l}
           except Exception:
               pass
+          # Fallback: if gh is unavailable, trust the downloaded index's CPVs.
+          if not release_assets:
+              try:
+                  for _l in open('/tmp/rl-Packages'):
+                      _l = _l.strip()
+                      if _l.startswith('CPV: '):
+                          release_assets.add(_l[5:])
+              except Exception:
+                  pass
 
           marker = os.path.join(pkgdir, '.build_start')
           try:
@@ -717,19 +729,27 @@ jobs:
                       mtime = os.path.getmtime(fullpath)
                   except Exception:
                       mtime = 0
-                  if mtime <= marker_mtime and cpv not in release_cpvs:
+                  base = os.path.basename(relpath)
+                  will_upload = mtime > marker_mtime
+                  if not will_upload and base not in release_assets and cpv not in release_assets:
                       print(f"  SKIP (pre-marker build not in release): {relpath}")
                       continue
 
-                  candidates.append((cpv, _bid_key(meta, f), fullpath, relpath, meta))
+                  candidates.append((cpv, _bid_key(meta, f), will_upload, fullpath, relpath, meta))
 
           best = {}
-          for cpv, bid, fullpath, relpath, meta in candidates:
-              if cpv not in best or bid > best[cpv][0]:
-                  best[cpv] = (bid, fullpath, relpath, meta)
+          for cpv, bid, will_upload, fullpath, relpath, meta in candidates:
+              cur = best.get(cpv)
+              # Prefer the file the upload step will actually publish (newer than
+              # the marker), then the higher build id. Otherwise a stale restored
+              # build (e.g. noctalia -2) can beat a fresh build that got a lower
+              # build id, and the old asset is deleted during upload, leaving a
+              # dangling index entry.
+              if cur is None or (will_upload and not cur[0]) or (will_upload == cur[0] and bid > cur[1]):
+                  best[cpv] = (will_upload, bid, fullpath, relpath, meta)
 
           entries = []
-          for cpv, (bid, fullpath, relpath, meta) in sorted(best.items()):
+          for cpv, (_will_upload, bid, fullpath, relpath, meta) in sorted(best.items()):
               block = {'CPV': cpv, 'PATH': relpath, 'URI': os.path.basename(relpath)}
               for k in META_KEYS:
                   if k in meta:
