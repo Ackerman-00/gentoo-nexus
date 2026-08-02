@@ -37,6 +37,9 @@ DEPEND="
     media-video/wireplumber
     dev-libs/md4c
     dev-cpp/tomlplusplus
+    dev-libs/libical
+    dev-libs/libsodium
+    dev-libs/stb
     net-misc/curl
     sci-libs/libqalculate
     sys-auth/polkit
