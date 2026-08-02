@@ -15,9 +15,13 @@ PROPERTIES="live"
 IUSE=""
 
 DEPEND="
+    app-crypt/libsecret
+    dev-cpp/nlohmann-json
     dev-cpp/sdbus-c++
     dev-libs/glib:2
     dev-libs/jemalloc
+    dev-libs/libical
+    dev-libs/libsodium
     dev-libs/libxml2
     dev-libs/wayland
     gnome-base/librsvg:2
@@ -25,6 +29,8 @@ DEPEND="
     media-libs/freetype
     media-libs/harfbuzz
     media-libs/libglvnd
+    media-libs/libjxl
+    media-libs/libsndfile
     media-libs/libwebp
     media-libs/mesa[egl(+),gles2(+)]
     media-video/pipewire
