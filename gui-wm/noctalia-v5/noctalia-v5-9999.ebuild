@@ -16,7 +16,7 @@ IUSE=""
 
 DEPEND="
     app-crypt/libsecret
-    dev-cpp/nlohmann-json
+    dev-cpp/nlohmann_json
     dev-cpp/sdbus-c++
     dev-libs/glib:2
     dev-libs/jemalloc
