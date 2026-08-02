@@ -5,6 +5,12 @@ on:
     - cron: '30 */10 * * *'   # Every 10 hours (0:30, 10:30, 20:30 UTC) - leaves
                               # ~4h slack beyond the 6h max runtime so runs never overlap
   workflow_dispatch:
+    inputs:
+      relay:
+        description: 'Relay continuation run - pick up unfinished work from AUTONOMOUS_STATE.md'
+        required: false
+        default: 'false'
+        type: boolean
 
 permissions:
   contents: write
@@ -28,7 +34,7 @@ jobs:
       actions: write
       id-token: write
     steps:
-      - uses: actions/checkout@v6
+      - uses: actions/checkout@v6.1.0
         with:
           persist-credentials: false
 
@@ -37,6 +43,7 @@ jobs:
         env:
           OPENCODE_API_KEY: ${{ secrets.OPENCODE_API_KEY }}
           GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+          RELAY: ${{ github.event.inputs.relay || 'false' }}
         with:
           model: opencode/deepseek-v4-flash-free
           prompt: |
@@ -71,15 +78,17 @@ jobs:
                   git push origin main
             - Then re-trigger a fresh run of this same workflow to continue:
                   gh workflow run opencode-schedule.yml --ref main \
-                    --repo Ackerman-00/gentoo-nexus
+                    --repo Ackerman-00/gentoo-nexus -f relay=true
               The next run will pick up AUTONOMOUS_STATE.md from the repo and
               continue from exactly where you stopped.
-            - When you START a run, FIRST check for AUTONOMOUS_STATE.md. If it
-              exists and has content, continue that leftover work before anything
-              else (after still doing the mandatory repo-health audit below). When
-              you finish everything, DELETE AUTONOMOUS_STATE.md (git rm) and push,
-              so no leftover checklist lingers. If you need to relay again, update
-              the file's leftover tasks and re-trigger once more.
+            - When you START a run, FIRST check for AUTONOMOUS_STATE.md (and
+              check whether this run was started with relay=true - env RELAY=1,
+              see the input on the workflow). If either says there is leftover
+              work, continue it before anything else (after still doing the
+              mandatory repo-health audit below). When you finish everything,
+              DELETE AUTONOMOUS_STATE.md (git rm) and push, so no leftover
+              checklist lingers. If you need to relay again, update the file's
+              leftover tasks and re-trigger once more.
             - Cap your relaying sensibly: keep chaining runs to finish real work,
               but do not run indefinitely - if after 2-3 handoffs the same task
               still cannot finish, leave a clear diagnosis in the state file and
@@ -198,6 +207,240 @@ jobs:
             checksums match (download + sha512sum/BLAKE2B), and look for known
             build fixes/patches upstream. NEVER trust a version, URL, checksum, or
             fix you have not verified online.
+            - GITHUB API RATE LIMITS: unauthenticated api.github.com requests are
+              limited to 60/hour - you will hit this in a long run. Always send
+              `-H "Authorization: token $GITHUB_TOKEN"` on GitHub API calls, or
+              prefer `gh api <path>` which authenticates automatically and gets
+              5000/hour. If a curl call starts returning 403 rate-limit JSON,
+              switch to `gh api` immediately. The Gentoo infrastructure
+              (packages.gentoo.org, distfiles, gitweb) is not rate-limited the
+              same way - plain curl is fine there.
+
+            NO-CHURN VERIFICATION (MANDATORY, applies to every step below). You
+            must NEVER push a version bump or ebuild rename if it was already
+            pushed and built before. Past runs in sibling repos repeatedly
+            re-synced the same upstream commit (e.g. niri-git,
+            xwayland-satellite-git), generating churn commits and useless
+            rebuilds. Before bumping or touching ANY package:
+              a. CHECK GIT LOG FIRST. For the package in question run
+                 `git log --oneline -15 -- <category>/<package>/` and `git show
+                 <most-recent auto-update commit> -- <category>/<package>/`.
+                 If a previous commit already carries the SAME upstream version
+                 / commit SHA / tarball you are about to push, STOP: do not
+                 bump, do not rename ebuilds, do not touch the Manifest, do not
+                 push. The package is already current.
+              b. CHECK THE ROLLING RELEASE FOR WHAT WAS ALREADY BUILT. The
+                 "rolling" GitHub Release is authoritative for "what got out":
+                 GET https://api.github.com/repos/Ackerman-00/gentoo-nexus/releases/tags/rolling
+                 (or `gh release view rolling --json assets --jq '.assets[].name'`).
+                 If the asset <package>-<version>_r<rev>.gpkg.tar already
+                 exists, the package is built AND published - do NOT trigger
+                 another rebuild by pushing, unless the build actually failed
+                 or the version genuinely changed upstream. Same for the
+                 Packages index: if it already lists that CPV, do not rewrite
+                 it.
+              c. An ebuild rename / version bump is only allowed when the
+                 upstream version/commit actually changed. Never add a "sync"
+                 bump for a version already in git log or already in the
+                 rolling release. Also never touch md5-cache for a package
+                 whose ebuild did not change - egencache churn on unchanged
+                 ebuilds is a bug in the generator, not a fix.
+              d. FIX BROKEN UPDATERS, don't work around them. If
+                 check-updates.yml / sync_overlay.sh regenerates churn (same
+                 version, new commit) because of a flawed up-to-date guard,
+                 fix the script so it skips packages that already match
+                 upstream. The correct guard is a pure version/commit
+                 comparison - never require local artifact files (distfiles,
+                 Manifest hashes) to exist: they are regenerated in CI, not
+                 stored.
+              e. AUDIT REPEATED AUTO-UPDATE COMMITS. If you see 3+ consecutive
+                 auto-update commits touching the same package for the same
+                 version, treat it as a bug in the pipeline, fix the root
+                 cause, and collapse the duplicate bumps so only one exists
+                 per actual update.
+
+            PACKAGE DEPENDENCY DEEP AUDIT (MANDATORY - "TEAR EVERY PACKAGE
+            APART" sweep; applies to every package, every run). You must not
+            trust that an ebuild is complete just because it builds. Chain-of-
+            verification protocol: draft a dependency list from the ebuild,
+            independently derive the TRUE list from upstream, then reconcile -
+            never trust either alone.
+              a. OPEN THE PACKAGE. Read the FULL ebuild (EAPI, DESCRIPTION,
+                 HOMEPAGE, SRC_URI, LICENSE, SLOT, KEYWORDS, RESTRICT,
+                 RDEPEND/DEPEND/BDEPEND, USE-dependent deps, src_* functions,
+                 PROPERTIES/QA_PREBUILT) and its commit history. Download the
+                 SRC_URI distfiles into a temp dir and EXTRACT them. Do not
+                 reason about dependencies from memory - inspect the actual
+                 upstream files:
+                 - Rust: Cargo.toml / Cargo.lock (+ vendor dir if present)
+                 - Node: package.json / pnpm-lock.yaml / yarn.lock
+                 - C/C++: meson.build / CMakeLists.txt / Makefile / configure.ac
+                 - Python: pyproject.toml / setup.py / requirements.txt
+                 - Go: go.mod
+                 - Anything else: install docs, Dockerfile, CI workflows.
+                 For ALL binary-distributed packages - AppImage (rootapp-bin,
+                 vesktop, zen-browser, brave-origin-bin, obsidian, ...), .deb,
+                 prebuilt tarballs, self-contained/static binaries, CDN
+                 installers - tear the artifact apart EXACTLY like the KNOWN
+                 PACKAGE-SPECIFIC NOTES section describes: AppImages with
+                 --appimage-extract or unsquashfs with the ELF section-header
+                 offset, .deb with `ar x` + `tar -xf data.tar.*`, tarballs by
+                 plain extraction - then read version + dependencies from
+                 inside (X-AppImage-Version in the .desktop, bundled
+                 package.json / app.asar / lib64/*.so, AppRun scripts). NEVER
+                 guess what is inside a binary package, and NEVER trust a
+                 binary's filename, version string, or claimed dependencies
+                 without opening it.
+              b. DERIVE THE TRUE DEPENDENCY LIST from those files. Every
+                 direct dependency the upstream build needs MUST have a
+                 matching RDEPEND/DEPEND/BDEPEND entry (or be satisfied by a
+                 vendored/bundled copy - note it explicitly).
+              c. COMPARE against the ebuild: missing deps, and deps that no
+                 longer exist upstream. MISSING deps = a bug. Fix it.
+              d. WEB-SEARCH-VERIFY EVERYTHING before adding a single dep: the
+                 dependency must be real and must exist in ::gentoo under that
+                 exact category/atom. Check
+                 https://packages.gentoo.org/packages/<cat>/<name> (404 if it
+                 does not exist), or query inside the stage3 container:
+                 emerge --search <name>    # finds by name/description
+                 equery depends <atom>     # verify/reverse-dep atom syntax
+                 If the dep is not in ::gentoo at all, do NOT invent it -
+                 report and move on. If it is a Rust crate already vendored,
+                 it needs NO ebuild dep, but the crate list must match
+                 Cargo.lock.
+              e. ALSO AUDIT RUNTIME deps (shared libs via ldd of the installed
+                 binary, desktop-file helpers, themes, fonts, portal services)
+                 and DROP dead/unneeded deps (rot). Keep the ebuild minimal
+                 and correct. For prebuilt binaries double-check
+                 QA_PREBUILT/RESTRICT and the actually-linked sonames.
+              f. APPLY AND VERIFY: add the deps (following Gentoo conventions:
+                 slot-annotated atoms, correct USE-conditional syntax),
+                 commit, push (triggers a build), and verify the build: an
+                 added dep that does not resolve is worse than none. Retry up
+                 to 3 times, then revert and file an issue.
+              g. MANDATORY DELIVERABLE - dependency audit table for EVERY
+                 package: | package | upstream deps found | in ebuild |
+                 missing/added | extra/dropped | status |
+                 status in: deps-verified / deps-fixed / blocked-(reason).
+                 If any package is missing from this table, the run is not
+                 finished. State confidence (high/medium/low) for anything
+                 not fully verified, and why.
+
+            KNOWN PACKAGE-SPECIFIC NOTES - THE RIGOR BELOW APPLIES TO EVERY
+            PACKAGE, NOT JUST THE EXAMPLE NAMED. For EVERY package, establish
+            the authoritative reference chain: (1) this repo's ebuild, (2) an
+            owner-tested sibling-repo packaging if one exists, (3) the upstream
+            project itself, and (4) the actual source/binary artifact, opened
+            and inspected (see the DEEP AUDIT above). Never special-case only
+            rootapp-bin - treat EVERY prebuilt-binary package in this repo the
+            same way (brave-origin-bin, faugus-launcher, obsidian, protonplus,
+            rootapp-bin, vesktop, zen-browser, ...): tear the artifact apart,
+            read the real version from inside, and verify the Manifest hash
+            against the downloaded file. rootapp-bin below is the canonical
+            worked example.
+
+            WORKED EXAMPLE (rootapp-bin): rootapp is a proprietary AppImage
+            from https://installer.rootapp.com/installer/Linux/X64/Root.AppImage
+            (no GitHub releases/tags - the version comes from INSIDE the
+            AppImage). Authoritative references, in priority order:
+              1. THIS REPO: app-misc/rootapp-bin/rootapp-bin-0.9.125.ebuild
+                 (currently 0.9.125; check its SRC_URI and Manifest).
+              2. fedora-nexus (github.com/Ackerman-00/fedora-nexus,
+                 rootapp/rootapp.spec + update.sh). The fedora-nexus packaging
+                 was personally tested and patched by the repo owner - it IS
+                 the source of truth; all sibling repos stay in sync with it,
+                 never the other way around.
+              3. COPR: https://copr.fedorainfracloud.org/coprs/ackerman/nexus/package/rootapp/
+                 (shows the exact built NVRs; the site may show a bot-check
+                 page - retry or use the API endpoints)
+              4. TEAR THE APPIMAGE ITSELF APART: download the AppImage and
+                 extract it (--appimage-extract or unsquashfs with the ELF
+                 section-header offset), read the real version from inside
+                 (X-AppImage-Version in the .desktop, bundled package.json /
+                 app.asar metadata). Compare the sha512sum/BLAKE2B of the
+                 downloaded AppImage against the Manifest - matching means the
+                 same binary is packaged.
+            Do NOT trust the AUR rootapp-bin version (it lags) and do NOT
+            trust "19.2.5" (bogus string extracted from a binary). Keep the
+            version in sync with fedora-nexus and what the AppImage itself
+            reports.
+
+            INSTALL-VERIFICATION SWEEP (MANDATORY - the binhost binary MUST
+            install via `emerge --usepkgonly` on a real Gentoo system, not
+            just build in CI). A successful build only proves the ebuild
+            COMPILES - it does NOT prove the binary INSTALLS cleanly from the
+            binhost. Ebuilds with wrong dep atoms (borrowed from other
+            distros, outdated, or renamed upstream) build fine while users hit
+            "no binary package for atom" or unresolved-dependency errors.
+            Catch this BEFORE users do.
+              a. DOWNLOAD THE BUILT BINARY from the "rolling" release:
+                 `gh release view rolling --json assets --jq '.assets[].name'`
+                 to find <package>-<version>_r<rev>.gpkg.tar, and download it
+                 (plus the Packages index) from
+                 https://github.com/Ackerman-00/gentoo-nexus/releases/download/rolling/
+                 into a local binhost dir.
+              b. REAL INSTALL TEST IN A CLEAN STAGE3 CONTAINER. You need a
+                 working container runtime on the runner. Docker is
+                 preinstalled on the ubuntu-latest runner, but VERIFY it
+                 first: `docker version` (and `docker run --rm hello-world`
+                 once to confirm the daemon works; on GitHub runners no sudo
+                 is needed). If docker is missing, broken, or the daemon is
+                 down, INSTALL it yourself:
+                 sudo apt-get update && sudo apt-get install -y docker.io
+                 sudo systemctl start docker
+                 (or `sudo apt-get install -y podman` and use `podman run`
+                 with the same arguments). Never skip the container test
+                 because the runtime is missing - install it. Then spin up a
+                 fresh stage3 container (gentoo/stage3:amd64-desktop-openrc
+                 like build.yml, or gentoo/stage3:amd64-openrc for small
+                 packages), mount the overlay + local binhost, point Portage
+                 at them, and ACTUALLY INSTALL:
+                 docker run --rm --privileged -v "$PWD:/work" \
+                   gentoo/stage3:amd64-openrc bash -lc '
+                     cp -a /work/overlay /var/db/repos/gentoo-nexus
+                     printf "[gentoo-nexus]\nlocation = /var/db/repos/gentoo-nexus\nmasters = gentoo\n" > /etc/portage/repos.conf/gentoo-nexus.conf
+                     printf "[nexus]\npriority = 1\nsync-uri = file:///work/binhost\nlocation = /var/cache/binhost/nexus\n" > /etc/portage/binrepos.conf/nexus.conf
+                     emerge-webrsync -q || emerge --sync -q
+                     emerge --pretend --verbose --getbinpkg --usepkgonly <atom>
+                     emerge --getbinpkg --usepkgonly <atom>
+                     equery check <atom>                       # file integrity
+                     command -v <binary> && ldd "$(command -v <binary>)"  # smoke
+                   '
+                 If emerge errors with "there are no binary packages to
+                 satisfy <atom>", a dep cannot resolve from the binhost, or
+                 the install fails - the install test FAILED and the package
+                 is NOT done.
+              c. MAP WRONG NAMES TO THE REAL ::GENTOO PACKAGE. For every
+                 failing dep atom find the actual provider: search
+                 https://packages.gentoo.org/packages/?q=<name> and
+                 `emerge --search <name>` inside the container. ALSO
+                 WEB-SEARCH the atom to prove it is real: `Gentoo <name>
+                 ebuild` - confirm it exists in ::gentoo and is not a name
+                 borrowed from another distro, a typo, or something only in a
+                 third-party repo (packages.gentoo.org, repology.org as
+                 cross-check). RULE: use exact, slot-annotated atoms in the
+                 form ::gentoo uses (e.g. x11-libs/libXScrnsaver, NOT
+                 openSUSE's libXScrnSaver1), and only use an atom after
+                 packages.gentoo.org confirmed it exists. NEVER copy a
+                 dependency list from another distro's packaging blindly.
+              d. FIX, REBUILD, RETEST. Fix the ebuild, commit, trigger a
+                 build (`gh workflow run "Build Relay"` with the package
+                 list), wait for it, download the new binary and re-run the
+                 container install test until emerge --usepkgonly installs it
+                 cleanly AND the app launches (--version/--help; exit 0 =
+                 smoke test passed).
+              e. SCOPE: install-test EVERY package you touched this run
+                 (mandatory before you consider the fix done) plus a rotating
+                 spot-check of untouched packages (>=5 per run, rotating
+                 until the whole repo is covered). Pure library or
+                 headless-only packages still get the install test; only the
+                 runtime smoke test may be skipped, with the reason recorded.
+              f. MANDATORY DELIVERABLE - install-test table in your final
+                 summary, one row per package tested:
+                 | package | build | emerge --usepkgonly | smoke test | status |
+                 status in: installable / fixed / broken-(dep) /
+                 blocked-(reason). Any package you changed but did not
+                 install-test is an unfinished package.
 
             Then work autonomously, in this priority order:
 
@@ -307,10 +550,17 @@ jobs:
 
                STEP B - FOR EACH PACKAGE, FIND THE AUTHORITATIVE LATEST UPSTREAM
                VERSION. NEVER trust memory or the ebuild's current version:
-               - Identify the true upstream from the ebuild's HOMEPAGE/SRC_URI. If
-                 the source is NOT a GitHub release (e.g. a CDN installer like
-                 installer.rootapp.com), find where the real version lives: the
-                 project homepage, its changelog, the ::gentoo ebuild, or the AUR.
+               - Identify the true upstream from the ebuild's HOMEPAGE/SRC_URI.
+                 If the source is a prebuilt binary or CDN installer (AppImage,
+                 .deb, tarball - e.g. installer.rootapp.com), the real version
+                 lives INSIDE the artifact: download it, tear it apart exactly
+                 as the DEEP AUDIT and the KNOWN PACKAGE-SPECIFIC NOTES section
+                 describe (X-AppImage-Version in the .desktop, bundled
+                 package.json / changelog / binary version strings), and
+                 cross-check against the project homepage, its changelog, the
+                 ::gentoo ebuild, repology, or the AUR. This applies to EVERY
+                 binary-distributed package, not just rootapp-bin - never trust
+                 a filename or homepage string alone.
                - For GitHub projects, use the API and reconcile results:
                      curl -s https://api.github.com/repos/<owner>/<repo>/releases/latest
                      curl -s https://api.github.com/repos/<owner>/<repo>/tags
@@ -334,14 +584,10 @@ jobs:
                the old one only if needed, update the Manifest, and regenerate
                with the container tooling.
 
-               KNOWN PACKAGE-SPECIFIC NOTE (rootapp-bin): for the rootapp-bin
-               package, the authoritative reference is fedora-nexus
-               (github.com/Ackerman-00/fedora-nexus, rootapp/rootapp.spec,
-               currently 0.9.125). The fedora-nexus packaging was personally
-               tested and patched by the repo owner, so it is the source of truth
-               for this package. Do NOT trust the AUR rootapp-bin version (it
-               lags), and do NOT trust "19.2.5" (a bogus string extracted from the
-               AppImage). Keep the version in sync with fedora-nexus.
+                (See the global KNOWN PACKAGE-SPECIFIC NOTES section above - it
+                applies to EVERY package; rootapp-bin is just the worked example.
+                fedora-nexus is its source of truth; never trust the AUR version
+                or "19.2.5".)
 
                STEP D - CROSS-REPO CONSISTENCY CHECK (OPTIONAL, NEVER
                AUTHORITATIVE). The AUTHORITATIVE version of any package is its
@@ -537,9 +783,9 @@ jobs:
 
             SAFETY NET: if you cannot wait for a build to finish within this run,
             that is fine - the next scheduled run detects any still-missing
-            binaries (step 3/4) and rebuilds them, and re-verifies anything you
-            left unfinished. Never block forever; prefer commit + trigger + move
-            on.
+            binaries (step 3/4) and rebuilds them, and AUTONOMOUS_STATE.md
+            preserves your unfinished work and picks it up (see RELAY above).
+            Never block forever; prefer commit + trigger + move on.
 
             HARD RULES:
             - You have FULL control: edit any file in the repo (ebuilds,
@@ -562,6 +808,11 @@ jobs:
               triggering a successful build.
             - No churn: only touch packages that are actually broken, missing, or
               outdated. Do not bump versions gratuitously.
+            - Never echo, print, commit, or paste OPENCODE_API_KEY /
+              GITHUB_TOKEN values anywhere (terminal output, issues, files, logs).
+            - Relay, don't die: never let a run end with uncommitted work or
+              unrecorded progress - update AUTONOMOUS_STATE.md and trigger a
+              relay run before the timeout.
             - Don't get stuck: cap retries at 3 per package and escalate
               unresolvable problems via issues.
             - End every run with a concise final summary: the repo-working verdict
