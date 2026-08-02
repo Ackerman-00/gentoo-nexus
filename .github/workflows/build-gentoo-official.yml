@@ -470,6 +470,29 @@ jobs:
           set +e
           touch /var/cache/binpkgs/.build_start
 
+          # Self-heal perl slot bumps: the restored release binaries can carry a
+          # stale perl (e.g. 5.42) while ::gentoo has moved on (5.44), leaving
+          # installed perl-modules invalid and producing slot conflicts that block
+          # the target build. When the tree's perl differs from the restored one,
+          # upgrade perl and rebuild every perl-dependent module. This runs after
+          # the .build_start marker so the produced binaries reach the rolling
+          # release and the environment heals itself.
+          BEST_PERL=$(portageq best_visible / 'dev-lang/perl' 2>/dev/null || true)
+          INSTALLED_PERL=$(portageq best_version / 'dev-lang/perl' 2>/dev/null || true)
+          if [ -n "$BEST_PERL" ] && [ -n "$INSTALLED_PERL" ] && [ "$BEST_PERL" != "$INSTALLED_PERL" ]; then
+            echo ">>> Perl outdated: ${INSTALLED_PERL} -> ${BEST_PERL}; upgrading perl stack..."
+            emerge --oneshot --getbinpkg --buildpkg --backtrack=30 --quiet-build=y "=${BEST_PERL}" 2>&1 | tail -5 || true
+            if ! command -v perl-cleaner >/dev/null 2>&1; then
+              emerge --oneshot --getbinpkg --buildpkg --backtrack=30 --quiet-build=y app-admin/perl-cleaner 2>&1 | tail -3 || true
+            fi
+            perl-cleaner --all 2>&1 | tail -15 || true
+            rm -f /var/cache/binpkgs/Packages /var/cache/binpkgs/Packages.gz
+            emaint binhost --fix
+            echo ">>> Perl stack rebuilt."
+          else
+            echo ">>> Perl stack is current (${INSTALLED_PERL:-none})."
+          fi
+
           # Safety skip check inside Docker (defense-in-depth):
           # Only skip when NOT force-rebuilding. FORCE="true" forces all;
           # a list of atoms forces only those matching the current CPV.
