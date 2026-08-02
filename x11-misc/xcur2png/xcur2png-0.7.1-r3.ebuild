@@ -7,7 +7,10 @@ inherit autotools flag-o-matic
 
 DESCRIPTION="Convert X cursors to PNG images"
 HOMEPAGE="https://github.com/eworm-de/xcur2png"
-SRC_URI="https://github.com/eworm-de/xcur2png/releases/download/${PV}/${P}.tar.gz"
+# Upstream tags releases without the Gentoo revision suffix (tag is 0.7.1,
+# not 0.7.1-rN), and the tarball is named after the plain version.
+MY_PV="${PV%-r*}"
+SRC_URI="https://github.com/eworm-de/xcur2png/releases/download/${MY_PV}/${PN}-${MY_PV}.tar.gz"
 
 LICENSE="GPL-3"
 SLOT="0"
