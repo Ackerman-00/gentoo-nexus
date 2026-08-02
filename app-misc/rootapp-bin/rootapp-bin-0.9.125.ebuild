@@ -57,7 +57,7 @@ RDEPEND="
 	x11-libs/libxcb
 	x11-libs/libxkbcommon
 	x11-libs/pango
-	x11-misc/wl-clipboard
+	gui-apps/wl-clipboard
 	x11-misc/xdg-utils
 	x11-themes/hicolor-icon-theme
 	x11-base/xwayland

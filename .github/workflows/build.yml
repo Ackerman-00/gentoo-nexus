@@ -547,6 +547,7 @@ jobs:
           # reconcile step to re-add the same "missing" entries every run.
           rm -f /var/cache/binpkgs/Packages /var/cache/binpkgs/Packages.gz
           emaint binhost --fix
+          [ "$BUILD_EXIT" -eq 0 ] || exit $BUILD_EXIT
           BUILDSCRIPT
 
           chmod +x build.sh

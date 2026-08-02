@@ -13,22 +13,22 @@ KEYWORDS="~amd64"
 IUSE=""
 REQUIRED_USE="${PYTHON_REQUIRED_USE}"
 
-DEPEND="${PYTHON_DEPS}
+RDEPEND="${PYTHON_DEPS}
 	$(python_gen_cond_dep '
 		dev-python/pygobject:3[${PYTHON_USEDEP}]
 		dev-python/requests[${PYTHON_USEDEP}]
 		dev-python/pillow[${PYTHON_USEDEP}]
 		dev-python/vdf[${PYTHON_USEDEP}]
 		dev-python/psutil[${PYTHON_USEDEP}]
-		dev-python/pygame[${PYTHON_USEDEP}]
+		dev-python/dbus-python[${PYTHON_USEDEP}]
 		dev-python/icoextract[${PYTHON_USEDEP}]
 	')
-	media-libs/libcanberra
-	media-gfx/imagemagick
-	dev-libs/libayatana-appindicator
-	dev-util/vulkan-tools
+	gui-libs/gtk:4
+	gui-libs/libadwaita
+	dev-libs/libmanette
+	media-libs/vulkan-loader
 "
-RDEPEND="${DEPEND}"
+DEPEND="${RDEPEND}"
 BDEPEND="
 	${PYTHON_DEPS}
 "
@@ -39,6 +39,4 @@ pkg_setup() {
 
 src_install() {
 	meson_src_install
-	
-	python_fix_shebang "${ED}/usr/bin"
 }
