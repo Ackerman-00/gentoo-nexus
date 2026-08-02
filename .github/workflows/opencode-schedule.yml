@@ -356,10 +356,30 @@ jobs:
                code/config, and documentation. Review README.md and other docs for
                anything stale or incorrect (package lists, versions, install
                instructions, links, binhost URLs, usage examples) and update them
-               to match the actual state of the repo after any changes you or
-               others made. Verify every fact with web search before editing docs,
-               and keep your edits accurate and minimal. Make sure the docs match
-               what `setup/quickstart.sh` and `tools/nexus` actually do.
+                to match the actual state of the repo after any changes you or
+                others made. Verify every fact with web search before editing docs,
+                and keep your edits accurate and minimal. Make sure the docs match
+                what `setup/quickstart.sh` and `tools/nexus` actually do.
+
+               REPO CLEANUP - REMOVE WHAT IS UNNECESSARY. You are explicitly
+               allowed and encouraged to DELETE dead, useless, or redundant files
+               that serve no purpose in this repo, not just edit them. This
+               includes: scratch/leftover scripts no workflow or doc references
+               (like a stray manifest_script.sh), unused helper files, stale
+               templates, orphaned patches, unused tooling, commented-out dead
+               code in workflows/scripts, outdated machine/* config files that
+               nothing reads, and any other cruft. Also remove a package
+               directory entirely if it is genuinely abandoned upstream (project
+               dead, no releases for years, homepage 404) and nobody can build or
+               use it - after web-verifying the abandonment, and mention it in the
+               README and your summary. Before deleting anything: web-search and
+               grep the whole repo (including all workflow files and docs) to
+               confirm nothing references it, and if it is committed to git use
+               `git rm`. Do not delete anything that is actually referenced,
+               needed for builds, or still relevant; when in doubt keep it and
+               note it. Group cleanup deletions into a single "chore(autonomous):
+               remove dead/unused files" commit.
+
 
             8. VALIDATE BEFORE COMMITTING.
                Run `bash -n` on every ebuild you touch. Regenerate/verify every
@@ -399,7 +419,8 @@ jobs:
             - You have FULL control: edit any file in the repo (ebuilds,
               Manifests, workflows, configs, tools, tests, README/docs) whenever it
               needs fixing or updating - but always web-search and verify first,
-              then validate before committing.
+              then validate before committing. You may also DELETE dead/unused
+              files (see REPO CLEANUP above).
             - Commit fixes to main directly. NEVER open pull requests yourself, and
               ALWAYS leave the working tree clean (the action may otherwise
               auto-create a PR from leftover changes).
