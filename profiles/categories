@@ -1,12 +1,9 @@
 www-client
 games-util
-machine
-tests
 x11-base
 x11-misc
 gui-wm
 net-im
-tools
 dev-python
 app-misc
 app-office
