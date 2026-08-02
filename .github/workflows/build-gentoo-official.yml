@@ -828,7 +828,11 @@ jobs:
           shopt -s nullglob
           while IFS= read -r -d '' file; do
             ASSET_NAME=$(basename "$file")
-            PN=$(echo "$file" | awk -F'/' '{print $3}')
+            # gpkg layout is binpkgs/gpkg/<arch>/<cat>/<pn>/<pf>-<buildid>.gpkg.tar,
+            # so the package name is derived from the filename, never from path
+            # fields (awk -F/ '{print $3}' yields the arch). Strip the trailing
+            # -<buildid> suffix to get <pf> (e.g. highway-1.4.0-2 -> highway-1.4.0).
+            PN=$(echo "$ASSET_NAME" | sed -E 's/\.gpkg\.tar$//; s/-[0-9]+$//')
             echo "  Processing: $ASSET_NAME (PN=$PN)"
 
             # Delete old versions of the same package name
