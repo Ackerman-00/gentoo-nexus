@@ -690,7 +690,7 @@ jobs:
                        'CFLAGS', 'CXXFLAGS', 'LDFLAGS', 'FEATURES', 'LICENSE',
                        'KEYWORDS', 'REQUIRED_USE', 'PROPERTIES', 'RESTRICT',
                        'DEFINED_PHASES', 'IUSE', 'SLOT', 'EAPI', 'REPO_REVISIONS',
-                       'DEPEND', 'RDEPEND', 'PDEPEND',
+                       'DEPEND', 'RDEPEND', 'PDEPEND', 'IDEPEND',
                        'SIZE', 'MD5', 'SHA1', 'SHA512')
 
           def _bid_key(meta, f):
