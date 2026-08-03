@@ -34,16 +34,19 @@ DEPEND="
     dev-libs/glib
     dev-libs/nspr
     dev-libs/nss
+    dev-libs/wayland
     media-libs/alsa-lib
     media-libs/fontconfig
     media-libs/mesa[gbm(+)]
     net-print/cups
     sys-apps/dbus
     sys-libs/glibc
+    virtual/libudev
     x11-libs/cairo
     x11-libs/libdrm
     x11-libs/gdk-pixbuf:2
     x11-libs/gtk+:3
+    x11-libs/libX11
     x11-libs/libXcomposite
     x11-libs/libXdamage
     x11-libs/libXext
@@ -54,6 +57,7 @@ DEPEND="
     x11-libs/pango
     x11-misc/xdg-utils
 "
+RDEPEND="${DEPEND}"
 
 DESTDIR="/opt/Vesktop"
 

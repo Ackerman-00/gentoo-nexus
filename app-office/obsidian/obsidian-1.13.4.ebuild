@@ -38,6 +38,7 @@ RDEPEND="
     dev-libs/glib:2
     dev-libs/nspr
     dev-libs/nss
+    dev-libs/wayland
     media-libs/alsa-lib
     media-libs/fontconfig
     media-libs/mesa[gbm(+)]
@@ -45,6 +46,7 @@ RDEPEND="
     sys-apps/dbus
     sys-apps/util-linux
     sys-libs/glibc
+    virtual/libudev
     x11-libs/cairo
     x11-libs/libdrm
     x11-libs/gdk-pixbuf:2
