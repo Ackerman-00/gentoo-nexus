@@ -1,7 +1,7 @@
 # Autonomous Run State
 
-Last fully-verified run: **2026-08-02** (opencode dispatch; Build Relays #30767217752,
-#30768298050, #30769041803, #30770062165 all SUCCESS).
+Last fully-verified run: **2026-08-03** (opencode dispatch; Build Relays #30776535366,
+#30777171681 all SUCCESS).
 
 ## Goal
 Keep the gentoo-nexus overlay + rolling binhost working: ebuilds correct, live
@@ -9,7 +9,7 @@ packages pinned to current commits, and the rolling `Packages` index an exact,
 dangling-free mirror of the published assets.
 
 ## Status: HEALTHY
-- Rolling index: **480 unique CPV entries, 0 duplicates, 0 dangling** (no entry
+- Rolling index: **481 unique CPV entries, 0 duplicates, 0 dangling** (no entry
   references a missing asset, and every non-acct release `.gpkg.tar` is indexed;
   the 3 acct-group/acct-user packages `cuse`, `plugdev`, `seat` are intentionally
   filtered from the served index by the upload step).
@@ -17,9 +17,29 @@ dangling-free mirror of the published assets.
 - Release: 510 assets (~4.5 GB) on the `rolling` release.
 - `commits.json` (live 9999 packages): `gui-wm/noctalia-v5`=0f30499c6131,
   `x11-base/xwayland-satellite`=8d135d3b2854, `gui-wm/niri`=7f26c3ee804f.
-- All 18 overlay packages have matching `.gpkg.tar` assets in `rolling`.
+- **ALL 18 overlay packages resolve as `[binary]` under plain `emerge --getbinpkg`
+  in the stage3 testbed** (previously every one fell back to source due to the
+  empty-deps index bug, then 3 remained broken on IDEPEND, and 1 on stale metadata).
 
 ## What changed this run
+- **Index metadata fix (root cause of mass source-fallback)**: the rolling
+  `Packages` index omitted dependency keys, so portage's changed-deps check
+  (`bdeps=auto` under `--getbinpkg`, comparing BDEPEND/DEPEND/IDEPEND/PDEPEND/
+  RDEPEND) rejected every overlay binpkg and rebuilt from source. Fixes:
+  1. `DEPEND`, `RDEPEND`, `PDEPEND` added to `META_KEYS` (commit e20b43a) — index
+     now carries 323 DEPEND / 458 RDEPEND lines.
+  2. `IDEPEND` added to `META_KEYS` (commit 4abd1dfa) — required for the
+     `xdg`-eclass-dependent packages (obsidian, protonplus, vesktop) whose
+     ebuild metadata carries `IDEPEND=dev-util/desktop-file-utils
+     x11-misc/shared-mime-info`; index now carries 38 IDEPEND lines.
+- Rebuilt `app-misc/nwg-look` to `-2` (its build-id 1 gpkg predated commit
+  30287fe which dropped `xdg` inheritance, so the stale binpkg carried an
+  IDEPEND the current ebuild no longer declares).
+- Verified in the testbed: `emerge --getbinpkg --pretend` resolves all 18
+  overlay packages as `[binary N g]` — brightnessctl, cliphist, nwg-look,
+  rootapp-bin, icoextract, faugus-launcher, scenefx, mangowm, brave-origin-bin,
+  zen-browser, xwayland-satellite, matugen, xcur2png, obsidian, protonplus,
+  vesktop, niri, noctalia-v5. No "changed dependencies" rejections remain.
 - `gui-wm/noctalia-v5`: EGIT_COMMIT bumped to upstream main HEAD `0f30499c`;
   added `media-libs/libepoxy` (meson requires `dependency('epoxy')` for
   EGL/GLES); removed duplicate `libical`/`libsodium` atoms.
@@ -76,6 +96,21 @@ dangling-free mirror of the published assets.
    with `GITHUB_TOKEN` (API + dispatch, but GITHUB_TOKEN cannot git-push).
    Note: a global `url.<old-token>@github.com/.insteadOf` may exist and must be
    removed (or the URL pushed to explicitly) after renewal.
+   Fallback if the exchanged token cannot git-push: `GITHUB_TOKEN` CAN do
+   workflow_dispatch and contents-API writes (new files and non-`.github/workflows`
+   updates), and the git-data API (blobs/trees/commits) — push by creating
+   blob->tree->commit->ref via `gh api` (must be a fast-forward; the exchanged
+   token cannot update `refs/heads/main` non-fast-forward but CAN with force:true).
+6. **Index dependency keys are mandatory**: `META_KEYS` must include `DEPEND`,
+   `RDEPEND`, `PDEPEND` AND `IDEPEND`. Portage's changed-deps check compares all
+   of BDEPEND/DEPEND/IDEPEND/PDEPEND/RDEPEND (via `_dep_keys`) under
+   `--getbinpkg`, so an index missing any one of them rejects the binpkg as
+   "changed dependencies" and rebuilds from source. IDEPEND specifically comes
+   from the `xdg`/`gnome2-utils` eclasses.
+7. **Stale binpkg vs ebuild drift**: if a binpkg's gpkg metadata was baked from an
+   older ebuild (e.g. before an eclass/inheritance change), the changed-deps check
+   rejects it even with a correct index. Detect via `INHERITED` in the gpkg
+   metadata vs the current ebuild's md5-cache; fix by rebuilding that package.
 6. **Relay queue**: `build.yml` processes one package per dispatch and relays the
    remainder, so a multi-package `package_list` produces a chain of Build Relays.
    `force_rebuild=true` forces a full dep rebuild from source — only use it when
@@ -90,6 +125,8 @@ dangling-free mirror of the published assets.
   `xwayland-satellite-9999-2.gpkg.tar` uploaded and indexed.
 - `x11-misc/xcur2png-0.7.1-r3` rebuilds clean; `xcur2png-0.7.1-r3-2.gpkg.tar`
   uploaded and indexed (SRC_URI fixed to the no-`-r3` upstream tag).
+- `app-misc/nwg-look-1.1.1` rebuilt to `-2` after commit 30287fe dropped `xdg`
+  inheritance; `nwg-look-1.1.1-2.gpkg.tar` uploaded and indexed (no IDEPEND).
 - stage3 container proof earlier: brightnessctl 0.5.1, cliphist 0.7.0, niri 9999
   compiled from source; binaries produced.
 
