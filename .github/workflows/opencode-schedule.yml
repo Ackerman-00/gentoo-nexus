@@ -237,6 +237,41 @@ jobs:
               (packages.gentoo.org, distfiles, gitweb) is not rate-limited the
               same way - plain curl is fine there.
 
+            EVIDENCE & COMPLETION GATE (MANDATORY - "NO EVIDENCE, NO
+            COMPLETION"). Nothing in this run is "done" because you say so -
+            it is done only when it produced an artifact that can be
+            independently verified (a command output, a log, a checksum, a
+            commit SHA, a build run ID). Apply this to EVERYTHING below:
+              a. EVERY CLAIM COSTS A COMMAND. Every statement about repo
+                 state, builds, installs, dependencies, versions, or checksums
+                 must be backed by the actual output of a command you ran
+                 (curl -sI, sha512sum, docker run, emerge, equery, gh api,
+                 git log). If you cannot paste the command output, you have
+                 not verified it - redo the check or mark the claim UNVERIFIED
+                 explicitly. "should work", "assumed fine", or "looks
+                 correct" are not conclusions.
+              b. VERIFY THE SYMPTOM, NOT THE CHANGE. A fix is not verified by
+                 the edit you made; it is verified by the failure you observed
+                 BEFORE and its absence AFTER. Capture both sides for every
+                 package you touch.
+              c. FRESH ENVIRONMENT, ALWAYS. The only proof that counts runs in
+                 a CLEAN stage3 container (fresh docker run, no mounted build
+                 state, no leftover environment from the failed attempt).
+                 Never reuse a container, binrepo, or environment from a build
+                 that failed - the "fixed" version must install in the same
+                 clean state a user would be in.
+              d. FRESH-CHECKER PASS. After you finish fixing and install-
+                 testing everything you touched, re-run the install tests ONE
+                 more time from scratch (fresh container, fresh binrepo copy)
+                 as an independent checker - the agent that fixed the package
+                 cannot audit its own fix. When the relay/next run picks up
+                 your work, treat it as a fresh checker too: re-verify, do not
+                 trust the previous run's claims.
+              e. NAME THE GAPS. End every package's verification with an
+                 honest "not verified: <what and why>" line. A stated gap
+                 beats a silent assumption - but never use a stated gap to
+                 skip verification you were actually able to do.
+
             NO-CHURN VERIFICATION (MANDATORY, applies to every step below). You
             must NEVER push a version bump or ebuild rename if it was already
             pushed and built before. Past runs in sibling repos repeatedly
@@ -312,6 +347,18 @@ jobs:
                  guess what is inside a binary package, and NEVER trust a
                  binary's filename, version string, or claimed dependencies
                  without opening it.
+
+                 RE-TEAR RULE: if the package's upstream changed AT ALL since
+                 the last audit (new version, new commit, new release notes,
+                 new build system), the previous dependency derivation is
+                 VOID. Re-download, re-extract, and re-derive from the NEW
+                 artifact. Never reuse an old audit for a changed package,
+                 even if the ebuild still builds - "still builds" is not
+                 "deps still correct". For this binhost's gpkg format,
+                 tearing apart means: tar -tf the .gpkg.tar, extract the inner
+                 .tar.zst, read metadata/DEPEND, metadata/RDEPEND,
+                 metadata/SIZE and reconcile those atoms against the ebuild
+                 (or against ::gentoo for official-atom packages).
               b. DERIVE THE TRUE DEPENDENCY LIST from those files. Every
                  direct dependency the upstream build needs MUST have a
                  matching RDEPEND/DEPEND/BDEPEND entry (or be satisfied by a
@@ -386,14 +433,31 @@ jobs:
             version in sync with fedora-nexus and what the AppImage itself
             reports.
 
-            INSTALL-VERIFICATION SWEEP (MANDATORY - the binhost binary MUST
-            install via `emerge --usepkgonly` on a real Gentoo system, not
-            just build in CI). A successful build only proves the ebuild
-            COMPILES - it does NOT prove the binary INSTALLS cleanly from the
-            binhost. Ebuilds with wrong dep atoms (borrowed from other
-            distros, outdated, or renamed upstream) build fine while users hit
-            "no binary package for atom" or unresolved-dependency errors.
-            Catch this BEFORE users do.
+            INSTALL-VERIFICATION SWEEP (MANDATORY - EVERY binary in the
+            rolling release must install via `emerge --usepkgonly` on a real
+            Gentoo system, not just build in CI). A successful build only
+            proves the ebuild COMPILES - it does NOT prove the binary
+            INSTALLS cleanly from the binhost. This applies to EVERY asset in
+            the rolling release, regardless of which pipeline produced it:
+            packages built by build.yml ("Build Relay", overlay ebuilds) AND
+            packages built by build-gentoo-official.yml ("Build Gentoo
+            Official", atom-list builds like mesa, kernel, llvm, gcc,
+            blender-bin, godot, zed, heroic-bin, portage - these have NO
+            ebuilds in this repo, so the install test is their ONLY
+            dependency verification: a wrong or missing RDEPEND in the
+            shipped binary shows up here and nowhere else). Catch this BEFORE
+            users do.
+              SCOPE & COVERAGE LEDGER: the goal is 100% coverage of the
+              rolling release's binary set across consecutive runs. Keep a
+              per-package install-test ledger in AUTONOMOUS_STATE.md
+              (package | last install-tested | result | smoke result). This
+              run MUST install-test: (1) every package you touched or rebuilt,
+              (2) every binary that was (re)built by either pipeline since
+              its last successful install test, (3) every official-atom
+              package at least once (kernels included), and (4) as many
+              still-uncovered packages as your time budget allows, oldest-
+              first. NEVER mark a package's install test as done based on a
+              previous run's result if the binary changed since then.
               a. DOWNLOAD THE BUILT BINARY from the "rolling" release:
                  `gh release view rolling --json assets --jq '.assets[].name'`
                  to find <package>-<version>_r<rev>.gpkg.tar, and download it
@@ -427,10 +491,18 @@ jobs:
                      equery check <atom>                       # file integrity
                      command -v <binary> && ldd "$(command -v <binary>)"  # smoke
                    '
-                 If emerge errors with "there are no binary packages to
-                 satisfy <atom>", a dep cannot resolve from the binhost, or
-                 the install fails - the install test FAILED and the package
-                 is NOT done.
+                  If emerge errors with "there are no binary packages to
+                  satisfy <atom>", a dep cannot resolve from the binhost, or
+                  the install fails - the install test FAILED and the package
+                  is NOT done.
+                 KERNELS (sys-kernel/*, e.g. gentoo-kernel built by the
+                 official pipeline): the install test is
+                 `emerge --usepkgonly sys-kernel/gentoo-kernel` in the clean
+                 container PLUS confirming the post-install steps ran: kernel
+                 + initramfs files present (per the machine/* layout - /boot,
+                 /usr/lib/modules, or dracut output) and the install phase
+                 exited 0. A kernel whose install hook fails is a broken
+                 binary even though the .gpkg.tar built fine.
               c. MAP WRONG NAMES TO THE REAL ::GENTOO PACKAGE. For every
                  failing dep atom find the actual provider: search
                  https://packages.gentoo.org/packages/?q=<name> and
@@ -450,18 +522,33 @@ jobs:
                  container install test until emerge --usepkgonly installs it
                  cleanly AND the app launches (--version/--help; exit 0 =
                  smoke test passed).
-              e. SCOPE: install-test EVERY package you touched this run
-                 (mandatory before you consider the fix done) plus a rotating
-                 spot-check of untouched packages (>=5 per run, rotating
-                 until the whole repo is covered). Pure library or
-                 headless-only packages still get the install test; only the
-                 runtime smoke test may be skipped, with the reason recorded.
+              e. SCOPE: this run MUST install-test, in priority order: every
+                 package you touched or rebuilt this run; every binary in the
+                 rolling release that was (re)built by EITHER pipeline since
+                 its last successful install test; every official-atom
+                 package at least once (kernels included); then the oldest
+                 still-uncovered packages until your time budget is used up.
+                 Update the coverage ledger in AUTONOMOUS_STATE.md after
+                 every test. The run is NOT complete while any binary that
+                 changed since its last test remains untested. Pure library
+                 or headless-only packages still get the install test; only
+                 the runtime smoke test may be skipped, with the reason
+                 recorded.
               f. MANDATORY DELIVERABLE - install-test table in your final
                  summary, one row per package tested:
                  | package | build | emerge --usepkgonly | smoke test | status |
                  status in: installable / fixed / broken-(dep) /
                  blocked-(reason). Any package you changed but did not
                  install-test is an unfinished package.
+              g. OFFICIAL-ATOM PACKAGES (built by build-gentoo-official.yml)
+                 have NO ebuilds in this repo - the .gpkg.tar IS the package.
+                 Tear it apart like any binary artifact: extract the inner
+                 .tar.zst and read metadata/DEPEND + metadata/RDEPEND, verify
+                 every atom exists in ::gentoo (packages.gentoo.org or
+                 `emerge --search` in the container), then run the container
+                 install test above. A mesa/kernel/llvm/gcc binary whose
+                 RDEPENDs do not resolve is a broken binhost - fix the
+                 workflow's atom list / package.use and rebuild, then retest.
 
             Then work autonomously, in this priority order:
 
@@ -808,6 +895,31 @@ jobs:
             preserves your unfinished work and picks it up (see RELAY above).
             Never block forever; prefer commit + trigger + move on.
 
+            PRE-COMPLETION GATE (MANDATORY - run this BEFORE your final
+            summary; you are not finished until every item passes with
+            evidence):
+              1. `git status --porcelain` is EMPTY and the working tree is
+                 clean.
+              2. Every package you touched this run has a passing install
+                 test in a CLEAN stage3 container, including the fresh-
+                 checker re-run, with before/after evidence recorded.
+              3. The install-test coverage ledger in AUTONOMOUS_STATE.md is
+                 updated with this run's results; every binary rebuilt since
+                 its last test has been tested; no install-test failure is
+                 left unaddressed (fixed + retested, or reverted + issue
+                 opened).
+              4. The dependency audit table covers 100% of the inventory,
+                 including re-derivation for every package whose upstream
+                 changed, and tear-apart of every official-atom gpkg.
+              5. Every claim in your final summary is backed by command
+                 output (commit SHAs, build run IDs, docker/emerge logs,
+                 checksums).
+              6. You have stated what you did NOT verify and why - a named
+                 gap is a stated FAIL, not a silent skip.
+            Announce this checklist in your final summary with PASS/FAIL and
+            the evidence for every item. Any FAIL means: fix it, re-run the
+            gate, then finish.
+
             HARD RULES:
             - You have FULL control: edit any file in the repo (ebuilds,
               Manifests, workflows, configs, tools, tests, README/docs) whenever it
@@ -825,6 +937,9 @@ jobs:
               leftovers before finishing.
             - Web-search FIRST, then act. Deeply verify every version, URL, and
               checksum online before touching anything; do not rely on memory.
+            - No evidence, no completion: every claim costs a command you ran -
+              paste the output. Verify the symptom is gone, not the change you
+              made.
             - Always align with CURRENT Gentoo (devmanual, wiki, current EAPI,
               eclass and policy changes): web-search before trusting any packaging
               assumption, and keep every package buildable on Gentoo today.
@@ -845,7 +960,9 @@ jobs:
             - End every run with a concise final summary: the repo-working verdict
               (does the overlay/binhost actually work on Gentoo now?), what you
               fixed, which issues you closed, which PRs you merged/rejected, which
-              builds you triggered and their result, and what remains. If you had
+              builds you triggered and their result, and what remains. Include the
+              pre-completion gate checklist with PASS/FAIL + evidence per item.
+              If you had
               to hand off leftover work, also state that you left it in
               AUTONOMOUS_STATE.md and relayed a new run.
 
