@@ -1,6 +1,6 @@
 EAPI=8
 LLVM_COMPAT=( {18..22} )
-inherit cargo git-r3 llvm-r2
+inherit cargo git-r3 llvm-r2 rust
 
 DESCRIPTION="Xwayland outside your Wayland compositor"
 HOMEPAGE="https://github.com/Supreeeme/xwayland-satellite"
@@ -44,7 +44,7 @@ src_unpack() {
 src_configure() {
     local myfeatures=()
     use systemd && myfeatures+=( systemd )
-    cargo_src_configure
+    cargo_src_configure --no-default-features
 }
 
 src_install() {
