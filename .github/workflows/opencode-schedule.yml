@@ -848,3 +848,13 @@ jobs:
               builds you triggered and their result, and what remains. If you had
               to hand off leftover work, also state that you left it in
               AUTONOMOUS_STATE.md and relayed a new run.
+
+      - name: Clean up stray opencode/schedule branches
+        if: always()
+        shell: bash
+        run: |
+          git fetch origin --prune
+          for ref in $(git for-each-ref --format='%(refname:short)' 'refs/remotes/origin/opencode/schedule-*'); do
+            echo "Deleting stray branch: ${ref#origin/}"
+            git push origin --delete "${ref#origin/}" || true
+          done
