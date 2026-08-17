@@ -2,8 +2,9 @@ name: opencode-schedule
 
 on:
   schedule:
-    - cron: '30 */10 * * *'   # Every 10 hours (0:30, 10:30, 20:30 UTC) - leaves
-                              # ~4h slack beyond the 6h max runtime so runs never overlap
+    - cron: '0 0 2,5,8,11,14,17,20,23,26,29 * *'       # 36h cycle: runs at 00:00 on days ≡2 (mod 3)
+    - cron: '0 12 3,6,9,12,15,18,21,24,27,30 * *'      # and 12:00 on days ≡0 (mod 3) - NEVER at the
+                                                       # same 12h slot as check-updates or official-update
   workflow_dispatch:
     inputs:
       relay:
