@@ -10,7 +10,7 @@
 &nbsp;
 [![License](https://img.shields.io/github/license/Ackerman-00/gentoo-nexus?style=for-the-badge&label=LICENSE&color=8b5cf6)](LICENSE)
 
-`No compiling` · `Nightly rebuilds` · `Drop-in Portage overlay`
+`No compiling` · `Scheduled rebuilds` · `Drop-in Portage overlay`
 
 Gentoo normally means building everything from source. **gentoo-nexus skips that** —
 an overlay plus a binary host, so `emerge` installs finished packages instead.
@@ -43,22 +43,23 @@ tools around them.
 |---|---|
 | **Overlay** | niri, mangowm, noctalia-v5, scenefx, and the rest of the Wayland stack |
 | **Official rebuilds** | mesa, kernel, llvm, gcc, blender, godot, zed, and more, recompiled for x86-64-v3, with 32-bit support for gaming |
-| **CI** | Rebuilds automatically every night, or whenever upstream ships something new |
+| **CI** | Rebuilds on a 12-hour rotating schedule — repo update → official update → brain-agent audit — or whenever upstream ships something new |
 | **Setup** | One script sets up the overlay, binary host, and package signing together |
 
 > [!IMPORTANT]
 > **Hardware:** x86-64-v3 CPUs only (Intel Haswell+ / AMD Excavator+).
-> **GPUs:** AMD ✓ · Intel ✓ · NVIDIA ✗ — not supported. Want it added?
-> Open an [issue](https://github.com/Ackerman-00/gentoo-nexus/issues) or
-> [PR](https://github.com/Ackerman-00/gentoo-nexus/pulls).
+> **GPUs:** AMD ✓ · Intel ✓ (via the official v3 host) · NVIDIA: nouveau only
+> (proprietary `nvidia-drivers` are not built here — AMD CI).
 
 ## Compatibility with stock Gentoo
 
-Packages here are built with the **same compiler flags** as the
-[official Gentoo x86-64-v3 binhost](https://wiki.gentoo.org/wiki/Gentoo_binhost/Available_packages_and_configurations).
-That means your system can pull binaries from *both* sources at once without
-triggering a rebuild — as long as your `CPU_FLAGS_X86` matches (see
-[Manual install](#manual-install)).
+Binaries are matched by `CPU_FLAGS_X86` and the **USE set** (not by CFLAGS —
+Portage never checks CFLAGS when matching a binpkg). nexus builds with the
+same flags as the
+[official Gentoo x86-64-v3 binhost](https://wiki.gentoo.org/wiki/Gentoo_binhost/Available_packages_and_configurations)
+and the same profile-default USE, so your system can pull binaries from *both*
+sources at once without triggering a rebuild — as long as your `CPU_FLAGS_X86`
+matches (see [Manual install](#manual-install)).
 
 One nuance: nexus is built under an **OpenRC** profile, so its binaries default
 to `-systemd`. The official binhost also builds systemd profiles, so **systemd
@@ -117,8 +118,10 @@ lands, CI rebuilds it.
 | `www-client` | `brave-origin-bin` | Brave browser (upstream binary) |
 
 On top of these, the `rolling` binary host also mirrors the **official** Gentoo
-x86-64-v3 rebuilds — mesa, gcc, llvm, ffmpeg, ROCm, and most of a typical
-desktop `@world` — so almost everything installs pre-built.
+x86-64-v3 rebuilds — mesa, gcc, llvm, ffmpeg, portage, and most of a typical
+desktop `@world` — so almost everything installs pre-built. Packages the
+official host does NOT ship (ROCm/OpenCL, `gentoo-kernel`, gaming tools) are
+built here directly, with nexus covering the AMD / 32-bit / codec deltas.
 
 ## Manual install
 
@@ -144,10 +147,17 @@ CPU_FLAGS_X86="avx avx2 f16c fma3 mmx mmxext popcnt sse sse2 sse3 sse4_1 sse4_2 
 # Package-specific USE goes in /etc/portage/package.use, e.g.:
 #   media-video/ffmpeg x264 x265 vpx opus dav1d vaapi vdpau
 
-# Pick ONE:
-VIDEO_CARDS="-* amdgpu radeonsi"        # AMD
-VIDEO_CARDS="-* intel"                  # Intel
-VIDEO_CARDS="-* amdgpu radeonsi intel"  # Both
+# Pick ONE (the '-*' reset lives in /etc/portage/package.use, see below —
+# Portage rejects '-*' in make.conf):
+VIDEO_CARDS="amdgpu radeonsi"        # AMD
+VIDEO_CARDS="intel"                  # Intel
+VIDEO_CARDS="amdgpu radeonsi intel"  # Both
+```
+```bash
+# package.use — VIDEO_CARDS reset goes HERE, not in make.conf:
+mkdir -p /etc/portage/package.use
+echo "*/* VIDEO_CARDS: -* amdgpu radeonsi" > /etc/portage/package.use/nexus
+```
 
 FEATURES="getbinpkg parallel-install binpkg-ignore-signature"
 EMERGE_DEFAULT_OPTS="--getbinpkg --quiet-build=y --keep-going"
@@ -223,7 +233,11 @@ echo "*/*::gentoo-nexus **" > /etc/portage/package.accept_keywords/nexus
 
 ### 6 · Install the kernel and a compositor
 
+Installkernel must match the nexus binary (`dracut grub` flags — the nexus
+binhost and quickstart both set these, so the kernel binary matches as-is):
+
 ```bash
+echo "sys-kernel/installkernel dracut grub" > /etc/portage/package.use/nexus
 emerge --getbinpkg --oneshot sys-kernel/gentoo-kernel
 emerge --config sys-kernel/gentoo-kernel
 emerge --getbinpkg gui-wm/niri
