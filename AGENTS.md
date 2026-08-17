@@ -308,6 +308,50 @@ eselect profile list | grep -E '23.0'
   shifts), the tree will drift: re-verify with the curl command above and
   update this file's "verified" date.
 
+## Autonomous-brain prompt logic (opencode-schedule.yml / opencode.yml, 2026-08-17)
+
+The scheduled brain-agent prompt (in `opencode-schedule.yml` PROMPT env, and
+the lighter on-demand version in `opencode.yml`) encodes this repo's
+verification doctrine. Keep these sections in sync when the repo changes:
+
+- **GIT IDENTITY**: commits are authored ONLY by
+  `opencode-agent[bot] <41898282+opencode-agent[bot]@users.noreply.github.com>`
+  (set via git config + GIT_AUTHOR_*/GIT_COMMITTER_* env). Never any other
+  name/email, never `--author`, never Co-Authored-By/Signed-off-by trailers
+  (the opencode default `Co-Authored-By: opencode <noreply@opencode.ai>`
+  misattributes commits to a real human account — real incident). Verify
+  `git config --get user.name/email` before and `git log -1 --format='%an
+  <%ae>'` + `grep -ci co-authored` after every commit; amend
+  `--reset-author` + force-push-with-lease on violation.
+- **Web search freshness**: "today is August 2026" — never trust stale
+  results; verify upstream versions via tags/releases API, packages.gentoo.org
+  and the ::gentoo tree; re-verify when a result looks old.
+- **Issue/PR duty**: EVERY open issue gets a reply and a verdict (fixed /
+  not-a-bug / user error / duplicate); user-error issues are closed
+  completed/not-planned with an explanation. EVERY PR gets a review comment;
+  merge (squash) only with build+install evidence, otherwise REQUEST CHANGES
+  or CLOSE. Never merge on "it probably builds".
+- **Install-verification sweep**: every rolling-release binary must
+  `emerge --getbinpkg --usepkgonly`-install in a CLEAN stage3 container and
+  pass the NO-SOURCE-REBUILD consumer simulation (`emerge --pretend
+  --verbose --getbinpkg` with quickstart config — NOT --usepkgonly, which
+  bypasses USE matching). Kernel packages additionally verify installkernel
+  `dracut` post-install hooks.
+- **Failure RCA protocol**: on any failure — capture the exact failing log,
+  classify (upstream-missing / packaging error / dependency break /
+  environment / config mismatch), check upstream FIRST (::gentoo ebuild,
+  packages.gentoo.org, curl -sI the SRC_URI) to decide ours-vs-upstream,
+  fix PRIMARY cause before downstream symptoms, prove the hypothesis with a
+  command before editing, re-run the exact failing command after the fix.
+- **STEP E full-repo sweep**: one clean desktop-openrc docker mounts the
+  overlay + the DOWNLOADED rolling-release binaries (never local rebuilds)
+  and sweeps the whole repo: bash -n every ebuild, manifest hash check,
+  `emerge --pretend` dep graphs, install + no-source-rebuild check for every
+  release binary. Missing release asset = sweep FAIL.
+- **PRE-COMPLETION GATE item 0**: final full-binary compatibility pass —
+  every rolling-release asset (overlay + official-atom) must install as a
+  binary with zero rejections before the run is declared done.
+
 ## Sources (last checked 2026-08-17)
 
 - https://wiki.gentoo.org/wiki/Gentoo_Binary_Host_Quickstart (2026-08-12)
