@@ -705,6 +705,109 @@ jobs:
                   undiagnosed cause. Unfixable after 3 attempts: revert +
                   open a diagnosis issue (see step 8 of the work plan).
 
+            OPTIMIZATION DISCIPLINE (MANDATORY for every ebuild in THIS
+            overlay that you touch - new, bumped, or fixed; skip only for
+            prebuilt/repackaged binaries like blender-bin/godot/heroic-bin,
+            whose ELFs are immutable - record "prebuilt, nothing to
+            optimize"). This applies ONLY to this repo's own ebuilds
+            (build.yml / check-updates.yml overlay packages). NEVER apply it
+            to build-gentoo-official.yml / check-updates-gentoo-official.yml
+            official-atom packages (mesa, kernel, llvm, gcc, portage, etc.) -
+            those mirror the OFFICIAL Gentoo x86-64-v3 binhost exactly
+            (CFLAGS -O2 -march=x86-64-v3, official profile-default USE) and
+            are out of our boundary; do not add per-package optimizations to
+            the official atom lists. For OUR ebuilds, the builder already
+            compiles with -O2 -pipe -march=x86-64-v3 (build.yml make.conf) -
+            your job is to NOT regress that and to fix ebuilds that do:
+              a. NEVER weaken, strip, or override the binhost flags: the
+                 ebuild must not filter/replace CFLAGS/CXXFLAGS/LDFLAGS away
+                 from -march=x86-64-v3 -O2 -pipe (the flag-o-matic eclass is
+                 only for genuine per-package breakage, and only the minimal
+                 flag, mirroring what the matching ::gentoo ebuild does -
+                 see "Ebuilds must not simply ignore user CFLAGS" in the
+                 devmanual). An ebuild that hardcodes -O0/-Os/-g0 or filters
+                 the march is a bug.
+              b. LTO: NOT the profile default on Gentoo for most packages -
+                 do not enable it in our ebuilds unless the matching
+                 ::gentoo ebuild uses it (then mirror it exactly). Never
+                 force -flto system-wide or into a package that upstream
+                 does not build with LTO; a build-log failure caused by LTO
+                 means revert to the ::gentoo approach, never a silent
+                 workaround.
+              c. NO -march=native / -mtune=native / -march=<cpu> beyond
+                 x86-64-v3 anywhere in our ebuilds or machine config: the
+                 binaries must run on ANY x86-64-v3 machine, and per-package
+                 march overrides would also break the binpkg matching story
+                 (CFLAGS is not a match key, but a binary compiled for a
+                 specific CPU silently breaks consumers on other v3 CPUs).
+                 x86-64-v3 is the ceiling, exactly like the official host.
+              d. -O3 / -Ofast ONLY for numeric/HPC-style workloads where
+                 upstream documents the benefit; for general code it is a
+                 size/stability regression risk - the -O2 default stands.
+                 GOAMD64=v3 is the right way to optimize Go-based packages
+                 (rust/zig equivalents follow the v3 baseline too); mirror
+                 what the ::gentoo ebuild sets.
+              e. CPU_FLAGS_X86 discipline: never add cpu_flags_x86_* beyond
+                 the exact 14-flag set (avx avx2 f16c fma3 mmx mmxext popcnt
+                 sse sse2 sse3 sse4_1 sse4_2 ssse3) to our packages - extra
+                 CPU flags in a binpkg reject it for every consumer (the
+                 official host uses only those 14). A package that needs a
+                 specific SIMD path should get it via ebuild logic/CMake
+                 options, not via CPU_FLAGS_X86 inflation.
+              f. Size sanity: if the built .gpkg.tar is far larger than
+                 upstream's own binary release, investigate (unstripped .so
+                 leftovers, bundled static archives, debug files installed
+                 into the tree, accidental sources in docs) - it is usually
+                 an install/ebuild bug, not upstream size. Note it in the
+                 audit table with the before/after sizes.
+              g. Record in your per-package audit: flags kept, any filter/
+                 override applied (with the exact flag and why), LTO status,
+                 size check - "prebuilt, nothing to optimize" for the
+                 repackaged binaries. The point is a binhost whose every
+                 overlay package is built with the exact x86-64-v3 -O2
+                 profile-consistent flags and nothing that would reject it
+                 on the consumer side.
+
+            REFERENCE HARDWARE - THE OWNER'S PC (Ryzen 5 5600G, Vega 7 iGPU).
+            The owner runs gentoo-nexus on this machine and it is the
+            canonical consumer to optimize for. Know its exact config (this
+            is quickstart.sh hardware choice 1) and verify anything you
+            change against it:
+            - CPU: AMD Ryzen 5 5600G = Cezanne, ZEN 3 microarchitecture
+              (6C/12T, 3.9/4.4 GHz, DDR4-3200, PCIe 3.0). The correct
+              consumer CFLAGS are `-O2 -march=znver3 -mtune=znver3 -pipe`
+              (GCC 10.3+; quickstart sets CPU_ARCH="znver3"). This is
+              SAFE for binpkg matching: CFLAGS is NOT a binpkg match key,
+              so znver3 on the consumer never rejects official or nexus
+              binaries (the machine config may diverge from the builder's
+              x86-64-v3 only in CFLAGS - never in USE/CPU_FLAGS_X86).
+              ZRAM: 6144M.
+            - iGPU: Radeon Vega 7 (GCN 5.0, "Vega" architecture inside
+              Cezanne) - driven by the amdgpu kernel driver + Mesa
+              radeonsi (GL) and RADV (Vulkan). VIDEO_CARDS must stay
+              `-* amdgpu radeonsi` in package.use - do NOT add intel,
+              nouveau, or any other video_cards flag to any ebuild or
+              config for this machine. The amdgpu path needs Mesa's
+              radeonsi built (our USES already do: mesa -rust -opencl
+              amdgpu radeonsi, libdrm video_cards_amdgpu video_cards_radeon).
+              Kernel: sys-kernel/gentoo-kernel must ship the amdgpu
+              module + linux-firmware must include `amd-ucode amdgpu`
+              (quickstart's LINUX_FW for this hardware). When verifying
+              kernel installs on the reference machine, confirm the
+              amdgpu module and firmware are present.
+            - NETWORK: wired LAN (NEED_WIFI=no; rtl_nic firmware in the
+              linux-firmware set) - no wifi/bt driver specials for the
+              owner's box, but keep bluetooth USE for the desktop profile.
+            - GPU features this APU does NOT have: no AVX512, no NVENC/
+              nvidia, no discrete GPU - never add video_cards_nvidia,
+              avx512/bmi/bmi2 CPU flags, or nvidia firmware for the
+              reference machine.
+            When you propose/verify anything hardware-specific (mesa
+            drivers, kernel config, firmware, codec paths, quickstart
+            defaults), check it against this machine's exact capabilities
+            (web-search `Ryzen 5 5600G <topic>` + the Gentoo wiki Ryzen /
+            AMDGPU pages) and keep the configs matching quickstart choice 1.
+
             Then work autonomously, in this priority order:
 
             1. VERIFY THE REPO ACTUALLY WORKS ON GENTOO - FULL FUNCTIONALITY AUDIT
