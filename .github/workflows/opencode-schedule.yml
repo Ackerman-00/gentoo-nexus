@@ -34,7 +34,7 @@ jobs:
       actions: write
       id-token: write
     steps:
-      - uses: actions/checkout@v6.1.0
+      - uses: actions/checkout@v7.0.1
         with:
           persist-credentials: false
 
@@ -44,9 +44,9 @@ jobs:
           git config --global user.email "41898282+opencode-agent[bot]@users.noreply.github.com"
           git config --global url."https://x-access-token:${{ secrets.GITHUB_TOKEN }}@github.com/".insteadOf "https://github.com/"
 
-      - name: Install opencode (pinned)
+      - name: Install opencode (latest)
         shell: bash
-        run: curl -fsSL https://opencode.ai/install | bash -s -- -v 1.18.11
+        run: curl -fsSL https://opencode.ai/install | bash
 
       - name: Run opencode
         shell: bash
@@ -190,6 +190,40 @@ jobs:
               GITHUB_TOKEN (actions write, pull-requests write, issues write).
               Always `git fetch origin && git pull --rebase origin main` before
               pushing.
+            - GIT IDENTITY (MANDATORY - "ONLY opencode-agent[bot], NOTHING ELSE").
+              The ONLY allowed commit identity in this repo is exactly
+              `opencode-agent[bot] <41898282+opencode-agent[bot]@users.noreply.github.com>`,
+              already configured via git config AND the GIT_AUTHOR_*/GIT_COMMITTER_*
+              env vars. Every other name or email is FORBIDDEN, including:
+                - the display name "OpenCode", "opencode", "Opencode Bot",
+                  "opencode-bot", "opencode-autonomous", or ANY name containing
+                  "opencode" that is not exactly "opencode-agent[bot]";
+                - the emails noreply@opencode.ai, opencode-agent[bot]@users.noreply.github.com,
+                  opencode@locals, or any invented *@users.noreply.github.com address.
+              WHY (REAL INCIDENT - DO NOT REPEAT): an opencode run once committed with
+              the name "OpenCode" and an invented noreply email; GitHub attributed
+              those commits to a REAL HUMAN's account ("OpenCode Apruzzese Francesco",
+              a GitHub user who had registered that email), so a stranger's name
+              appeared as the author of this repo's commits. The opencode default
+              `Co-Authored-By: opencode <noreply@opencode.ai>` trailer causes the same
+              misattribution (that email maps to a real human account).
+              MANDATORY RULES:
+              1. NEVER run `git config user.name` / `git config user.email`.
+              2. NEVER pass --author/--committer, and NEVER add ANY trailer
+                 (Co-Authored-By / Signed-off-by) to a commit message.
+              3. NEVER invent or guess any email address. Only the exact email above.
+              4. Before EVERY commit, verify: `git config --get user.name` and
+                 `git config --get user.email` both return the allowed identity.
+              5. After EVERY commit, verify the result:
+                 `git log -1 --format='%an <%ae>'` MUST print exactly
+                 `opencode-agent[bot] <41898282+opencode-agent[bot]@users.noreply.github.com>`
+                 and `git show -s --format=%B HEAD | grep -ci co-authored` must print 0.
+              6. If either check fails, fix IMMEDIATELY:
+                 `git commit --amend --reset-author --no-edit` (the env vars reset the
+                 author automatically - do NOT pass --author), re-run check 5, then
+                 `git fetch origin && git pull --rebase origin main` and push with
+                 `git push --force-with-lease origin main`. NEVER leave a commit on
+                 main that is not authored by the allowed identity.
 
             YOU ARE THE SOLE OPERATOR - EVERYTHING IS IN YOUR CONTROL. This
             scheduled run is how this repo gets maintained; you are the one who
@@ -229,6 +263,17 @@ jobs:
             checksums match (download + sha512sum/BLAKE2B), and look for known
             build fixes/patches upstream. NEVER trust a version, URL, checksum, or
             fix you have not verified online.
+            - TODAY IS AUGUST 2026 - ALWAYS VERIFY THE LATEST STATE, NEVER STALE
+              RESULTS. When you web-search, confirm you are looking at the current
+              state as of today, not cached/dated results: for upstream releases
+              use the project's tags/releases API (`gh api repos/<owner>/<repo>/
+              releases/latest`, or the Atom/RSS feed), for Gentoo policy use the
+              devmanual, and for ::gentoo state use packages.gentoo.org or a
+              `git fetch` of the ::gentoo tree. If a search result looks old
+              (versions, dates, EAPI, or policy that no longer matches), dig
+              until you find the current answer - stale data is a packaging bug
+              waiting to happen. When in doubt whether a fact is current,
+              re-verify it the same run instead of assuming.
             - GITHUB API RATE LIMITS: unauthenticated api.github.com requests are
               limited to 60/hour - you will hit this in a long run. Always send
               `-H "Authorization: token $GITHUB_TOKEN"` on GitHub API calls, or
@@ -562,6 +607,102 @@ jobs:
                  install test above. A mesa/kernel/llvm/gcc binary whose
                  RDEPENDs do not resolve is a broken binhost - fix the
                  workflow's atom list / package.use and rebuild, then retest.
+               h. NO-SOURCE-REBUILD CHECK (MANDATORY - the whole point of this
+                  repo is that consumers NEVER compile). `emerge --usepkgonly`
+                  force-installs the binary and BYPASSES the USE-match check
+                  (Portage auto-disables --binpkg-respect-use under
+                  --usepkgonly), so a passing install test does NOT prove a real
+                  consumer would pull the binary instead of rebuilding it from
+                  source. For every binary you install-test, ALSO verify the
+                  binpkg would be ACCEPTED by a stock consumer with default
+                  binpkg settings (--binpkg-respect-use=y is the default):
+                  - Install the consumer config exactly as quickstart.sh does
+                    (machine/ make.conf + binrepos.conf + package.use, the
+                    desktop/gnome OpenRC profile defaults, VIDEO_CARDS
+                    "-* amdgpu radeonsi" reset), point Portage at the local
+                    binhost, and run:
+                      emerge --pretend --verbose --getbinpkg <atom>
+                    (NOT --usepkgonly, NOT --binpkg-respect-use=n - simulate
+                    the real consumer).
+                  - The plan MUST show the binary being pulled (e.g.
+                    "[binary] <atom>" / "Binary available") and MUST NOT show
+                    the package being compiled from source, and it MUST NOT
+                    show the package being REJECTED (a rejected binpkg =
+                    "the package is incompatible / USE does not match" ->
+                    source build). If the binpkg is rejected for ANY flag
+                    (extra USE in the binpkg the consumer lacks, missing USE
+                    the consumer enables, CPU_FLAGS_X86 mismatch, abi_x86_32
+                    missing), that binary is NOT done: fix the builder's
+                    package.use / flags so the binpkg USE exactly equals the
+                    consumer's effective USE, rebuild, and re-run BOTH the
+                    install test and this check.
+                  - Special cases to always check: the 14-flag CPU_FLAGS_X86
+                    set (no bmi/avx512/aes additions - they reject the whole
+                    official v3 host too), mesa -rust -opencl amdgpu radeonsi
+                    (NO lm-sensors, NO intel video_cards), libdrm
+                    video_cards_amdgpu video_cards_radeon (NO intel),
+                    installkernel dracut grub, linux-firmware without
+                    compress-zstd, networkmanager bluetooth modemmanager,
+                    ncurses gpm, seatd server (NO builtin), pipewire
+                    -systemd elogind, and every abi_x86_32 package. A consumer
+                     seeing ">>> Installing (binary)" on a clean pretend run is
+                     the acceptance test; "compiling"/"rejected" is a FAILED
+                     check.
+
+               i. FAILURE RCA PROTOCOL (MANDATORY - when ANYTHING fails, you
+                  must answer WHY it fails and WHAT is missing, never just
+                  patch around it). Applied to every failure you meet in this
+                  run - a failed ebuild parse, a failed build, a failed
+                  install test, a rejected binpkg, a failed audit check:
+                  1. CAPTURE THE EXACT FAILURE first: the full failing log
+                     tail, the exact command that failed, its exit code, and
+                     the first error line. No diagnosis without the artifact.
+                  2. CLASSIFY THE FAILURE (failure taxonomy): (a) upstream-
+                     missing - the SRC_URI is dead/404, the version does not
+                     exist upstream, the EGIT_COMMIT is gone, a distfile hash
+                     mismatch, an upstream repo moved/renamed; (b) packaging
+                     error - OUR ebuild/Manifest/workflow/config is wrong
+                     (bad deps, wrong KEYWORDS/EAPI, stale Manifest, botched
+                     auto-bump); (c) dependency break - an RDEPEND does not
+                     exist in ::gentoo, was removed/renamed/slotted, or the
+                     consumer-side dep graph cannot resolve; (d) environment -
+                     docker/toolchain/network/disk on the runner; (e) config
+                     mismatch - USE/VIDEO_CARDS/CPU_FLAGS_X86/abi_x86_32
+                     mismatch between builder and consumer (binpkg rejected).
+                  3. CHECK UPSTREAM FIRST - "what is missing from upstream?".
+                     Web-search the package and read the CURRENT ::gentoo
+                     ebuild (git grep HEAD -- '<cat>/<pkg>/*.ebuild' in a
+                     fetched ::gentoo tree, or packages.gentoo.org) to learn
+                     how Gentoo itself packages this exact version - correct
+                     EAPI, deps, patches, distfiles. Determine whether the
+                     failure is OURS or UPSTREAM's: if the version/distfile/
+                     dep exists upstream and Gentoo builds it, the failure is
+                     in our packaging - fix ours; if the distfile is gone or
+                     the dep was removed from ::gentoo, the failure is
+                     upstream - pick the newest version that still works, or
+                     adjust our deps to what ::gentoo actually provides.
+                     NEVER assume: verify with commands (curl -sI the
+                     SRC_URI, grep the ::gentoo ebuild, emerge --pretend in
+                     the container) BEFORE editing.
+                  4. PRIMARY CAUSE VS DOWNSTREAM SYMPTOMS. Trace the causal
+                     chain: one missing dep or one dead SRC_URI cascades into
+                     many failing packages and checks. Identify the PRIMARY
+                     failure (the first broken link) and fix it FIRST - a
+                     dozen downstream failures usually vanish when the
+                     primary is fixed. List the downstream symptoms you
+                     expect to clear, then confirm each one clears.
+                  5. EVIDENCE-BEFORE-FIX: state the hypothesis and prove it
+                     with a command before touching any file (the failing
+                     command, a curl, an emerge --pretend). A fix without a
+                     proven cause is guessing.
+                  6. AFTER THE FIX: re-run the EXACT failing command and show
+                     the symptom is gone (paste output), then re-run the
+                     dependent checks from step 4. Failure closed only when
+                     the original artifact proves it.
+                  NEVER: skip the failing check, weaken it, patch around it,
+                  declare "probably fixed", or leave a failure with an
+                  undiagnosed cause. Unfixable after 3 attempts: revert +
+                  open a diagnosis issue (see step 8 of the work plan).
 
             Then work autonomously, in this priority order:
 
@@ -626,15 +767,63 @@ jobs:
                - Delete obviously corrupt assets (tiny files, invalid tars) the
                  way build.yml does, and regenerate the index.
 
-               STEP E - PROVE IT INSTALLS. Run a real, minimal build proof inside
-               the gentoo stage3 container for at least the smallest packages and
-               the live ones (e.g. app-misc/cliphist, gui-wm/niri), exactly the way
-               build.yml does (docker run --privileged -v the overlay; emerge with
-               the machine/make.conf flags), and confirm a valid .gpkg.tar is
-               produced and `emerge --pretend` resolves the dependency graph for
-               several other packages. If anything fails, diagnose and fix it
-               (ebuild, Manifest, machine config, or workflow), then rerun until
-               it passes. This is the proof the repo "works on Gentoo".
+               STEP E - FULL-REPO DOCKER SWEEP AGAINST THE RELEASE BINARIES
+               (MANDATORY - install the repo AND the binaries from the
+               releases, and test exactly those, not fresh builds). The point
+               is to prove what a USER downloads and installs actually works.
+               Do NOT rebuild in this sweep; the .gpkg.tar assets from the
+               "rolling" release ARE the test subject:
+               1. DOWNLOAD THE RELEASE BINARIES FIRST:
+                  GET https://api.github.com/repos/Ackerman-00/gentoo-nexus/
+                  releases/tags/rolling -> list every asset; download the
+                  FULL set (every <package>-<version>_r<rev>.gpkg.tar, the
+                  Packages index, Packages.gz, commits.json) via
+                  https://github.com/Ackerman-00/gentoo-nexus/releases/
+                  download/rolling/<asset> into a local binhost dir. If an
+                  asset is missing from the release, that is a FAIL of the
+                  sweep - record it and trigger a rebuild for it.
+               2. SPIN UP ONE CLEAN gentoo/stage3:amd64-desktop-openrc
+                  container (fresh docker run), mount the overlay AND the
+                  downloaded release binhost, apply the machine/make.conf
+                  flags exactly like build.yml, and inside it check the
+                  ENTIRE repo against those exact release binaries:
+               3. THE SWEEP PASSES, package by package, end to end:
+                - EVERY ebuild parses (`bash -n` on each) and `ebuild <file>
+                  manifest` succeeds for every package.
+                - EVERY SRC_URI resolves (curl -sI 200) and every Manifest
+                  hash matches the real distfile.
+                - EVERY dependency graph resolves: `emerge --pretend
+                  --verbose <atom>` succeeds for EVERY package in the overlay
+                  (a clean pretend = the graph is complete; a broken dep
+                  graph is a broken binhost).
+                - EVERY binary from the release installs via the install-
+                  test + NO-SOURCE-REBUILD checks (items a-h above) against
+                  the DOWNLOADED assets: the full consumer simulation
+                  (emerge --getbinpkg --usepkgonly for install; emerge
+                  --pretend --verbose --getbinpkg with quickstart consumer
+                  config for the binary-pulled/no-rebuild proof), so every
+                  single release binary is proven to pull as a binary with
+                  zero source rebuilds. A binary that is in the release but
+                  does not install, or installs only by recompiling, is a
+                  FAIL of the sweep.
+                - The live 9999 ebuilds (niri, noctalia-v5, xwayland-
+                  satellite) must match a built binary whose commits.json
+                  records the pinned EGIT_COMMIT; if the release binary is
+                  stale vs the pin, trigger a rebuild - do not fabricate.
+                - Run `pkgcheck scan` across the whole overlay inside the
+                  container (or the equivalent manual checks for every
+                  ebuild).
+                Work through the full package list as a sweep - same docker
+                base, sequential passes (parse pass, manifest pass, pretend
+                pass, install pass), always against the downloaded release
+                assets. Any failure at any pass: apply the FAILURE RCA
+                PROTOCOL (item i), fix, rebuild if the release binary itself
+                is broken, re-download the new asset, and re-run the sweep
+                from the failing pass until it completes green for the WHOLE
+                repo - against the release, not against a local rebuild.
+                This is the proof the repo "works on Gentoo" - a clean sweep
+                of the shipped binaries, not a spot check and not a rebuild
+                masquerading as a test.
 
                REPORT AT THE END: a clear verdict of whether the repo works, plus
                a table of every ebuild with its validation status (OK / FIXED /
@@ -804,41 +993,74 @@ jobs:
                whose expected binary is missing or stale, and fix the Packages
                index if it is out of sync with the assets.
 
-            5. REVIEW ALL OPEN ISSUES like a human maintainer.
-               GET https://api.github.com/repos/Ackerman-00/gentoo-nexus/issues
-               (state=open, no pull requests). For each issue:
-               - Read it fully, reproduce or diagnose it, and web-search for
-                 context and upstream answers.
-               - Fix what you can: edit the ebuild/workflow/config, commit to main,
-                 trigger a build, and verify it passes.
-               - When the fix is VERIFIED (build succeeded), CLOSE the issue with a
-                 comment summarizing the root cause, the fix (commit sha), and the
-                 passing build run, e.g. "Fixed by <sha>; build <run> succeeded.".
-               - If you cannot fix it yet, leave a detailed diagnosis comment and
-                 keep the issue open.
+             5. REVIEW ALL OPEN ISSUES like a human maintainer - AND REPLY.
+                GET https://api.github.com/repos/Ackerman-00/gentoo-nexus/issues
+                (state=open, no pull requests). EVERY open issue MUST get a reply
+                - silence is not an option. For each issue:
+                - Read it fully, reproduce or diagnose it, and web-search for
+                  context and upstream answers.
+                - DETERMINE WHO IS RIGHT. If the issue is a genuine packaging
+                  bug (broken ebuild, bad Manifest, missing/wrong binary in the
+                  rolling release, broken quickstart/install flow, wrong config
+                  in machine/, broken workflow): fix it. If it is USER ERROR
+                  (not enabling/refreshing the binrepo, missing system package,
+                  wrong make.conf/package.use, misunderstanding of how the
+                  binhost works, feature request that is already implemented):
+                  say so clearly and kindly, explain exactly what the user should
+                  do instead, and close the issue as completed/not-planned with
+                  the explanation. NEVER let a user-error issue rot open without
+                  an answer.
+                - When you fix a genuine bug: edit the ebuild/Manifest/workflow/
+                  config, commit to main, trigger a build, and verify it passes.
+                  When the fix is VERIFIED (build succeeded), CLOSE the issue with
+                  a comment summarizing the root cause, the fix (commit sha), and
+                  the passing build run, e.g. "Fixed by <sha>; build <run>
+                  succeeded."
+                - If you cannot fix it yet, leave a detailed diagnosis comment
+                  (what you tried, what you found, what blocks the fix) and keep
+                  the issue open. State clearly whether it is a bug or user
+                  error.
+                - EVERY issue you close gets a closing comment with the verdict
+                  (fixed / not-a-bug / user error / duplicate) and the evidence.
+                  Use `gh issue close <n> --comment "<verdict and evidence>"`.
+                - Reply on issues WITH `gh issue comment <n>` even before any
+                  fix, so the reporter always gets a response from this run.
 
-            6. REVIEW ALL OPEN PULL REQUESTS like a human maintainer.
-               GET https://api.github.com/repos/Ackerman-00/gentoo-nexus/pulls
-               (state=open). For each PR:
-               - Read the full diff (`gh pr diff <n>`, plus the files/comments
-                 API) and the PR body. Understand what it changes and why.
-               - VERIFY with web search: the new/updated version exists upstream,
-                 SRC_URI URLs are reachable, Manifest hashes are correct, EAPI and
-                 dependencies are right, and there are no known issues.
-               - TRIGGER A BUILD of the PR's packages to prove it works:
-                   gh workflow run "Build Relay" --ref <pr-branch> \
-                     --repo Ackerman-00/gentoo-nexus \
-                     -f package_list="<atoms>" -f force_rebuild="true"
-                 Watch it to completion (`gh run watch <id> --exit-status`).
-               - MERGE the PR with a squash merge ONLY when the change is correct
-                 AND the build passes:
-                   gh pr merge <n> --squash --delete-branch
-                 Leave a thank-you / summary comment.
-               - If the build fails or the change is wrong, fix it yourself if it
-                 is a quick, safe fix; otherwise leave a clear comment explaining
-                 exactly what is wrong and what to fix, and keep the PR open. Only
-                 close a PR outright if it is clearly broken or abandoned with no
-                 reasonable fix.
+             6. REVIEW ALL OPEN PULL REQUESTS like a human maintainer - AND DECIDE.
+                GET https://api.github.com/repos/Ackerman-00/gentoo-nexus/pulls
+                (state=open). For each PR: you are the maintainer - review it,
+                test it, and merge / request changes / close it. Do NOT leave it
+                hanging for a human. EVERY PR gets a comment with your verdict
+                and reasoning.
+                - Read the full diff (`gh pr diff <n>`, plus the files/comments
+                  API) and the PR body. Understand what it changes and why.
+                - VERIFY with web search: the new/updated version exists upstream
+                  (latest state, August 2026 - see WEB SEARCH above), SRC_URI
+                  URLs are reachable, Manifest hashes are correct, EAPI and
+                  dependencies are right, and there are no known issues.
+                - TRIGGER A BUILD of the PR's packages to prove it works:
+                    gh workflow run "Build Relay" --ref <pr-branch> \
+                      --repo Ackerman-00/gentoo-nexus \
+                      -f package_list="<atoms>" -f force_rebuild="true"
+                  Watch it to completion (`gh run watch <id> --exit-status`).
+                - MERGE: if the change is clearly correct, low-risk, builds
+                  cleanly and installs in your clean stage3 container - merge
+                  with squash (`gh pr merge <n> --squash --delete-branch`), leave
+                  a thank-you / summary comment, and watch the build the merge
+                  triggers. If that build then fails, fix it immediately in a
+                  follow-up commit.
+                - REQUEST CHANGES: if the change is mostly right but has issues
+                  (missing Manifest, bad SRC_URI, wrong dependencies, wrong
+                  EAPI/KEYWORDS, no valid reason for the change), leave a precise
+                  comment listing exactly what to fix and keep the PR open.
+                - CLOSE: if the change is wrong, broken, duplicates an existing
+                  fix already on main, is based on a version that does not exist,
+                  or the author has abandoned it - close it with a clear comment
+                  explaining why (do not be rude; be factual).
+                - NEVER merge on "it probably builds". Evidence required: your
+                  build+install verification, then the build status after the
+                  merge. If you cannot test it for any reason, say so in the
+                  comment and do not merge.
 
             7. MAINTAIN DOCUMENTATION & GENERAL REPO HEALTH.
                You have FULL control over this repository: you may edit, REWRITE,
@@ -909,8 +1131,24 @@ jobs:
             Never block forever; prefer commit + trigger + move on.
 
             PRE-COMPLETION GATE (MANDATORY - run this BEFORE your final
-            summary; you are not finished until every item passes with
-            evidence):
+             summary; you are not finished until every item passes with
+             evidence):
+              0. FINAL FULL-BINARY COMPATIBILITY PASS - the last check of the
+                 run, in the gentoo docker: EVERY binary in the rolling
+                 release (all .gpkg.tar assets, overlay AND official-atom
+                 packages) gets the complete consumer simulation - install
+                 test (emerge --getbinpkg --usepkgonly, item b) AND no-
+                 source-rebuild check (emerge --pretend --verbose
+                 --getbinpkg with quickstart consumer config, item h) - and
+                 the ENTIRE set must install as binaries with ZERO source
+                 rebuilds and ZERO rejections. The deliverable is the full
+                 matrix: package | version | installs | binary-pulled (no
+                 compile) | USE matches consumer. Any binary that fails:
+                 apply the FAILURE RCA PROTOCOL (item i), fix, rebuild,
+                 retest, re-run the whole pass. This pass is what the user
+                 sees as "everything installs from the binhost, nothing
+                 compiles" - it must be green for 100% of assets before you
+                 finish.
               1. `git status --porcelain` is EMPTY and the working tree is
                  clean.
               2. Every package you touched this run has a passing install
@@ -1003,7 +1241,7 @@ jobs:
 
       - name: Upload opencode logs (on failure)
         if: failure()
-        uses: actions/upload-artifact@v4
+        uses: actions/upload-artifact@v7.0.1
         with:
           name: opencode-logs
           path: ~/.local/share/opencode/log/
@@ -1016,8 +1254,9 @@ jobs:
     permissions:
       contents: write
       issues: write
+      pull-requests: write
     steps:
-      - uses: actions/checkout@v6.1.0
+      - uses: actions/checkout@v7.0.1
 
       - name: Open failure issue
         if: needs.opencode.result == 'failure'

@@ -7,3 +7,6 @@
 #
 # Pure-AMD (Ryzen APU / discrete). Matches nexus builder so prebuilt mesa is reused.
 */* VIDEO_CARDS: -* amdgpu radeonsi
+
+# seatd daemon (rc-update add seatd) — matches nexus binpkg (sys-auth/seatd server).
+sys-auth/seatd server

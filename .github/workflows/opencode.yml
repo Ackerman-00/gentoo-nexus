@@ -23,7 +23,7 @@ jobs:
       id-token: write
     steps:
       - name: Checkout repository
-        uses: actions/checkout@v6.1.0
+        uses: actions/checkout@v7.0.1
         with:
           persist-credentials: false
 
@@ -33,9 +33,9 @@ jobs:
           git config --global user.email "41898282+opencode-agent[bot]@users.noreply.github.com"
           git config --global url."https://x-access-token:${{ secrets.GITHUB_TOKEN }}@github.com/".insteadOf "https://github.com/"
 
-      - name: Install opencode (pinned)
+      - name: Install opencode (latest)
         shell: bash
-        run: curl -fsSL https://opencode.ai/install | bash -s -- -v 1.18.11
+        run: curl -fsSL https://opencode.ai/install | bash
 
       - name: Run opencode
         shell: bash
@@ -77,6 +77,43 @@ jobs:
             packages) - but first web-search and grep the whole repo to confirm
             nothing references them, and never delete anything that is still
             needed for builds or actually used.
+
+            GIT IDENTITY (MANDATORY - "ONLY opencode-agent[bot], NOTHING ELSE").
+            The ONLY allowed commit identity in this repo is exactly
+            `opencode-agent[bot] <41898282+opencode-agent[bot]@users.noreply.github.com>`,
+            already configured via git config AND the GIT_AUTHOR_*/GIT_COMMITTER_*
+            env vars. Every other name or email is FORBIDDEN, including the display
+            name "OpenCode", "opencode", "opencode-bot", or ANY name containing
+            "opencode" that is not exactly "opencode-agent[bot]", and the emails
+            noreply@opencode.ai, opencode-agent[bot]@users.noreply.github.com,
+            opencode@locals, or any invented *@users.noreply.github.com address.
+            WHY (REAL INCIDENT - DO NOT REPEAT): an opencode run once committed with
+            the name "OpenCode" and an invented noreply email; GitHub attributed
+            those commits to a REAL HUMAN's account, so a stranger's name appeared
+            as the author of the repo's commits. The opencode default
+            `Co-Authored-By: opencode <noreply@opencode.ai>` trailer causes the
+            same misattribution (that email maps to a real human account).
+            MANDATORY RULES:
+            1. NEVER run `git config user.name` / `git config user.email`.
+            2. NEVER pass --author/--committer, and NEVER add ANY trailer
+               (Co-Authored-By / Signed-off-by) to a commit message.
+            3. NEVER invent or guess any email address. Only the exact email above.
+            4. Before EVERY commit, verify: `git config --get user.name` and
+               `git config --get user.email` both return the allowed identity.
+            5. After EVERY commit, verify the result:
+               `git log -1 --format='%an <%ae>'` MUST print exactly
+               `opencode-agent[bot] <41898282+opencode-agent[bot]@users.noreply.github.com>`
+               and `git show -s --format=%B HEAD | grep -ci co-authored` must print 0.
+            6. If either check fails, fix IMMEDIATELY:
+               `git commit --amend --reset-author --no-edit`, re-run check 5, then
+               `git fetch origin && git pull --rebase origin main` and push with
+               `git push --force-with-lease origin main`. NEVER leave a commit on
+               main that is not authored by the allowed identity.
+            Always `git fetch origin && git pull --rebase origin main` before
+            pushing, and verify every claim with web search against the LATEST
+            state (today is August 2026 - never trust stale/cached search results;
+            use the upstream tags/releases API and packages.gentoo.org / the
+            ::gentoo tree as ground truth, and re-verify if a result looks old).
 
             TIME BUDGET & SELF-RELAY: this job can run up to ~6 hours (GitHub
             hard cap 360 min). If the requested work is larger than your remaining

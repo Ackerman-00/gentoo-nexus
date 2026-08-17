@@ -33,14 +33,14 @@ jobs:
 
       # ---- topic: checkout-setup ----
       - name: Checkout Repository
-        uses: actions/checkout@v6.1.0
+        uses: actions/checkout@v7.0.1
         with:
           token: ${{ secrets.GITHUB_TOKEN }}
           fetch-depth: 0
 
       # ---- topic: scan-script ----
       - name: Set up Python
-        uses: actions/setup-python@v6
+        uses: actions/setup-python@v7.0.0
         with:
           python-version: '3.13'
 

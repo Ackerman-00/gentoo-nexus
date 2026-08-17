@@ -216,9 +216,12 @@ fi
 mkdir -p /etc/portage/repos.conf /var/db/repos/gentoo /etc/portage/binrepos.conf
 emerge-webrsync -q
 
-eselect profile set default/linux/amd64/23.0/desktop/elogind 2>/dev/null || \
+# The official x86-64-v3 binhost only builds these 23.0 profiles:
+#   desktop/gnome (OpenRC), desktop/gnome/systemd, desktop/plasma/systemd, no-multilib
+# desktop/gnome is the ONLY OpenRC desktop profile with binaries — use it.
+# (Plain 'desktop' or 17.x profiles have different default USE -> binaries rejected.)
+eselect profile set default/linux/amd64/23.0/desktop/gnome 2>/dev/null || \
 eselect profile set default/linux/amd64/23.0/desktop 2>/dev/null || \
-eselect profile list 2>/dev/null | grep -m1 "desktop" | grep -m1 "elogind\|openrc" | awk '{print $1}' | tr -d '[]' | xargs -r eselect profile set || \
 eselect profile set 1
 eselect news read all >/dev/null 2>&1 || true
 
@@ -227,18 +230,19 @@ if [[ "${steam_choice,,}" == "y" ]] && eselect profile show 2>/dev/null | grep -
 fi
 
 cat > /etc/portage/binrepos.conf/gentoo-nexus.conf << EOF
-[gentoo-nexus]
+[nexus]
 priority = 100
 sync-uri = ${NEXUS_BINHOST}
 verify-signature = false
-location = /var/cache/binhost/gentoo-nexus
+location = /var/cache/binhost/nexus
 EOF
 
 cat > /etc/portage/binrepos.conf/gentoo.conf << EOF
-[gentoo]
+[gentoo-official-v3]
 priority = 1
 sync-uri = https://distfiles.gentoo.org/releases/amd64/binpackages/23.0/x86-64-v3/
 verify-signature = true
+location = /var/cache/binhost/gentoo-official-v3
 EOF
 
 command -v getuto >/dev/null 2>&1 && getuto || true
@@ -250,15 +254,21 @@ CFLAGS="\${COMMON_FLAGS}"
 CXXFLAGS="\${COMMON_FLAGS}"
 RUSTFLAGS="-C opt-level=2"
 MAKEOPTS="-j${CORES} -l${CORES}"
-# ffmpeg codecs are set per-package in package.use (media-video/ffmpeg x264 x265 ...),
-# NOT as a global USE flag — this matches the official Gentoo binhost layout.
-USE="wayland X vulkan pipewire dbus elogind udev opengl dri gbm vaapi vdpau bluetooth screencast gstreamer minizip -daemon -systemd -aqua -cups"
-VIDEO_CARDS="amdgpu radeon radeonsi intel iris nouveau virgl"
+# CFLAGS is NOT a binpkg matching key (the binhost index doesn't even contain
+# it), so znver tuning never rejects official binaries — it only affects the
+# few packages that still compile locally (kernel, firmware). What Portage
+# matches is CPU_FLAGS_X86 + USE, so those MUST match the official host.
+# NO global USE= line: profile defaults + package.use deltas only (the host
+# builds with pure profile defaults, any global USE deviation = rebuilds).
+VIDEO_CARDS="amdgpu radeonsi"
+# the '-*' VIDEO_CARDS reset lives in package.use, not here (Portage rejects
+# '-' operators in non-incremental variables in make.conf)
 # MUST match the x86-64-v3 binhost exactly (CPU_FLAGS_X86 is a USE flag checked by
 # --binpkg-respect-use=y); otherwise nexus update rejects the prebuilt binaries.
 CPU_FLAGS_X86="avx avx2 f16c fma3 mmx mmxext popcnt sse sse2 sse3 sse4_1 sse4_2 ssse3"
 LINUX_FIRMWARE="${LINUX_FW}"
 FEATURES="getbinpkg binpkg-ignore-signature"
+EMERGE_DEFAULT_OPTS="--getbinpkg --quiet-build=y --keep-going"
 ACCEPT_LICENSE="*"
 PKGDIR="/var/cache/binpkgs"
 DISTDIR="/var/cache/distfiles"
@@ -299,25 +309,17 @@ media-libs/rusticl-opencl gcc-ice-safe
 dev-util/glslang gcc-ice-safe
 ICE
 
-# USE FLAGS
+# USE FLAGS — keep deltas minimal, mirroring machine/package.use.
+# Everything here either has NO official binary (kernel, installkernel) or is
+# covered by the nexus rolling tree. Do NOT add flags like pipewire 'extra' or
+# ffmpeg '-sdl' here: the official desktop/gnome builds already ship
+# sound-server/pulseaudio/sdl (verified against the live v3 index), so any
+# deviation forces a source build of that package.
 cat > /etc/portage/package.use/global_overrides << 'USE'
-media-video/pipewire extra sound-server
-media-video/wireplumber extra
-sys-apps/dbus -systemd
-sys-auth/polkit -systemd
-net-misc/networkmanager -systemd
-net-dialup/ppp -systemd
-sys-block/zram-init -systemd
-sys-apps/util-linux -systemd
-media-libs/libpulse -systemd
-sys-fs/eudev -systemd
-virtual/udev -systemd
-virtual/libudev -systemd
-sys-libs/ncurses -gpm
-media-video/ffmpeg -sdl
-media-libs/libsdl2 -pipewire
 sys-kernel/gentoo-kernel savedconfig initramfs
 sys-kernel/installkernel dracut grub
+sys-auth/seatd server
+*/* VIDEO_CARDS: -* amdgpu radeonsi
 USE
 
 if [[ "${steam_choice,,}" == "y" ]]; then
@@ -381,6 +383,7 @@ media-libs/libogg abi_x86_32
 media-libs/libpng abi_x86_32
 media-libs/libpulse abi_x86_32
 media-libs/libsdl2 abi_x86_32
+media-libs/libsdl3 abi_x86_32
 media-libs/libsndfile abi_x86_32
 media-libs/libva abi_x86_32
 media-libs/libvorbis abi_x86_32
@@ -585,21 +588,22 @@ INSTALL_LIST+=(
 )
 
 BIN_OPTS="--getbinpkg --usepkg --keep-going --autounmask=y --autounmask-write --autounmask-keep-masks=n"
-EXCLUDES="--usepkg-exclude sys-auth/polkit --usepkg-exclude dev-libs/libei --usepkg-exclude media-video/wireplumber --usepkg-exclude media-libs/libpulse --usepkg-exclude sys-apps/accountsservice --usepkg-exclude sys-auth/elogind"
+# No --usepkg-exclude: with desktop/gnome profile + profile-default USE, the
+# official v3 host (and nexus) provide binaries for the whole install list.
 
 emerge ${BIN_OPTS} --oneshot --quiet sys-apps/systemd-utils virtual/libudev || true
 
 set +e
-emerge ${BIN_OPTS} $EXCLUDES "${INSTALL_LIST[@]}"
+emerge ${BIN_OPTS} "${INSTALL_LIST[@]}"
 AUTOUNMASK_EXIT=$?
 set -e
 
 if [[ $AUTOUNMASK_EXIT -ne 0 ]] && [[ $AUTOUNMASK_EXIT -ne 1 ]]; then
-    emerge ${BIN_OPTS} $EXCLUDES --skipfirst "${INSTALL_LIST[@]}" || true
+    emerge ${BIN_OPTS} --skipfirst "${INSTALL_LIST[@]}" || true
 fi
 
 etc-update --automode -5 2>/dev/null || true
-emerge ${BIN_OPTS} $EXCLUDES --update --newuse "${INSTALL_LIST[@]}" || true
+emerge ${BIN_OPTS} --update --newuse "${INSTALL_LIST[@]}" || true
 
 # 7. USER & SERVICES
 echo -e "${B}>>> USER & SERVICES${C}"
