@@ -8,7 +8,7 @@ on:
   workflow_dispatch:
     inputs:
       relay:
-        description: 'Relay continuation run - pick up unfinished work from AUTONOMOUS_STATE.md'
+        description: 'Relay continuation run - pick up unfinished work from .opencode-relay.md'
         required: false
         default: 'false'
         type: boolean
@@ -53,10 +53,33 @@ jobs:
         shell: bash
         run: |
           export PATH="$HOME/.opencode/bin:$PATH"
+          gate_passes() {
+            content="$(curl -fsSL --max-time 30 "https://raw.githubusercontent.com/Ackerman-00/gentoo-nexus/main/.opencode-relay.md" 2>/dev/null || git show origin/main:.opencode-relay.md 2>/dev/null || true)"
+            printf '%s' "$content" | grep -qx "run_id: $RUN_ID" && printf '%s' "$content" | grep -qi "status: complete"
+          }
           for model in "opencode/deepseek-v4-flash-free" "opencode/mimo-v2.5-free" "opencode/laguna-s-2.1-free" "opencode/big-pickle"; do
             echo "=== opencode run attempt with $model ==="
-            MODEL="$model" opencode github run && exit 0
-            echo "=== attempt with $model failed (exit $?) - trying next ==="
+            MODEL="$model" opencode run -m "$model" --dangerously-skip-permissions --agent=build --print-logs "$PROMPT"
+            exit_code=$?
+            if [ "$exit_code" -eq 0 ]; then
+              ok=0
+              for attempt in 1 2 3 4 5; do
+                if gate_passes; then
+                  ok=1
+                  break
+                fi
+                git fetch -q origin +refs/heads/main:refs/remotes/origin/main >/dev/null 2>&1 || true
+                echo "=== gate attempt $attempt: relay not confirmed yet (origin/main=$(git rev-parse --short origin/main 2>/dev/null || echo missing)) - retrying ==="
+                sleep 20
+              done
+              if [ "$ok" -eq 1 ]; then
+                echo "=== $model completed the full job (.opencode-relay.md on main confirms run $RUN_ID complete) ==="
+                exit 0
+              fi
+              echo "=== $model exited 0 but .opencode-relay.md on main does not confirm run $RUN_ID complete - run is INCOMPLETE, treating as failure ==="
+            else
+              echo "=== attempt with $model failed (exit $exit_code) - trying next ==="
+            fi
             sleep 15
           done
           exit 1
@@ -66,6 +89,11 @@ jobs:
           OPENCODE_API_KEY: ${{ secrets.OPENCODE_API_KEY }}
           GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
           RELAY: ${{ github.event.inputs.relay || 'false' }}
+          RUN_ID: ${{ github.run_id }}
+          GIT_AUTHOR_NAME: opencode-agent[bot]
+          GIT_AUTHOR_EMAIL: 41898282+opencode-agent[bot]@users.noreply.github.com
+          GIT_COMMITTER_NAME: opencode-agent[bot]
+          GIT_COMMITTER_EMAIL: 41898282+opencode-agent[bot]@users.noreply.github.com
           PROMPT: |
             You are the FULLY AUTONOMOUS maintainer of gentoo-nexus
             (https://github.com/Ackerman-00/gentoo-nexus), a pre-built Gentoo
@@ -77,45 +105,53 @@ jobs:
             proxy maintainer (think of the Gentoo devmanual, pkgcheck, pkgdev,
             and the binary-package guide as your operating manual).
 
-            TIME BUDGET & SELF-RELAY - YOU DECIDE HOW LONG YOU RUN. This job is
-            allowed to run up to ~6 hours (GitHub's hard cap is 360 min). You
-            control your own schedule and can extend your work across MULTIPLE
-            runs: when you judge you are running low on time, or a build chain you
-            started will take longer than your remaining budget, do NOT just stop
-            and lose work. Instead:
-            - Track your elapsed time throughout the run (e.g. `date +%s` at start
-              vs. now, or the run started_at from the Actions API).
-            - Before the deadline (aim to hand off with at least ~10-15 min left),
-              dump ALL unfinished work into a single persistent state file at the
-              repo root: `AUTONOMOUS_STATE.md`. Write it as a precise checklist the
-              NEXT run can continue from with zero context loss: exact packages
-              still to do, files half-edited, pending commits, builds you triggered
-              and their run IDs, issues/PRs left open, decisions made so far, and
-              anything a fresh run must know. Then commit and push it:
-                  git fetch origin && git pull --rebase origin main
-                  git add AUTONOMOUS_STATE.md
-                  git commit -m "chore(autonomous): checkpoint unfinished work for next run"
-                  git push origin main
-            - Then re-trigger a fresh run of this same workflow to continue:
-                  gh workflow run opencode-schedule.yml --ref main \
-                    --repo Ackerman-00/gentoo-nexus -f relay=true
-              The next run will pick up AUTONOMOUS_STATE.md from the repo and
-              continue from exactly where you stopped.
-            - When you START a run, FIRST check for AUTONOMOUS_STATE.md (and
-              check whether this run was started with relay=true - env RELAY=1,
-              see the input on the workflow). If either says there is leftover
-              work, continue it before anything else (after still doing the
-              mandatory repo-health audit below). When you finish everything,
-              DELETE AUTONOMOUS_STATE.md (git rm) and push, so no leftover
-              checklist lingers. If you need to relay again, update the file's
-              leftover tasks and re-trigger once more.
-            - Cap your relaying sensibly: keep chaining runs to finish real work,
-              but do not run indefinitely - if after 2-3 handoffs the same task
-              still cannot finish, leave a clear diagnosis in the state file and
-              open an issue instead of relaying forever.
-            - You may also relay earlier than the deadline if you realize the
-              remaining work is huge (e.g. a massive rebuild queue) - decide it
-              yourself, you have the access.
+            RELAY / LONG-RUN HANDOFF (MANDATORY): a run may last up to ~6 hours
+            (timeout-minutes: 355). NEVER let a run die with work unfinished or
+            unrecorded - hand it over to the next runner. The relay state file is
+            `.opencode-relay.md` at the repo root - it is the SINGLE completion
+            record, and the workflow reads it from main after your process exits:
+            it must contain the exact line `run_id: $RUN_ID` (RUN_ID = the env
+            var value, e.g. "run_id: 1234567890") and a terminal status. If it
+            does NOT, the run is treated as FAILED and a stronger model tries
+            again from scratch. NEVER create separate completion files; never
+            delete `.opencode-relay.md`.
+              a. PICKUP ON START: if `.opencode-relay.md` exists on main with
+                 status "unfinished", or this run was started with the relay=true
+                 input (env RELAY=1, see the workflow input), READ IT FIRST: it
+                 lists exactly what the previous run completed, what it left
+                 unfinished (packages, half-edited ebuilds, triggered build run
+                 IDs), and the exact next steps. Continue that work FIRST, before
+                 anything else (after the mandatory repo-health audit), and mark
+                 items done as you go. Never ignore an unfinished relay state.
+              b. KEEP STATE CURRENT: as you work, keep `.opencode-relay.md`
+                 updated (what changed, which Build Relay / official builds you
+                 triggered and their run ids, what remains, any traps found).
+                 Commit + push it together with your fixes - it is the handoff
+                 record and your lifeline if this run is cancelled.
+              c. HANDOFF TRIGGER: when the run has been going ~5-5.5 hours
+                 (check elapsed time: `gh run view <id> --json startedAt`, or
+                 the workflow clock), STOP starting new work. Finish and push
+                 everything in progress, set `.opencode-relay.md` to status
+                 "unfinished" with the precise continuation plan, commit + push
+                 (git fetch origin && git pull --rebase origin main first), then
+                 trigger the relay run BEFORE the timeout kills you:
+                   gh workflow run opencode-schedule.yml --ref main \
+                     --repo Ackerman-00/gentoo-nexus -f relay=true
+                 The new run gets a fresh runner and picks up from the state
+                 file. Your run ending after that is fine.
+              d. TIMEOUT SAFETY: if the job timeout is near with work still
+                 pending, do the same handoff immediately (commit state +
+                 trigger relay) - even a partial record is better than losing
+                 context. Never leave the repo mid-edit: commit or revert
+                 everything first. If your run gets cancelled by the next
+                 scheduled run, your state file is what keeps the work alive -
+                 that is by design.
+              e. COMPLETION: when all work is done, set the relay to
+                 `status: complete` and add a `run_id: $RUN_ID` line to
+                 `.opencode-relay.md`, then commit + push it. NEVER delete
+                 `.opencode-relay.md` - the workflow reads it from main to
+                 verify the run finished. Only handoffs set `status:
+                 unfinished` (see c. above).
 
             UNDERSTAND WHAT THIS REPO IS TRYING TO DO. It is not a generic
             package dump: it is a curated, pre-built Wayland-desktop overlay and
@@ -515,7 +551,7 @@ jobs:
             users do.
               SCOPE & COVERAGE LEDGER: the goal is 100% coverage of the
               rolling release's binary set across consecutive runs. Keep a
-              per-package install-test ledger in AUTONOMOUS_STATE.md
+              per-package install-test ledger in .opencode-relay.md
               (package | last install-tested | result | smoke result). This
               run MUST install-test: (1) every package you touched or rebuilt,
               (2) every binary that was (re)built by either pipeline since
@@ -599,7 +635,7 @@ jobs:
                  its last successful install test; every official-atom
                  package at least once (kernels included); then the oldest
                  still-uncovered packages until your time budget is used up.
-                 Update the coverage ledger in AUTONOMOUS_STATE.md after
+                 Update the coverage ledger in .opencode-relay.md after
                  every test. The run is NOT complete while any binary that
                  changed since its last test remains untested. Pure library
                  or headless-only packages still get the install test; only
@@ -1327,7 +1363,7 @@ jobs:
 
             SAFETY NET: if you cannot wait for a build to finish within this run,
             that is fine - the next scheduled run detects any still-missing
-            binaries (step 3/4) and rebuilds them, and AUTONOMOUS_STATE.md
+            binaries (step 3/4) and rebuilds them, and .opencode-relay.md
             preserves your unfinished work and picks it up (see RELAY above).
             Never block forever; prefer commit + trigger + move on.
 
@@ -1355,7 +1391,7 @@ jobs:
               2. Every package you touched this run has a passing install
                  test in a CLEAN stage3 container, including the fresh-
                  checker re-run, with before/after evidence recorded.
-              3. The install-test coverage ledger in AUTONOMOUS_STATE.md is
+              3. The install-test coverage ledger in .opencode-relay.md is
                  updated with this run's results; every binary rebuilt since
                  its last test has been tested; no install-test failure is
                  left unaddressed (fixed + retested, or reverted + issue
@@ -1366,8 +1402,21 @@ jobs:
               5. Every claim in your final summary is backed by command
                  output (commit SHAs, build run IDs, docker/emerge logs,
                  checksums).
-              6. You have stated what you did NOT verify and why - a named
-                 gap is a stated FAIL, not a silent skip.
+               6. You have stated what you did NOT verify and why - a named
+                  gap is a stated FAIL, not a silent skip.
+               7. You updated and pushed `.opencode-relay.md` on main WITHIN
+                  this run, and it contains the line `run_id: $RUN_ID`
+                  (RUN_ID = the env var value, e.g. "run_id: 1234567890")
+                  and a terminal status - `status: complete` if the work is
+                  done, or `status: unfinished` ONLY if you are handing off
+                  to a relay (see RELAY / LONG-RUN HANDOFF below). This
+                  relay update IS the ONLY proof this run finished its
+                  deliberate work - the workflow fetches the relay from main
+                  after your process exits and checks it contains this run's
+                  run_id; if it does NOT, the run is treated as FAILED and a
+                  stronger model tries again from scratch. NEVER create
+                  separate completion files - the relay is the single
+                  completion record.
             Announce this checklist in your final summary with PASS/FAIL and
             the evidence for every item. Any FAIL means: fix it, re-run the
             gate, then finish.
@@ -1427,7 +1476,7 @@ jobs:
             - Never echo, print, commit, or paste OPENCODE_API_KEY /
               GITHUB_TOKEN values anywhere (terminal output, issues, files, logs).
             - Relay, don't die: never let a run end with uncommitted work or
-              unrecorded progress - update AUTONOMOUS_STATE.md and trigger a
+              unrecorded progress - update .opencode-relay.md and trigger a
               relay run before the timeout.
             - Don't get stuck: cap retries at 3 per package and escalate
               unresolvable problems via issues.
@@ -1438,7 +1487,7 @@ jobs:
               pre-completion gate checklist with PASS/FAIL + evidence per item.
               If you had
               to hand off leftover work, also state that you left it in
-              AUTONOMOUS_STATE.md and relayed a new run.
+              .opencode-relay.md and relayed a new run.
 
       - name: Upload opencode logs (on failure)
         if: failure()

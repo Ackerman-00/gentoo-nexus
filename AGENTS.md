@@ -331,6 +331,22 @@ verification doctrine. Keep these sections in sync when the repo changes:
   completed/not-planned with an explanation. EVERY PR gets a review comment;
   merge (squash) only with build+install evidence, otherwise REQUEST CHANGES
   or CLOSE. Never merge on "it probably builds".
+- **Failed builds = top priority**: dismissal FORBIDDEN — "transient /
+  superseded / covered later" are not closures; only a NEWER succeeded build
+  run of current sources with a matching rolling-release asset counts. Work
+  one package to green before the next; revbump (-r1) fixes so consumers
+  pick them up; prove fixes in a clean stage3 docker before pushing; verify
+  the push→Build-Relay dispatch chain fired (new run appears after push).
+- **Relay model**: `.opencode-relay.md` on main is the SINGLE completion
+  record — the workflow's gate checks it contains this run's `run_id:
+  $RUN_ID` + `status: complete` after the model exits; otherwise the run is
+  FAILED and the next model retries. Never delete the file; handoffs set
+  `status: unfinished` + trigger `gh workflow run opencode-schedule.yml -f
+  relay=true` before the timeout.
+- **Advanced web search**: actually run searches (site: queries on
+  packages.gentoo.org / repology / GitHub releases, exact-quote error
+  searches, dated "<topic> 2026" queries), cross-check 2-3 independent
+  sources, never rely on memory.
 - **Install-verification sweep**: every rolling-release binary must
   `emerge --getbinpkg --usepkgonly`-install in a CLEAN stage3 container and
   pass the NO-SOURCE-REBUILD consumer simulation (`emerge --pretend

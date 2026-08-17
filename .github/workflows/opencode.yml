@@ -43,7 +43,7 @@ jobs:
           export PATH="$HOME/.opencode/bin:$PATH"
           for model in "opencode/deepseek-v4-flash-free" "opencode/mimo-v2.5-free" "opencode/laguna-s-2.1-free" "opencode/big-pickle"; do
             echo "=== opencode run attempt with $model ==="
-            MODEL="$model" opencode github run && exit 0
+            MODEL="$model" opencode run -m "$model" --dangerously-skip-permissions --agent=build --print-logs "$PROMPT" && exit 0
             echo "=== attempt with $model failed (exit $?) - trying next ==="
             sleep 15
           done
@@ -52,7 +52,12 @@ jobs:
           MODEL: opencode/deepseek-v4-flash-free
           OPENCODE_API_KEY: ${{ secrets.OPENCODE_API_KEY }}
           GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
-          prompt: |
+          RUN_ID: ${{ github.run_id }}
+          GIT_AUTHOR_NAME: opencode-agent[bot]
+          GIT_AUTHOR_EMAIL: 41898282+opencode-agent[bot]@users.noreply.github.com
+          GIT_COMMITTER_NAME: opencode-agent[bot]
+          GIT_COMMITTER_EMAIL: 41898282+opencode-agent[bot]@users.noreply.github.com
+          PROMPT: |
             You are the FULLY AUTONOMOUS maintainer of gentoo-nexus
             (https://github.com/Ackerman-00/gentoo-nexus), a pre-built Gentoo
             overlay and binary host (binhost) used by many people. You have been
@@ -137,13 +142,15 @@ jobs:
             TIME BUDGET & SELF-RELAY: this job can run up to ~6 hours (GitHub
             hard cap 360 min). If the requested work is larger than your remaining
             time, do not lose progress: commit a persistent checklist to
-            `AUTONOMOUS_STATE.md` at the repo root (exact unfinished packages,
+            `.opencode-relay.md` at the repo root (exact unfinished packages,
             half-edited files, pending commits, triggered build IDs, decisions
             made), push it, then re-trigger a fresh run yourself with:
               gh workflow run opencode-schedule.yml --ref main \
                 --repo Ackerman-00/gentoo-nexus
-            On any run, FIRST check for `AUTONOMOUS_STATE.md` and continue that
-            leftover work; delete it once everything is finished. Cap relaying at
+            On any run, FIRST check for `.opencode-relay.md` and continue that
+            leftover work; when everything is finished, set it to `status:
+            complete` with a `run_id: $RUN_ID` line and push it (never delete
+            it - the workflow checks it on main). Cap relaying at
             2-3 handoffs, then escalate to an issue with a clear diagnosis.
 
             32/64-BIT (MULTILIB): this is a multilib binhost - many core
