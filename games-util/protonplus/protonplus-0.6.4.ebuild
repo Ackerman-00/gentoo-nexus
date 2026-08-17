@@ -31,6 +31,7 @@ DEPEND="
     dev-libs/libgee:0.8
     gui-libs/gtk:4
     net-libs/libsoup:3.0
+    >=media-libs/libsdl3-3.2
 "
 
 RDEPEND="${DEPEND}"
