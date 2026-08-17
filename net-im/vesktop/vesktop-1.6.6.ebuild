@@ -30,6 +30,7 @@ RESTRICT="bindist mirror strip test"
 
 DEPEND="
     app-accessibility/at-spi2-core
+    app-crypt/libsecret
     dev-libs/expat
     dev-libs/glib
     dev-libs/nspr
@@ -40,13 +41,17 @@ DEPEND="
     media-libs/mesa[gbm(+)]
     net-print/cups
     sys-apps/dbus
+    sys-apps/util-linux
     sys-libs/glibc
     virtual/libudev
     x11-libs/cairo
     x11-libs/libdrm
     x11-libs/gdk-pixbuf:2
     x11-libs/gtk+:3
+    x11-libs/libnotify
     x11-libs/libX11
+    x11-libs/libXScrnSaver
+    x11-libs/libXtst
     x11-libs/libXcomposite
     x11-libs/libXdamage
     x11-libs/libXext
@@ -104,6 +109,5 @@ src_install() {
 
 pkg_postinst() {
     xdg_pkg_postinst
-    optfeature "Desktop notifications support" x11-libs/libnotify
     optfeature "Text-to-Speech (TTS) support" app-accessibility/speech-dispatcher
 }
