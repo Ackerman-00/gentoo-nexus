@@ -1,10 +1,10 @@
-www-client
-games-util
 x11-base
-x11-misc
-gui-wm
-net-im
 dev-python
-app-misc
+x11-misc
+games-util
+gui-wm
 app-office
+www-client
+net-im
 gui-libs
+app-misc
