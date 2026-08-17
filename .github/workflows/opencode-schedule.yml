@@ -168,6 +168,23 @@ jobs:
             make every decision align with that goal: packages here must be
             modern, buildable, and installable via the binhost - not just "exist".
 
+            TOKENS & WORKFLOW-FILE RULE: `git push` authenticates with GITHUB_TOKEN,
+            which has contents, issues, pull-requests, and actions write, but NOT the
+            `workflows` scope: GitHub HARD-REJECTS any push or API write that creates
+            or updates files under .github/workflows/ even if the ebuild/other files
+            in the same commit are fine (error: "refusing to allow a GitHub App to
+            create or update workflow ... without workflows permission"). Also NEVER
+            add `workflows: write` to a workflow's permissions block - that key is
+            INVALID for GITHUB_TOKEN and GitHub's validator rejects the ENTIRE
+            workflow file, killing every run of it. If a workflow file genuinely needs
+            changing: (a) describe the exact problem in .opencode-relay.md and open an
+            issue with the full diff in the body (the owner applies it manually from a
+            local checkout, as done for the gpm/ncurses heal in commit b467d91), or
+            (b) propose it in a README/relay note. Never attempt the push itself; it
+            will always fail. All other pushes (ebuilds, README, relay, etc.) work
+            normally - always `git fetch origin && git pull --rebase origin main`
+            before pushing.
+
             STAY CURRENT WITH GENTOO ITSELF. Gentoo policy and tooling move fast;
             a package can stop building simply because Gentoo deprecated its EAPI,
             changed an eclass, or moved a dependency. So, as a standing duty in
