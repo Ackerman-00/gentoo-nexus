@@ -591,6 +591,38 @@ jobs:
             echo ">>> Perl stack is current (${INSTALLED_PERL:-none})."
           fi
 
+          # Self-heal the gpm/ncurses circular dependency. The desktop profile
+          # enables gpm globally, so the consumer's ncurses carries gpm; if the
+          # restored nexus ncurses binary lacks it (stale build), the binary is
+          # rejected and Portage tries a source rebuild of ncurses+gpm, which
+          # deadlocks: ncurses(gpm) needs gpm headers at buildtime and gpm needs
+          # ncurses at buildtime. Bootstrap in dependency order so both land in
+          # the local binrepo with correct USE: ncurses -gpm (binary) -> gpm
+          # (binary) -> ncurses +gpm (source rebuild, --buildpkg).
+          HEAL_NCURSES="false"
+          INSTALLED_NCURSES=$(portageq best_version / 'sys-libs/ncurses' 2>/dev/null || true)
+          if [ -n "$INSTALLED_NCURSES" ] && ! grep -q 'gpm' "/var/db/pkg/${INSTALLED_NCURSES}/USE" 2>/dev/null; then
+            HEAL_NCURSES="true"
+            echo ">>> gpm/ncurses heal: installed ncurses (${INSTALLED_NCURSES}) lacks gpm"
+          fi
+          if [ "$HEAL_NCURSES" == "true" ]; then
+            echo ">>> Bootstrapping ncurses/gpm: ncurses -gpm -> gpm -> ncurses +gpm"
+            sed -i '/^sys-libs\/ncurses gpm$/d' /etc/portage/package.use/nexus
+            echo 'sys-libs/ncurses -gpm' >> /etc/portage/package.use/nexus
+            emerge --oneshot --getbinpkg --backtrack=30 --quiet-build=y --autounmask=n \
+              sys-libs/ncurses 2>&1 | tail -5 || true
+            emerge --oneshot --getbinpkg --buildpkg --backtrack=30 --quiet-build=y --autounmask=n \
+              sys-libs/gpm 2>&1 | tail -5 || true
+            sed -i '/^sys-libs\/ncurses -gpm$/d' /etc/portage/package.use/nexus
+            echo 'sys-libs/ncurses gpm' >> /etc/portage/package.use/nexus
+            emerge --oneshot --getbinpkg --buildpkg --usepkg-exclude sys-libs/ncurses \
+              --backtrack=30 --quiet-build=y --autounmask=n \
+              sys-libs/ncurses 2>&1 | tail -5 || true
+            rm -f /var/cache/binpkgs/Packages /var/cache/binpkgs/Packages.gz
+            emaint binhost --fix
+            echo ">>> gpm/ncurses heal complete."
+          fi
+
           # Safety skip check inside Docker (defense-in-depth):
           # Only skip when NOT force-rebuilding. FORCE="true" forces all;
           # a list of atoms forces only those matching the current CPV.
