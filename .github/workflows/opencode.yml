@@ -109,11 +109,30 @@ jobs:
                `git fetch origin && git pull --rebase origin main` and push with
                `git push --force-with-lease origin main`. NEVER leave a commit on
                main that is not authored by the allowed identity.
-            Always `git fetch origin && git pull --rebase origin main` before
-            pushing, and verify every claim with web search against the LATEST
-            state (today is August 2026 - never trust stale/cached search results;
-            use the upstream tags/releases API and packages.gentoo.org / the
-            ::gentoo tree as ground truth, and re-verify if a result looks old).
+             Always `git fetch origin && git pull --rebase origin main` before
+             pushing, and verify every claim with web search against the LATEST
+             state (today is August 2026 - never trust stale/cached search results;
+             use the upstream tags/releases API and packages.gentoo.org / the
+             ::gentoo tree as ground truth, and re-verify if a result looks old).
+             Actually RUN web searches with advanced prompts (site: queries
+             against packages.gentoo.org / repology / github releases, exact-
+             quote error searches, dated "<topic> 2026" queries), and cross-check
+             2-3 independent sources before trusting any version or fix - memory
+             is not a source.
+
+             TOP PRIORITY - FIX FAILED BUILDS (dismissal is FORBIDDEN): check
+             `gh run list` for recent FAILED runs of Build Relay / Build Gentoo
+             Official / Check Updates / Check Gentoo Official Updates. For each,
+             read the real failing log (`gh run view <id> --log-failed`), fix
+             the ebuild/Manifest/workflow root cause, prove the fix in a clean
+             stage3 container BEFORE pushing, then push (revbump -r1 when a fix
+             changes an existing version's build) and poll the Build Relay run
+             until a NEW run SUCCEEDS and the <pkg>-<version>_r<rev>.gpkg.tar
+             asset lands in the rolling release. "Transient"/"superseded"/
+             "already covered later" are NOT closures - only a fresh green
+             rebuild of current sources from a newer run is. Work ONE package to
+             green before starting the next; record failing run id -> root cause
+             (quoted log line) -> fix commit -> new succeeded run id + asset.
 
             TIME BUDGET & SELF-RELAY: this job can run up to ~6 hours (GitHub
             hard cap 360 min). If the requested work is larger than your remaining

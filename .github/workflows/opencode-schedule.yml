@@ -257,13 +257,20 @@ jobs:
 
             WEB SEARCH IS YOUR PRIMARY VERIFICATION TOOL. Use it thoroughly and
             constantly: for every package you touch, every issue you triage, every
-            PR you review, and every version/URL/checksum you rely on, web-search
-            the upstream project (GitHub repo, releases/tags, homepage, repology,
+            PR you review, and every version/URL/checksum you rely on, ACTUALLY
+            RUN web searches with advanced prompts (site: queries against
+            packages.gentoo.org, repology, github.com/<owner>/<repo>/releases,
+            wiki.gentoo.org; exact-quote searches for error strings and ebuild
+            fragments; "latest release" / "changelog" / "release notes" queries
+            per package; dated queries like "2026 release"), and crawl the
+            upstream project (GitHub repo, releases/tags, homepage, repology,
             the ::gentoo ebuild, the AUR) and the broader internet. Confirm the
             latest version actually exists, SRC_URI URLs return 200 (`curl -sI`),
             checksums match (download + sha512sum/BLAKE2B), and look for known
             build fixes/patches upstream. NEVER trust a version, URL, checksum, or
-            fix you have not verified online.
+            fix you have not verified online, and NEVER skip a web search because
+            you "know" the answer - memory is not a source; every search is
+            evidence.
             - TODAY IS AUGUST 2026 - ALWAYS VERIFY THE LATEST STATE, NEVER STALE
               RESULTS. When you web-search, confirm you are looking at the current
               state as of today, not cached/dated results: for upstream releases
@@ -274,7 +281,12 @@ jobs:
               (versions, dates, EAPI, or policy that no longer matches), dig
               until you find the current answer - stale data is a packaging bug
               waiting to happen. When in doubt whether a fact is current,
-              re-verify it the same run instead of assuming.
+              re-verify it the same run instead of assuming. Craft searches with
+              the current year embedded ("<topic> 2026", "<pkg> release 2026")
+              and cross-check 2-3 independent sources (upstream releases API,
+              repology, packages.gentoo.org, the AUR) before trusting any
+              version. Search in the language the package documents in; if the
+              first result page looks dated, refine the query, do not settle.
             - GITHUB API RATE LIMITS: unauthenticated api.github.com requests are
               limited to 60/hour - you will hit this in a long run. Always send
               `-H "Authorization: token $GITHUB_TOKEN"` on GitHub API calls, or
@@ -810,8 +822,108 @@ jobs:
 
             Then work autonomously, in this priority order:
 
-            1. VERIFY THE REPO ACTUALLY WORKS ON GENTOO - FULL FUNCTIONALITY AUDIT
-               (highest priority; the owner reports the repo does not work).
+            1. FIX FAILED BUILDS - TOP PRIORITY (dismissal is FORBIDDEN).
+               GET https://api.github.com/repos/Ackerman-00/gentoo-nexus/actions/runs
+               (or `gh run list`) and find EVERY recent FAILED run of "Build
+               Relay", "Build Gentoo Official", "Check Updates", or "Check
+               Gentoo Official Updates". For each, identify the exact failing
+               package and step (`gh run view <id> --log-failed` or the logs
+               API). Diagnose from the REAL error output - never from memory,
+               never from the commit message.
+
+               HARD POLICY - A FAILED BUILD IS FIXED, NOT EXPLAINED AWAY:
+               - "transient", "network hiccup", "superseded", "already
+                 covered by a later successful build", "no consumer pulls
+                 it" are NOT acceptable closures. The ONLY closure that
+                 counts: the package builds SUCCESSFULLY in the real CI
+                 pipeline from the CURRENT ebuild + Manifest in this repo,
+                 proven by a NEWER succeeded run id AND a matching
+                 <package>-<version>_r<rev>.gpkg.tar asset in the rolling
+                 release created by THIS run. Even if you believe an older
+                 build was fine, the failed run is on the record and the only
+                 thing that clears it is a fresh green rebuild of the current
+                 sources.
+               - Work ONE package to green before starting the next:
+                 diagnose -> fix ebuild/Manifest/workflow -> local stage3
+                 rebuild -> install test -> push -> poll the Build Relay run
+                 until the new build SUCCEEDS and the asset lands in rolling.
+                 Do NOT batch fixes: a batch buries a still-failing package
+                 under newer pushes.
+
+               a. THE ONLY ACCEPTABLE CLOSURE - for EVERY failing run, run
+                  this loop to completion:
+                  1) Check the package against upstream FRESH: run the
+                     check-updates logic (sync_overlay.sh) or manually
+                     compare the ebuild version / pinned EGIT_COMMIT against
+                     the true latest upstream. Verify with web search that
+                     what it picks is really the latest (release page / tags
+                     / git ls-remote / repology).
+                  2) Make the ebuild fully consistent with upstream: SRC_URI
+                     reachable (curl -sI 200), Manifest hashes match,
+                     KEYWORDS / USE profile-default, deps correct. A broken
+                     auto-updater (bad URL parsing, wrong version extraction,
+                     missing -> rename) is a bug in THIS repo - fix
+                     sync_overlay.sh too.
+                  3) Rebuild locally in a CLEAN gentoo stage3 container
+                     (desktop-openrc profile, machine/make.conf flags exactly
+                     like build.yml) until `emerge <atom>` succeeds, then
+                     install-test the built binary (INSTALL-VERIFICATION
+                     SWEEP + NO-SOURCE-REBUILD checks below).
+                  4) Commit + push with a revbump (-r1) when the fix changes
+                     an existing version's build (RELEASE REVISION
+                     DISCIPLINE: consumers only pick up NEW asset names; a
+                     same-name asset never reaches them). Then trigger /
+                     poll the Build Relay run for the package: a NEW run MUST
+                     appear (`gh run list --workflow=build.yml`). Keep
+                     polling until it finishes. The package is DONE ONLY when
+                     its newest run state = "success" AND the new asset is in
+                     the rolling release.
+                  5) Record per package: failing run id -> root cause (with
+                     the actual log line quoted) -> fix commit sha -> new
+                     succeeded run id + asset name. If a fix attempt fails,
+                     read the new log, web-search the error, adjust, retry -
+                     keep looping until green.
+
+               b. TRIGGER-FIRING VERIFICATION (MANDATORY - the push ->
+                  workflow_dispatch chain is the ONLY thing that turns your
+                  fixes into builds). Verify the dispatch chain empirically
+                  every time you push a fix: BEFORE push record the newest
+                  Build Relay run for the package (gh run list); PUSH to
+                  main; AFTER push re-query - the chain works only if a NEW
+                  run appeared shortly after the push. If builds for OTHER
+                  packages keep appearing when you push but THIS package
+                  never builds even after several pushes, the dispatch /
+                  atom wiring (check-updates.yml package_list, or the
+                  workflow's dispatch input) is broken for it - fix the
+                  wiring, or if you cannot, file an issue titled "Build Relay
+                  not triggered for <pkg>" with the evidence (push SHAs vs
+                  run list timestamps).
+                 - FINAL GATE CHECK: in your final summary state for EVERY
+                  package you pushed the post-push run id AND the asset name
+                  that proves it, or name it as an unverified gap.
+
+               c. REPRODUCE FAILED BUILDS LOCALLY IN DOCKER BEFORE PUSHING A
+                  FIX (MANDATORY when a build failed - never fix blind and
+                  push, guessing). Waiting on the CI queue wastes a full push
+                  cycle per guess. Once you have a hypothesis, BUILD the
+                  package in a clean gentoo stage3 container matching the
+                  failing workflow's profile/flags and PROVE the fix compiles
+                  there before you commit (docker repro per STEP E / the
+                  FAILURE RCA PROTOCOL). Then also INSTALL-test the built
+                  binary per the INSTALL-VERIFICATION SWEEP below - a
+                  package that builds locally AND installs cleanly can be
+                  pushed with high confidence. A local rebuild is NOT a
+                  substitute for the real CI build (different cache state,
+                  older binrepo snapshots) - the CI run is still the
+                  authority for "shipped", local is only the accelerator for
+                  "fixed".
+                 - Never push a changed ebuild for a previously-failing build
+                  without having at least attempted this local rebuild (or
+                  writing in the run summary why it was impossible, e.g. no
+                  container runtime after install attempts).
+
+            2. VERIFY THE REPO ACTUALLY WORKS ON GENTOO - FULL FUNCTIONALITY AUDIT
+               (mandatory every run; the owner reports the repo does not work).
 
                STEP A - OVERLAY METADATA VALIDITY.
                - metadata/layout.conf must declare masters=gentoo and the hash
@@ -932,21 +1044,6 @@ jobs:
                REPORT AT THE END: a clear verdict of whether the repo works, plus
                a table of every ebuild with its validation status (OK / FIXED /
                BROKEN).
-
-            2. FIX FAILED BUILDS.
-               GET https://api.github.com/repos/Ackerman-00/gentoo-nexus/actions/runs
-               and find recent FAILED runs of "Build Relay", "Build Gentoo
-                Official", "Check Updates", or "Check Gentoo Official
-               Updates". For each, identify the exact failing package and step
-               (`gh run view <id> --log-failed` or the logs API). Diagnose the
-               root cause: common ones are a botched version bump by the
-               auto-updater (bad SRC_URI, missing -> rename, stale Manifest, wrong
-               KEYWORDS), a broken Manifest, a dead upstream URL, a live ebuild
-               whose EGIT_COMMIT no longer exists, or a machine/make.conf conflict.
-               Web-search the package and its upstream for known issues before
-               patching. Repair the ebuild/Manifest so `bash -n` passes and all
-               values are consistent. If the repo's own automation is causing the
-               corruption, fix the workflow script too (you have workflows: write).
 
             3. VERIFY VERSION ACCURACY OF EVERY PACKAGE - FULL INVENTORY SWEEP.
                This step is MANDATORY and must cover 100% of packages in this repo,
