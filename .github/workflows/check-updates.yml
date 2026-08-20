@@ -371,6 +371,23 @@ jobs:
           chmod +x sync_overlay.sh
           docker run --rm -v "${{ github.workspace }}:/overlay" gentoo/stage3:amd64-desktop-openrc bash /overlay/sync_overlay.sh
 
+      # ---- topic: teardown-sweep ----
+      # Deterministic tear-apart gate (Proof-or-Stop): EVERY ebuild, every
+      # artifact, torn apart inside docker. Exit code is the verdict; the
+      # report is the receipt. A failing sweep blocks the commit step below.
+      - name: Tear-Apart Sweep (all ebuilds, all artifacts)
+        run: |
+          cat > teardown_sweep.sh << 'TDSHEOF'
+          #!/bin/bash
+          set -euo pipefail
+          python3 /overlay/tools/teardown-sweep.py --overlay /overlay --report /overlay/teardown-report.md
+          TDSHEOF
+          chmod +x teardown_sweep.sh
+          docker run --rm -v "${{ github.workspace }}:/overlay" gentoo/stage3:amd64-desktop-openrc bash /overlay/teardown_sweep.sh
+          SWEEP_RC=$?
+          echo "=== TEAR-DOWN SWEEP VERDICT: exit $SWEEP_RC (0 = every artifact torn apart and verified) ==="
+          exit $SWEEP_RC
+
       # ---- topic: commit ----
       - name: Commit Changes
         run: |

@@ -410,6 +410,58 @@ jobs:
                  checks EACH one. A conclusion that survives its own attack is
                  done; one you cannot attack is faith, not evidence.
 
+            TERMINAL STATES (loop engineering - every objective must end in one
+            named state, never an unnamed limbo). Before you stop working on
+            anything, label it:
+              a. SUCCESS: gate evidence committed/pushed (command output, hash,
+                 exit code, run ID, committed teardown-report.md).
+              b. NO-OP: verified already-current, WITH the verifying command
+                 output pasted (e.g. upstream HEAD == pinned EGIT_COMMIT).
+              c. BLOCKED: needs a secret/credential/asset you cannot obtain -
+                 state exactly what is missing and what unblocks it.
+              d. STALLED: same failure 2+ attempts with no progress - stop,
+                 say what changed between attempts, escalate to the handoff.
+              e. EXHAUSTED: time budget gone - hand off cleanly (see HANDOFF
+                 TRIGGER). A blocked/stalled/exhausted state is NEVER "done".
+            AUTONOMY BOUNDARY: you may declare something "done" ONLY via L1/L2
+            deterministic evidence (exit codes, hashes, reproducible command
+            output, committed receipts). Model self-report is NEVER admissible
+            for a completion claim - if your only proof is "I looked and it
+            seemed fine", that is UNVERIFIED, not done. Error output is never a
+            success; a failed command cannot be reported as "checked".
+
+            DETERMINISTIC TEAR-DOWN GATE (MANDATORY - run it, do not
+            improvise). This repo ships tools/teardown-sweep.py - a pure-stdlib
+            script that iterates EVERY ebuild in the overlay (no package list,
+            no hardcoding, nothing to add or remove per package). It downloads
+            every distfile (both amd64 and arm64 SRC_URI arms), verifies
+            size + BLAKE2B + SHA512 against every Manifest, tears each artifact
+            apart (AppImage --appimage-extract + X-AppImage-Version, .deb
+            control Version, zip/tar internals, Electron .asar, application.ini,
+            runtime `--version` probes, live 9999 EGIT_COMMIT vs upstream HEAD),
+            and emits a per-package table + teardown-report.md. Run it inside
+            the stage3 docker container (or on the runner) at the START of your
+            audit and again after any change:
+              - `python3 tools/teardown-sweep.py --overlay . --report teardown-report.md`
+              - THE EXIT CODE IS THE VERDICT. 0 = every package torn apart and
+                verified. Non-zero = at least one FAIL/MISMATCH/STALE/
+                UNVERIFIED - the run is NOT done until you fix the cause and
+                re-run it green.
+              - COMMIT teardown-report.md with your changes so the receipt is
+                in git history and independently auditable.
+              - The check-updates.yml CI job runs the same sweep as a gate; if
+                it fails, check-updates fails visibly and you MUST fix the
+                underlying cause (dead URL, Manifest drift, real version
+                mismatch, broken artifact) - never disable the gate, never edit
+                the report to fake a pass.
+              - KNOWN SUCCESSFUL OUTPUT SHAPE (from a clean run): source
+                tarballs -> SOURCE-OK (hash+teardown verified, version = PV by
+                construction); binary artifacts -> OK with the internal version
+                named (AppImage X-AppImage-Version / deb control / asar /
+                application.ini / --version probe); live ebuilds -> OK when
+                EGIT_COMMIT matches upstream HEAD. Anything else is a FAIL that
+                must be worked, not waived.
+
             NO-CHURN VERIFICATION (MANDATORY, applies to every step below). You
             must NEVER push a version bump or ebuild rename if it was already
             pushed and built before. Past runs in sibling repos repeatedly
