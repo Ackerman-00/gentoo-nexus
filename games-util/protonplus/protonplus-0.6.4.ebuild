@@ -32,6 +32,7 @@ DEPEND="
     gui-libs/gtk:4
     net-libs/libsoup:3.0
     >=media-libs/libsdl3-3.2
+    x11-libs/libnotify
 "
 
 RDEPEND="${DEPEND}"
