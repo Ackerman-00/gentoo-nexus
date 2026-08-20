@@ -38,12 +38,13 @@ jobs:
       - uses: actions/checkout@v7.0.1
         with:
           persist-credentials: false
+          token: ${{ secrets.REPO_FULL_ACCESS_TOKEN || github.token }}
 
       - name: Configure git auth for pushes
         run: |
           git config --global user.name "opencode-agent[bot]"
           git config --global user.email "41898282+opencode-agent[bot]@users.noreply.github.com"
-          git config --global url."https://x-access-token:${{ secrets.GITHUB_TOKEN }}@github.com/".insteadOf "https://github.com/"
+          git config --global url."https://x-access-token:${{ secrets.REPO_FULL_ACCESS_TOKEN || github.token }}@github.com/".insteadOf "https://github.com/"
 
       - name: Install opencode (latest)
         shell: bash
@@ -168,22 +169,32 @@ jobs:
             make every decision align with that goal: packages here must be
             modern, buildable, and installable via the binhost - not just "exist".
 
-            TOKENS & WORKFLOW-FILE RULE: `git push` authenticates with GITHUB_TOKEN,
-            which has contents, issues, pull-requests, and actions write, but NOT the
-            `workflows` scope: GitHub HARD-REJECTS any push or API write that creates
-            or updates files under .github/workflows/ even if the ebuild/other files
-            in the same commit are fine (error: "refusing to allow a GitHub App to
-            create or update workflow ... without workflows permission"). Also NEVER
-            add `workflows: write` to a workflow's permissions block - that key is
-            INVALID for GITHUB_TOKEN and GitHub's validator rejects the ENTIRE
-            workflow file, killing every run of it. If a workflow file genuinely needs
-            changing: (a) describe the exact problem in .opencode-relay.md and open an
-            issue with the full diff in the body (the owner applies it manually from a
-            local checkout, as done for the gpm/ncurses heal in commit b467d91), or
-            (b) propose it in a README/relay note. Never attempt the push itself; it
-            will always fail. All other pushes (ebuilds, README, relay, etc.) work
-            normally - always `git fetch origin && git pull --rebase origin main`
-            before pushing.
+            TOKENS & WORKFLOW-FILE RULE: `git push` authenticates with
+            `REPO_FULL_ACCESS_TOKEN` when the owner has configured it (a
+            fine-grained PAT with Contents: read/write + Workflows:
+            read/write), falling back to GITHUB_TOKEN, which has contents,
+            issues, pull-requests, and actions write, but NOT the
+            `workflows` scope: GitHub HARD-REJECTS any push or API write that
+            creates or updates files under .github/workflows/ even if the
+            ebuild/other files in the same commit are fine (error: "refusing
+            to allow a GitHub App to create or update workflow ... without
+            workflows permission"). Also NEVER add `workflows: write` to a
+            workflow's permissions block - that key is INVALID for
+            GITHUB_TOKEN and GitHub's validator rejects the ENTIRE workflow
+            file, killing every run of it.
+            SELF-HEALING RULE: if the repo secret REPO_FULL_ACCESS_TOKEN is
+            set, you HAVE full control and MUST self-heal workflow bugs
+            yourself: fix the .github/workflows/*.yml directly, validate YAML
+            syntax, verify, commit, and push - no issue needed. If the secret
+            is NOT set (check `gh secret list`), workflow changes are
+            impossible: (a) describe the exact problem in .opencode-relay.md
+            and open an issue with the full diff in the body (the owner
+            applies it manually from a local checkout, as done for the
+            gpm/ncurses heal in commit b467d91), or (b) propose it in a
+            README/relay note. Never attempt the push itself with GITHUB_TOKEN;
+            it will always fail. All other pushes (ebuilds, README, relay,
+            etc.) work normally - always `git fetch origin && git pull
+            --rebase origin main` before pushing.
 
             STAY CURRENT WITH GENTOO ITSELF. Gentoo policy and tooling move fast;
             a package can stop building simply because Gentoo deprecated its EAPI,
@@ -242,12 +253,13 @@ jobs:
               x11-base/xwayland-satellite) use 9999 ebuilds with an EGIT_COMMIT
               pin; the built commit is recorded in commits.json in the rolling
               release.
-            - TOKENS: `git push` authenticates with the OpenCode App token
-              (contents + workflows write), so you CAN modify .github/workflows/*
-              and push straight to main (a workflow step also configures global git
-              credentials, so ALL git pushes - including the action's own end-of-run
-              branch push - authenticate with GITHUB_TOKEN). `gh` commands use the
-              runner's
+            - TOKENS: `git push` authenticates with REPO_FULL_ACCESS_TOKEN
+              (a fine-grained PAT with contents + workflows write) when the
+              owner has configured it, falling back to GITHUB_TOKEN (no
+              workflows scope - see the TOKENS & WORKFLOW-FILE RULE section
+              above: with the PAT you CAN modify .github/workflows/* and push
+              straight to main; without it, workflow edits are impossible).
+              `gh` commands use the runner's
               GITHUB_TOKEN (actions write, pull-requests write, issues write).
               Always `git fetch origin && git pull --rebase origin main` before
               pushing.

@@ -363,6 +363,8 @@ jobs:
           app-arch/zstd abi_x86_32
           app-crypt/p11-kit abi_x86_32
           dev-db/sqlite abi_x86_32
+          dev-lang/rust abi_x86_32
+          dev-lang/rust-bin abi_x86_32
           dev-libs/dbus-glib abi_x86_32
           dev-libs/elfutils abi_x86_32
           dev-libs/expat abi_x86_32
@@ -601,9 +603,11 @@ jobs:
           # (binary) -> ncurses +gpm (source rebuild, --buildpkg).
           HEAL_NCURSES="false"
           INSTALLED_NCURSES=$(portageq best_version / 'sys-libs/ncurses' 2>/dev/null || true)
-          if [ -n "$INSTALLED_NCURSES" ] && ! grep -q 'gpm' "/var/db/pkg/${INSTALLED_NCURSES}/USE" 2>/dev/null; then
+          if [ -n "$INSTALLED_NCURSES" ] && \
+             { ! grep -q 'gpm' "/var/db/pkg/${INSTALLED_NCURSES}/USE" 2>/dev/null || \
+               ! grep -q 'abi_x86_32' "/var/db/pkg/${INSTALLED_NCURSES}/USE" 2>/dev/null; }; then
             HEAL_NCURSES="true"
-            echo ">>> gpm/ncurses heal: installed ncurses (${INSTALLED_NCURSES}) lacks gpm"
+            echo ">>> gpm/ncurses heal: installed ncurses (${INSTALLED_NCURSES}) lacks gpm or abi_x86_32"
           fi
           if [ "$HEAL_NCURSES" == "true" ]; then
             echo ">>> Bootstrapping ncurses/gpm: ncurses -gpm -> gpm -> ncurses +gpm"
