@@ -430,7 +430,15 @@ def version_evidence(tree, distname):
 
 def probe_binary_version(sub, distname):
     """Try running top-level ELF executables with --version and parse the
-    output for a semver-looking token. Returns (version, cmd, output)."""
+    output for a semver-looking token. Returns (version, cmd, output).
+
+    The pinned version from the distfile name (e.g. ``1.93.137`` in
+    ``brave-origin-bin-1.93.137.zip``) is treated as the expected token: if any
+    candidate prints it, that is accepted immediately (strong evidence). Log
+    noise (ERROR/WARNING/FATAL lines and ``[MMDD/HHMMSS.ffffff`` timestamps)
+    is skipped so a Chromium-style stderr dump can never masquerade as a
+    version token.
+    """
     import subprocess
     cands = []
     for f in sorted(sub.rglob("*")):
@@ -445,15 +453,60 @@ def probe_binary_version(sub, distname):
                 cands.append(f)
         except Exception:
             continue
-    for cand in cands[:5]:
+    pinned = None
+    pm = re.search(r"(\d+(?:\.\d+){1,3}(?:[._-][0-9a-zA-Z]+)?)", os.path.basename(distname))
+    if pm:
+        pinned = pm.group(1).strip(".-_")
+    for cand in cands[:8]:
         try:
             os.chmod(cand, 0o755)
             res = subprocess.run([str(cand), "--version"], capture_output=True,
                                  timeout=20, cwd=sub)
             out = (res.stdout or res.stderr or b"").decode(errors="ignore")
-            m = re.search(r"([0-9]+\.[0-9]+(?:\.[0-9]+)?[a-zA-Z0-9._\-]*)", out)
-            if m:
-                return m.group(1), "%s --version" % cand.name, out.strip()[:120]
+            if pinned and pinned in out:
+                return pinned, "%s --version" % cand.name, out.strip()[:120]
+            for line in out.splitlines():
+                if re.search(r"(?:ERROR|WARNING|FATAL):", line):
+                    continue
+                if re.search(r"\[\d{4}/", line):
+                    continue
+                m = re.search(r"(?<![A-Za-z0-9_])(\d+(?:\.\d+){1,3}[a-zA-Z0-9._\-]*)(?![A-Za-z0-9_])", line)
+                if m:
+                    return m.group(1).strip(".-_"), "%s --version" % cand.name, line.strip()[:120]
+        except Exception:
+            continue
+    return None, None, None
+
+
+def scan_binary_for_version(sub, distname):
+    """Byte-scan top-level ELF candidates for the pinned version from the
+    distfile name. Chromium-family app binaries embed their full version
+    string (e.g. ``1.93.137``) even though the binary may not run in a
+    minimal stage3 (missing system libs) and helper binaries report their own
+    unrelated versions (crashpad 0.8.0, sandbox, etc.). Deterministic and
+    independent of the runtime environment."""
+    pinned = None
+    pm = re.search(r"(\d+(?:\.\d+){1,3})", os.path.basename(distname))
+    if pm:
+        pinned = pm.group(1).strip(".-_")
+    if not pinned:
+        return None, None, None
+    target = pinned.encode()
+    for f in sorted(sub.rglob("*")):
+        if not f.is_file():
+            continue
+        if len(f.relative_to(sub).parts) > 3:
+            continue
+        try:
+            with open(f, "rb") as fh:
+                head = fh.read(4)
+                if head != b"\x7fELF":
+                    continue
+                # ELF headers tell us the binary's own size; scan up to 64MB.
+                fh.seek(0)
+                blob = fh.read(64 * 1024 * 1024)
+            if target in blob:
+                return pinned, "binary strings %s" % f.name, "ELF contains %s" % pinned
         except Exception:
             continue
     return None, None, None
@@ -499,6 +552,9 @@ def tear_apart(path, distname, tmp):
             for kind, v, rel in hits:
                 if kind in STRONG_KINDS:
                     return v, "zip %s=%s (%s)" % (kind, v, rel), True, False
+            ver, cmd, out = scan_binary_for_version(sub, distname)
+            if ver:
+                return ver, "zip %s: %s" % (cmd, out), True, False
             ver, cmd, out = probe_binary_version(sub, distname)
             if ver:
                 return ver, "zip runtime probe %s: %s" % (cmd, out), True, False
@@ -517,6 +573,9 @@ def tear_apart(path, distname, tmp):
             for kind, v, rel in hits:
                 if kind in STRONG_KINDS:
                     return v, "tar %s=%s (%s)" % (kind, v, rel), True, False
+            ver, cmd, out = scan_binary_for_version(sub, distname)
+            if ver:
+                return ver, "tar %s: %s" % (cmd, out), True, False
             ver, cmd, out = probe_binary_version(sub, distname)
             if ver:
                 return ver, "tar runtime probe %s: %s" % (cmd, out), True, False
