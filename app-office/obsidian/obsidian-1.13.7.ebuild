@@ -94,10 +94,13 @@ src_prepare() {
     popd >/dev/null || die
 
     if use wayland; then
+        local desktop_file
+        desktop_file="$(find usr/share/applications -maxdepth 1 -name '*.desktop' -print -quit)"
+        [[ -n "${desktop_file}" ]] || die "obsidian.desktop not found"
         sed -i \
             '/Exec/s/obsidian /obsidian --ozone-platform-hint=auto /' \
-            'usr/share/applications/obsidian.desktop' ||
-            die "sed failed for obsidian.desktop"
+            "${desktop_file}" ||
+            die "sed failed for ${desktop_file}"
     fi
 }
 
@@ -122,7 +125,7 @@ src_install() {
         dosym ../../usr/lib64/libayatana-appindicator3.so "${destdir}/libappindicator3.so"
     fi
 
-    domenu usr/share/applications/obsidian.desktop
+    domenu $(find usr/share/applications -maxdepth 1 -name '*.desktop' -print -quit)
 
     local size
     for size in 16 32 48 64 128 256 512; do
