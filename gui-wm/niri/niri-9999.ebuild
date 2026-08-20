@@ -52,7 +52,7 @@ BDEPEND="
 
 QA_FLAGS_IGNORED="usr/bin/niri"
 
-EGIT_COMMIT="b0eb8ad8c80094de34abd88c109aea421461622b"
+EGIT_COMMIT="b0eb8ad8c800"
 pkg_setup() {
     llvm-r2_pkg_setup
     rust_pkg_setup
