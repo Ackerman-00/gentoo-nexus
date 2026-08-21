@@ -723,6 +723,8 @@ jobs:
 
       - name: Reconcile Packages Index
         if: ${{ always() && steps.queue.outputs.skip_compile != 'true' }}
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
         run: |
           python3 -m pip install --quiet zstandard 2>/dev/null || true
           python3 << 'PYEOF'
