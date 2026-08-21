@@ -1098,12 +1098,6 @@ def probe_binary_version(sub, distname):
             os.chmod(cand, 0o755)
             res = subprocess.run([str(cand), "--version"], capture_output=True,
                                  timeout=20, cwd=sub)
-            # A nonzero exit means the probe crashed (missing libs, wrong
-            # arch...). Its stderr is loader noise, NOT version evidence -
-            # parsing it produced gems like "2.0.so.0" from
-            # "libglib-2.0.so.0: cannot open shared object file".
-            if res.returncode != 0:
-                continue
             out = (res.stdout or res.stderr or b"").decode(errors="ignore")
             m = re.search(r"([0-9]+\.[0-9]+(?:\.[0-9]+)?[a-zA-Z0-9._\-]*)", out)
             if m:
@@ -1111,33 +1105,6 @@ def probe_binary_version(sub, distname):
         except Exception:
             continue
     return None, None, None
-
-
-def elf_chrome_banner(sub):
-    """Weak version evidence for prebuilt browser trees (brave/chrome zips):
-    scan the largest ELF binaries for the upstream-authored banner
-    '<PV> Chromium: <chrome-ver>' and return (pv, relpath) or None."""
-    best = None
-    for f in sorted(sub.rglob("*")):
-        if not f.is_file():
-            continue
-        try:
-            if f.read_bytes()[:4] != b"\x7fELF":
-                continue
-            if not best or f.stat().st_size > best[0].stat().st_size:
-                best = (f,)
-        except Exception:
-            continue
-    if not best:
-        return None
-    try:
-        data = best[0].read_bytes()
-        m = re.search(rb"(\d+\.\d+\.\d+(?:\.\d+)?)\s+Chromium:", data)
-        if m:
-            return m.group(1).decode(), str(best[0].relative_to(sub))
-    except Exception:
-        pass
-    return None
 
 
 def tear_apart(path, distname, tmp):
@@ -1189,9 +1156,6 @@ def tear_apart(path, distname, tmp):
             for kind, v, rel in hits:
                 if kind in STRONG_KINDS:
                     return v, "zip %s=%s (%s)" % (kind, v, rel), True, False
-            banner = elf_chrome_banner(sub)
-            if banner:
-                return banner[0], "zip ELF banner %s=%s (%s)" % (banner[0], banner[0], banner[1]), False, False
             ver, cmd, out = probe_binary_version(sub, distname)
             if ver:
                 return ver, "zip runtime probe %s: %s" % (cmd, out), True, False
@@ -1219,6 +1183,70 @@ def tear_apart(path, distname, tmp):
         except Exception as e:
             return None, "tar teardown error: %s" % e, False, False
     return None, "unknown artifact type", False, False
+
+
+# ---------------------------------------------------------------------------
+# Dependency checking - verify missing shared libraries
+# ---------------------------------------------------------------------------
+
+def get_elf_needed(elf_path):
+    """Return list of NEEDED shared libraries from an ELF binary via readelf."""
+    try:
+        res = subprocess.run(["readelf", "-d", str(elf_path)],
+                             capture_output=True, timeout=10)
+        if res.returncode != 0:
+            return []
+        needed = []
+        for line in res.stdout.decode(errors="ignore").splitlines():
+            m = re.search(r"NEEDED\s+(\S+)", line)
+            if m:
+                needed.append(m.group(1))
+        return needed
+    except Exception:
+        return []
+
+
+def find_elfs_in_dir(root, max_depth=6):
+    """Find all ELF binaries in a directory tree."""
+    elfs = []
+    for f in root.rglob("*"):
+        if not f.is_file():
+            continue
+        rel = f.relative_to(root)
+        if len(rel.parts) > max_depth:
+            continue
+        try:
+            head = f.read_bytes()[:4]
+            if head == b"\x7fELF":
+                elfs.append(f)
+        except Exception:
+            continue
+    return elfs
+
+
+def check_deps_in_dir(pkg, root):
+    """Check for missing shared libraries in extracted artifact directory.
+    Returns list of (binary, missing_lib) tuples."""
+    missing = []
+    elfs = find_elfs_in_dir(root)
+    for elf in elfs:
+        needed = get_elf_needed(elf)
+        for lib in needed:
+            # Check common system paths
+            found = False
+            for prefix in ["/lib", "/usr/lib", "/lib64", "/usr/lib64",
+                           root, root / "lib", root / "usr/lib"]:
+                if (prefix / lib).exists():
+                    found = True
+                    break
+            if not found:
+                # Also check if it's in a sibling dir relative to the binary
+                sibling = elf.parent / lib
+                if sibling.exists():
+                    found = True
+            if not found:
+                missing.append((str(elf.relative_to(root)), lib))
+    return missing
 
 
 # ---------------------------------------------------------------------------
@@ -1478,8 +1506,12 @@ def sweep_package(pkg, pv, srcs, live, repo_type, workdir):
             cd_name = content_disposition_name(dst)
             if cd_name:
                 teardown_name = cd_name
+        dep_missing = []
         with tempfile.TemporaryDirectory() as td:
             internal, note, strong, src_like = tear_apart(dst, teardown_name, Path(td))
+            # Check for missing shared libraries in extracted binaries
+            if strong and td and os.listdir(td):
+                dep_missing = check_deps_in_dir(pkg, Path(td))
         if internal and strong:
             if PLACEHOLDER_RE.match(pv or ""):
                 status = STATUS_OK
@@ -1524,6 +1556,19 @@ def sweep_package(pkg, pv, srcs, live, repo_type, workdir):
                 status = STATUS_UNVERIFIED
                 pkg_ok = False
                 note = "%s | hash %s | BINARY ARTIFACT, no internal version evidence" % (note, hash_note)
+        # Append dependency check results
+        if dep_missing:
+            unique_missing = sorted(set(lib for _, lib in dep_missing))
+            dep_note = " | MISSING DEPS: %s" % ", ".join(unique_missing[:10])
+            if len(unique_missing) > 10:
+                dep_note += " (+%d more)" % (len(unique_missing) - 10)
+            note += dep_note
+            # If status was OK but deps are missing, flag it
+            if status == STATUS_OK:
+                status = STATUS_FAIL
+                pkg_ok = False
+                note += " [DEPS-FAIL]"
+            log("[%s] %s : %d missing libs: %s" % (STATUS_FAIL, pkg, len(unique_missing), ", ".join(unique_missing[:5])))
         rows.append((pkg, name, pv, internal, status, note))
         log("[%s] %s : %s" % (status, pkg, note))
         if status in (STATUS_OK, STATUS_SOURCE_OK):
@@ -1556,7 +1601,7 @@ def _replacement_asset_exists(srcs, pv, newver):
     return False if found else None
 
 
-def check_upstream_latest(pkgs, root=None):
+def check_upstream_latest(pkgs):
     """Deterministic staleness gate: for every release-pinned package whose
     artifact URL points at a known forge, compare PV against upstream's
     latest release. Decision matrix:
@@ -1576,30 +1621,12 @@ def check_upstream_latest(pkgs, root=None):
         if srcs and isinstance(srcs[0], tuple) and srcs[0][0] == "__metapackage__":
             continue
         api_repo = clone = None
-        # Prefer HOMEPAGE as the canonical upstream: SRC_URI may point at a
-        # vendored mirror fork whose releases/latest lags reality (e.g.
-        # cliphist pulls henri-gasc/cliphist for Go vendor deps while the
-        # real upstream is sentriz/cliphist per HOMEPAGE).
-        try:
-            base = Path(root) if root else Path(".")
-            eb = next(iter(sorted((base / pkg).glob("*.ebuild"))), None)
-            if eb:
-                hm = re.search(r'^\s*HOMEPAGE="([^"]+)"', eb.read_text(errors="ignore"), re.M)
-                if hm:
-                    for tok in hm.group(1).split():
-                        hrepo, hclone = forge_slug_from_url(tok)
-                        if hclone:
-                            api_repo, clone = hrepo, hclone
-                            break
-        except Exception:
-            pass
-        if not clone:
-            for item in srcs:
-                url = item[0] if isinstance(item, tuple) else None
-                if isinstance(url, str) and url.startswith(("http://", "https://")):
-                    api_repo, clone = forge_slug_from_url(url)
-                    if clone:
-                        break
+        for item in srcs:
+            url = item[0] if isinstance(item, tuple) else None
+            if isinstance(url, str) and url.startswith(("http://", "https://")):
+                api_repo, clone = forge_slug_from_url(url)
+                if clone:
+                    break
         if not clone:
             continue  # non-forge host: no honest deterministic latest to compare
         slug = clone.split("//", 1)[-1][:-4]
@@ -1753,7 +1780,7 @@ def main():
     log("=== TEAR-DOWN SWEEP [%s]: %d packages ===" % (repo_type, len(pkgs)))
     for pkg, pv, srcs, live in pkgs:
         sweep_package(pkg, pv, srcs, live, repo_type, workdir)
-    check_upstream_latest(pkgs, root)
+    check_upstream_latest(pkgs)
 
     log("")
     log("=== SWEEP TABLE ===")
