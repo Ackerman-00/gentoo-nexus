@@ -196,6 +196,44 @@ jobs:
               repo = repo_m.group(1).rstrip('.')
               print(f"--- Scanning {pkg_cat_name} ({repo}) ---")
 
+              # brave-origin-bin: the "brave-origin-<ver>-linux-amd64.zip"
+              # asset is NOT published for every brave release (1.95.x/1.96.x
+              # have none). Never bump to a version whose artifact 404s —
+              # walk the release list newest-first and take the newest tag
+              # whose zip actually exists.
+              if pkg_dir.parts[-1] == "brave-origin-bin":
+                  curr_m2 = re.search(rf'{re.escape(pkg_dir.parts[-1])}-(\S+?)\.ebuild$', ebuild_path.name)
+                  if not curr_m2: continue
+                  curr_ver = curr_m2.group(1)
+                  new_ver = None
+                  try:
+                      r = session.get(f"https://api.github.com/repos/{repo}/releases?per_page=60", timeout=15)
+                      for rel in (r.json() or []):
+                          tag = (rel.get("tag_name") or "").lstrip("v")
+                          if not re.match(r'^[0-9]', tag):
+                              continue
+                          url = f"https://github.com/{repo}/releases/download/v{tag}/brave-origin-{tag}-linux-amd64.zip"
+                          try:
+                              h = session.head(url, timeout=15, allow_redirects=True)
+                              if h.status_code == 200:
+                                  new_ver = tag
+                                  break
+                          except Exception:
+                              continue
+                  except Exception as e:
+                      print(f"  [!] API Error listing releases: {e}")
+                  if not new_ver:
+                      print("  [!] No release with an existing origin zip found.")
+                      continue
+                  if ver_gt(new_ver, curr_ver):
+                      new_path = pkg_dir / f"{pkg_dir.parts[-1]}-{new_ver}.ebuild"
+                      ebuild_path.rename(new_path)
+                      updated_atoms.add(pkg_cat_name)
+                      print(f"  [+] Renamed to: {new_path.name} (artifact verified 200)")
+                  else:
+                      print(f"  [-] Already up to date (newest artifact {new_ver}).")
+                  continue
+
               if ebuild_path.name.endswith('9999.ebuild'):
                   branch_m = re.search(r'^EGIT_BRANCH=["\']?([^"\']+)["\']?', content, re.MULTILINE)
                   branch = branch_m.group(1) if branch_m else "HEAD"

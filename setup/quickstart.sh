@@ -325,6 +325,7 @@ USE
 if [[ "${steam_choice,,}" == "y" ]]; then
     cat > /etc/portage/package.use/steam << 'USE'
 app-accessibility/at-spi2-core abi_x86_32
+app-arch/brotli abi_x86_32
 app-arch/bzip2 abi_x86_32
 app-arch/lz4 abi_x86_32
 app-arch/xz-utils abi_x86_32
@@ -371,7 +372,7 @@ media-gfx/graphite2 abi_x86_32
 media-libs/alsa-lib abi_x86_32
 media-libs/flac abi_x86_32
 media-libs/fontconfig abi_x86_32
-media-libs/freetype abi_x86_32
+media-libs/freetype brotli harfbuzz abi_x86_32
 media-libs/glu abi_x86_32
 media-libs/harfbuzz abi_x86_32
 media-libs/lcms abi_x86_32

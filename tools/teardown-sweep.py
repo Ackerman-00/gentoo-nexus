@@ -1098,6 +1098,12 @@ def probe_binary_version(sub, distname):
             os.chmod(cand, 0o755)
             res = subprocess.run([str(cand), "--version"], capture_output=True,
                                  timeout=20, cwd=sub)
+            # A nonzero exit means the probe crashed (missing libs, wrong
+            # arch...). Its stderr is loader noise, NOT version evidence -
+            # parsing it produced gems like "2.0.so.0" from
+            # "libglib-2.0.so.0: cannot open shared object file".
+            if res.returncode != 0:
+                continue
             out = (res.stdout or res.stderr or b"").decode(errors="ignore")
             m = re.search(r"([0-9]+\.[0-9]+(?:\.[0-9]+)?[a-zA-Z0-9._\-]*)", out)
             if m:
@@ -1105,6 +1111,33 @@ def probe_binary_version(sub, distname):
         except Exception:
             continue
     return None, None, None
+
+
+def elf_chrome_banner(sub):
+    """Weak version evidence for prebuilt browser trees (brave/chrome zips):
+    scan the largest ELF binaries for the upstream-authored banner
+    '<PV> Chromium: <chrome-ver>' and return (pv, relpath) or None."""
+    best = None
+    for f in sorted(sub.rglob("*")):
+        if not f.is_file():
+            continue
+        try:
+            if f.read_bytes()[:4] != b"\x7fELF":
+                continue
+            if not best or f.stat().st_size > best[0].stat().st_size:
+                best = (f,)
+        except Exception:
+            continue
+    if not best:
+        return None
+    try:
+        data = best[0].read_bytes()
+        m = re.search(rb"(\d+\.\d+\.\d+(?:\.\d+)?)\s+Chromium:", data)
+        if m:
+            return m.group(1).decode(), str(best[0].relative_to(sub))
+    except Exception:
+        pass
+    return None
 
 
 def tear_apart(path, distname, tmp):
@@ -1156,6 +1189,9 @@ def tear_apart(path, distname, tmp):
             for kind, v, rel in hits:
                 if kind in STRONG_KINDS:
                     return v, "zip %s=%s (%s)" % (kind, v, rel), True, False
+            banner = elf_chrome_banner(sub)
+            if banner:
+                return banner[0], "zip ELF banner %s=%s (%s)" % (banner[0], banner[0], banner[1]), False, False
             ver, cmd, out = probe_binary_version(sub, distname)
             if ver:
                 return ver, "zip runtime probe %s: %s" % (cmd, out), True, False
@@ -1520,7 +1556,7 @@ def _replacement_asset_exists(srcs, pv, newver):
     return False if found else None
 
 
-def check_upstream_latest(pkgs):
+def check_upstream_latest(pkgs, root=None):
     """Deterministic staleness gate: for every release-pinned package whose
     artifact URL points at a known forge, compare PV against upstream's
     latest release. Decision matrix:
@@ -1540,12 +1576,30 @@ def check_upstream_latest(pkgs):
         if srcs and isinstance(srcs[0], tuple) and srcs[0][0] == "__metapackage__":
             continue
         api_repo = clone = None
-        for item in srcs:
-            url = item[0] if isinstance(item, tuple) else None
-            if isinstance(url, str) and url.startswith(("http://", "https://")):
-                api_repo, clone = forge_slug_from_url(url)
-                if clone:
-                    break
+        # Prefer HOMEPAGE as the canonical upstream: SRC_URI may point at a
+        # vendored mirror fork whose releases/latest lags reality (e.g.
+        # cliphist pulls henri-gasc/cliphist for Go vendor deps while the
+        # real upstream is sentriz/cliphist per HOMEPAGE).
+        try:
+            base = Path(root) if root else Path(".")
+            eb = next(iter(sorted((base / pkg).glob("*.ebuild"))), None)
+            if eb:
+                hm = re.search(r'^\s*HOMEPAGE="([^"]+)"', eb.read_text(errors="ignore"), re.M)
+                if hm:
+                    for tok in hm.group(1).split():
+                        hrepo, hclone = forge_slug_from_url(tok)
+                        if hclone:
+                            api_repo, clone = hrepo, hclone
+                            break
+        except Exception:
+            pass
+        if not clone:
+            for item in srcs:
+                url = item[0] if isinstance(item, tuple) else None
+                if isinstance(url, str) and url.startswith(("http://", "https://")):
+                    api_repo, clone = forge_slug_from_url(url)
+                    if clone:
+                        break
         if not clone:
             continue  # non-forge host: no honest deterministic latest to compare
         slug = clone.split("//", 1)[-1][:-4]
@@ -1699,7 +1753,7 @@ def main():
     log("=== TEAR-DOWN SWEEP [%s]: %d packages ===" % (repo_type, len(pkgs)))
     for pkg, pv, srcs, live in pkgs:
         sweep_package(pkg, pv, srcs, live, repo_type, workdir)
-    check_upstream_latest(pkgs)
+    check_upstream_latest(pkgs, root)
 
     log("")
     log("=== SWEEP TABLE ===")
