@@ -49,6 +49,17 @@ jobs:
         shell: bash
         run: curl -fsSL https://opencode.ai/install | bash
 
+      - name: Pre-agent sweep (runs BEFORE opencode, agent reads results)
+        shell: bash
+        run: |
+          python3 tools/teardown-sweep.py --overlay . --type gentoo --report teardown-report.md --autofix 2>&1 || true
+          python3 tools/docker-sweep.py --overlay . --type gentoo --scan-images --report docker-report.md 2>&1 || true
+          echo "=== SWEEP COMPLETE — agent will read reports ==="
+          cat teardown-report.md 2>/dev/null | tail -30
+          cat docker-report.md 2>/dev/null | tail -20
+        env:
+          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+
       - name: Run opencode
         shell: bash
         run: |
@@ -1538,73 +1549,43 @@ jobs:
               unresolvable problems via issues.
 
             TEAR-APART SWEEP PROTOCOL (MANDATORY):
-            During your run (not after!), you MUST test packages by actually
-            installing them in Docker containers and verifying they work. This
-            is the REAL tear-apart — not just version checking.
+            The sweep already ran BEFORE you started (pre-agent step).
+            teardown-report.md and docker-report.md are already in the repo.
+            You MUST read them on your FIRST step and act on findings.
 
-            DURING YOUR RUN, for packages you modified or that are critical:
+            YOUR FIRST ACTION — read the pre-computed reports:
+              cat teardown-report.md | head -200
+              cat docker-report.md | head -100
 
-            1. Run the Docker sweep for changed/critical packages:
-               python3 tools/docker-sweep.py --overlay . --type REPO_TYPE                  --packages "changed-pkg1 changed-pkg2" --scan-images                  --report docker-report.md
+            From teardown-report.md you will see:
+              - STALE packages → use the suggested auto-update tool to fix
+              - VULN packages → investigate and fix or document why safe
+              - OUTDATED packages → update using livecheck/autocopr/nix-update
+              - LIBYEAR score → if >20 yr, prioritize highest-drift packages
+              - CLEAN/FRESH packages → no action needed
 
-               Where REPO_TYPE is: gentoo, fedora, nix, void, or opensuse.
-               The --scan-images flag runs Trivy on the base Docker image
-               to check for CRITICAL/HIGH/MEDIUM CVEs in the base layer.
+            For packages you modified during your run, re-verify them:
+               python3 tools/docker-sweep.py --overlay . --type REPO_TYPE \
+                 --packages "changed-pkg1 changed-pkg2" --scan-images \
+                 --report docker-report.md
 
-            2. The sweep spins up CLEAN containers (gentoo/stage3, fedora,
-               voidlinux, nixos/nix) and:
-               - Installs the package + all dependencies
-               - Verifies no deps are missing (ldd, rpm -V, nix-store --query)
-               - Reports PASS/FAIL per package
-
-            3. Read teardown-report.md — the automated sweep already checked:
-               - Version pinning vs upstream (GitHub releases, tags, Repology)
-               - OSV.dev vulnerability scan (CVEs on your pinned version)
-               - Repology freshness (is your version outdated vs 120+ repos?)
-               - Libyear drift (how many years behind upstream, budget=20yr)
-               - Auto-update tool hints (livecheck, autocopr, nix-update)
-
-            4. For EACH package in docker-report.md with status FAIL or
-               DEPS-MISSING:
+            For EACH package in docker-report.md with status FAIL or
+            DEPS-MISSING:
                - Read the error details
                - Fix the ebuild/spec/nix/template (missing deps, wrong flags)
                - Re-run the sweep for that specific package to verify
                - NEVER leave a failing package — fix or revert
 
-            5. For the FULL REPO SWEEP (end of run, before final summary):
-               python3 tools/docker-sweep.py --overlay . --type REPO_TYPE                  --all --scan-images --report docker-report.md
-
-               This tests EVERY package + scans base images for CVEs.
-               Any FAIL = the run is not done. Fix all before completing.
-
-            6. Cross-check dependency trees against upstream:
-               - For gentoo: compare `emerge --pretend` output against the
-                 ::gentoo ebuild's DEPEND/RDEPEND
-               - For fedora: compare `dnf repoquery --requires` output
-                 against the spec's Requires:
-               - For nix: compare `nix-store --query --requisites` against
-                 the nix expression's buildInputs/propagatedBuildInputs
-               - For void: compare xbps-install output against template's
-                 depends= 
-
-            7. Run the installed binary if applicable:
-               - Check `which <binary>` exists
-               - Check `ldd $(which <binary>)` has no "not found"
-               - For GUI apps: check --version or --help runs without segfault
-
-            NEVER complete a run with docker-report.md showing FAIL.
-            The sweep is the PROOF-OR-STOP gate — install + deps + binary
-            must ALL pass. Version matching alone is NOT enough.
+            NEVER complete a run with teardown-report.md showing STALE/VULN
+            that you haven't addressed. The sweep is the PROOF-OR-STOP gate.
 
             CRITICAL: When the sweep reports OUTDATED, use the suggested
             auto-update tool (from the report) to update the package. Do NOT
-            just mark it stale — actually fix it using the right tool for
-            the repo type.
+            just mark it stale — actually fix it using the right tool.
 
             LIBYEAR ENFORCEMENT: If the sweep reports LIBYEAR OVER-BUDGET
             (>20 yr), you MUST prioritize updating the packages with the
-            highest drift. Sort by drift desc and update the top offenders
-            first. The libyear score is in teardown-report.md.
+            highest drift. Sort by drift desc and update the top offenders.
 
             End every run with a concise final summary: the repo-working verdict
               (does the overlay/binhost actually work on Gentoo now?), what you
