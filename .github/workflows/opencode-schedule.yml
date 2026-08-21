@@ -1555,7 +1555,7 @@ jobs:
           cat > teardown_sweep.sh << 'TDSHEOF'
           #!/bin/bash
           set -euo pipefail
-          python3 /overlay/tools/teardown-sweep.py --overlay /overlay --report /overlay/teardown-report.md
+          python3 /overlay/tools/teardown-sweep.py --overlay /overlay --report /overlay/teardown-report.md --autofix
           TDSHEOF
           chmod +x teardown_sweep.sh
           docker run --rm -e GITHUB_TOKEN -v "${{ github.workspace }}:/overlay" gentoo/stage3:amd64-desktop-openrc bash /overlay/teardown_sweep.sh
