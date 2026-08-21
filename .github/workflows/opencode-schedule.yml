@@ -1609,6 +1609,24 @@ jobs:
             (>20 yr), you MUST prioritize updating the packages with the
             highest drift. Sort by drift desc and update the top offenders.
 
+            SWEEP SCRIPT IS CODE YOU OWN: tools/teardown-sweep.py and
+            tools/docker-sweep.py are NOT immutable infrastructure. If the
+            sweep crashes (Traceback), counts wrong, misses version detection,
+            or produces false positives/negatives, FIX THE SWEEP SCRIPT
+            ITSELF. You have full repo permissions — edit the Python, test
+            it, commit it. Do NOT just work around sweep bugs. Common sweep
+            bugs to watch for:
+              - TypeError/AttributeError in sweep script → fix the Python
+              - "no version evidence" for packages with Makefile/CMake/meson →
+                add the pattern to version_evidence()
+              - Wrong exit code (FAIL when packages are actually OK) →
+                fix the counting logic
+              - Auto-fix crashes (fix_stale_pkg) → fix the Python
+              - Missing detection for new package types → add support
+            After fixing the sweep, re-run it to verify your fix works:
+              python3 tools/teardown-sweep.py --overlay . --type REPO_TYPE \
+                --report teardown-report.md --autofix
+
             End every run with a concise final summary: the repo-working verdict
               (does the overlay/binhost actually work on Gentoo now?), what you
               fixed, which issues you closed, which PRs you merged/rejected, which
