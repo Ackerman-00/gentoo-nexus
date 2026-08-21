@@ -1542,71 +1542,52 @@ jobs:
             every package yourself, check it against upstream, and fix what's
             wrong. Do this as your FIRST action after reading the repo.
 
-            HOW TO TEAR APART PACKAGES (do this for every package):
+            HOW TO TEAR APART GENTOO PACKAGES:
 
             1. LIST ALL PACKAGES:
-               - Gentoo: find . -name "*.ebuild" | grep -v files/ | sort
-               - Fedora: find . -name "*.spec" | sort
-               - Nix: find pkgs/ -name "*.nix" | sort
-               - Void: find srcpkgs/ -name "template" | sort
-               - openSUSE: find . -name "*.spec" | sort
+               find . -name "*.ebuild" | grep -v files/ | sort
 
-            2. FOR EACH PACKAGE — check version against upstream:
-               a. Read the ebuild/spec/nix/template to get PV (pinned version)
-               b. Get HOMEPAGE or source URL from the package file
-               c. Query upstream for latest release:
+            2. FOR EACH EBUILD — check version against upstream:
+               a. Read the ebuild to get PV, HOMEPAGE, SRC_URI
+               b. Query upstream for latest release:
                   - GitHub: gh api repos/OWNER/REPO/releases/latest --jq .tag_name
                   - Web search: "PACKAGE latest release 2026"
                   - Repology: curl -s "https://repology.org/api/v1/project/PACKAGE"
-               d. Compare PV vs upstream latest
-               e. If STALE → update the package using the right tool:
-                  - Gentoo: rename ebuild, update SRC_URI, run egencache
-                  - Fedora: update .spec Version, run rpmbuild
-                  - Nix: update version hash, run nix-build
-                  - Void: update template version, run xbps-src
-                  - openSUSE: update .spec, run osc build
+               c. Compare PV vs upstream latest
+               d. If STALE → rename ebuild, update SRC_URI, run egencache
 
             3. FOR EACH BINARY PACKAGE — verify the artifact:
-               a. Download the source/binary artifact
+               a. Download the source/binary from SRC_URI
                b. Extract it (tar, zip, deb, AppImage, rpm)
                c. Look for version evidence inside:
-                  - application.ini, package.json, Cargo.toml, Makefile VERSION,
-                    CMakeLists.txt project(VERSION), meson.build version:
-                    setup.py version=, __version__.py, version.txt, etc.
-               d. Compare internal version vs pinned version
-               e. If MISMATCH → fix the ebuild/spec/nix/template
+                  application.ini, package.json, Cargo.toml, Makefile VERSION,
+                  CMakeLists.txt project(VERSION), meson.build version:,
+                  setup.py version=, __version__.py, version.txt, etc.
+               d. Compare internal version vs PV
+               e. If MISMATCH → fix the ebuild
 
             4. CHECK DEPENDENCIES:
-               a. Read RDEPEND/DEPEND (Gentoo), Requires (Fedora), buildInputs (Nix)
-               b. Verify all deps exist in the repo or are available
+               a. Read RDEPEND/DEPEND from the ebuild
+               b. Verify all deps exist in ::gentoo overlay
                c. If DEPS-MISSING → add the missing deps
 
-            5. TEST INSTALLS (for critical packages):
-               - Gentoo: docker run --rm -v .:/overlay gentoo/stage3 bash -c
+            5. TEST INSTALLS:
+               docker run --rm -v .:/overlay gentoo/stage3 bash -c
                  "emerge --emptytree /overlay/PKG"
-               - Fedora: docker run --rm -v .:/repo fedora bash -c
-                 "dnf install -y /repo/PKG.spec"
-               - Nix: nix-build pkgs/PKG.nix
-               - Void: xbps-src pkg PKG
-               - openSUSE: osc build PKG.spec
 
             6. CHECK FOR VULNERABILITIES:
                - Web search: "PACKAGE CVE 2026"
-               - OSV.dev: curl -s "https://osv.dev/v1/query" -d '{"package":{"name":"PACKAGE","ecosystem":"REPO"},"version":"PV"}'
+               - OSV.dev: curl -s "https://osv.dev/v1/query" -d '{"package":{"name":"PACKAGE","ecosystem":"Gentoo"},"version":"PV"}'
                - If VULN → update to fixed version or document why safe
 
-            7. AUTO-UPDATE TOOLS (use these, don't manually edit):
-               - Gentoo: livecheck, pkgbump, ecopy
-               - Fedora: copr-distgit-client, fedpkg
-               - Nix: nix-update, nix-prefetch
-               - Void: xbps-src update-src
-               - openSUSE: osc service
+            7. AUTO-UPDATE TOOLS:
+               livecheck, pkgbump, ecopy
 
             NEVER complete a run without tearing apart every package.
             The sweep is NOT a separate script — YOU are the sweep.
 
             SWEEP SCRIPT IS CODE YOU OWN: tools/teardown-sweep.py and
-            tools/docker-sweep.py exist as辅助 tools you can call, but
+            tools/docker-sweep.py exist as auxiliary tools you can call, but
             YOU do the reasoning. If the scripts help, use them. If they
             break, fix them. You are the intelligence, not the script.
 
