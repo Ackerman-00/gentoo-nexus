@@ -1549,6 +1549,8 @@ jobs:
 
       # ---- topic: teardown-sweep ----
       - name: Tear-Apart Sweep (all ebuilds, all artifacts)
+        env:
+          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
         run: |
           cat > teardown_sweep.sh << 'TDSHEOF'
           #!/bin/bash
@@ -1556,7 +1558,7 @@ jobs:
           python3 /overlay/tools/teardown-sweep.py --overlay /overlay --report /overlay/teardown-report.md
           TDSHEOF
           chmod +x teardown_sweep.sh
-          docker run --rm -v "${{ github.workspace }}:/overlay" gentoo/stage3:amd64-desktop-openrc bash /overlay/teardown_sweep.sh
+          docker run --rm -e GITHUB_TOKEN -v "${{ github.workspace }}:/overlay" gentoo/stage3:amd64-desktop-openrc bash /overlay/teardown_sweep.sh
 
       - name: Upload opencode logs (on failure)
         if: failure()
