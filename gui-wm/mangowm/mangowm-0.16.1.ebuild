@@ -16,7 +16,7 @@ IUSE="X asan"
 
 DEPEND="
 	>=gui-libs/wlroots-0.20:0.20=[libinput,session,X?]
-	<gui-libs/wlroots-0.21:0.21=[X?]
+	<gui-libs/wlroots-0.21:=[X?]
 	>=gui-libs/scenefx-0.5:=[X?]
 	dev-libs/cJSON
 	dev-libs/glib:2
