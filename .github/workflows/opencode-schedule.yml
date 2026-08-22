@@ -1552,6 +1552,7 @@ jobs:
               relay run before the timeout.
             - Don't get stuck: cap retries at 3 per package and escalate
               unresolvable problems via issues.
+            - VERIFICATION LOOP (MANDATORY - battle-tested 2026: pre-completion checklist + external verifier, agentpatterns.ai 2026-07-19 / contextOS 2026-08-14): Before declaring `status: complete`, you MUST run `bash tools/verify-gentoo.sh` and paste its `----- VERIFICATION REPORT -----` output. It checks numerical completion (18 rows with `deps-verified`/`deps-fixed` — pre-count 18, post-grep must be 18), evidence strings (`pkgcheck scan` / `emerge --pretend` / `equery` from 2026 h. checks + Docker `stage3` + `ldd`), and install-test + battle-test table. Exit 1 = NOT COMPLETE — keep working until exit 0. Do NOT write `status: complete` if verifier fails. Prompt 70-90%, verifier+gate near-100%.
 
             TEAR-APART SWEEP PROTOCOL (MANDATORY):
             YOU are the sweep. There is no separate script. You tear apart
@@ -1615,6 +1616,16 @@ jobs:
               If you had
               to hand off leftover work, also state that you left it in
               .opencode-relay.md and relayed a new run.
+
+      - name: Verify completion (external, battle-tested 2026)
+        if: always()
+        shell: bash
+        run: |
+          echo "=== External verifier: tools/verify-gentoo.sh ==="
+          bash tools/verify-gentoo.sh || {
+            echo "::error::Verification FAILED — relay missing 18-row deps table or evidence. Agent skipped mandatory audit."
+            exit 1
+          }
 
       - name: Upload opencode logs (on failure)
         if: failure()
