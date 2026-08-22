@@ -330,7 +330,6 @@ sys-apps/dbus -systemd elogind
 media-video/pipewire -systemd elogind -ffmpeg
 dev-libs/libdbusmenu gtk3
 net-misc/networkmanager bluetooth modemmanager
-sys-libs/ncurses gpm
 sys-libs/zlib-ng abi_x86_32 abi_x86_64 compat
 x11-libs/libdrm video_cards_amdgpu video_cards_radeon
 media-libs/mesa -rust -opencl proprietary-codecs
@@ -425,7 +424,6 @@ sys-apps/lm-sensors abi_x86_32
 sys-apps/systemd-utils abi_x86_32
 sys-apps/util-linux abi_x86_32
 sys-libs/gdbm abi_x86_32
-sys-libs/gpm abi_x86_32
 sys-libs/libcap abi_x86_32
 sys-libs/libudev-compat abi_x86_32
 sys-libs/ncurses abi_x86_32
@@ -563,7 +561,6 @@ sys-apps/systemd abi_x86_32
 sys-apps/systemd-utils abi_x86_32
 sys-apps/util-linux abi_x86_32
 sys-libs/gdbm abi_x86_32
-sys-libs/gpm abi_x86_32
 sys-libs/libcap abi_x86_32
 sys-libs/libudev-compat abi_x86_32
 sys-libs/ncurses abi_x86_32
