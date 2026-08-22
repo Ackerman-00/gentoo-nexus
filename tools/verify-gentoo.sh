@@ -16,7 +16,8 @@ if [[ -f "$RELAY" ]]; then
   fi
   for tool in "pkgcheck scan" "emerge --pretend" "equery"; do
     if ! grep -qi "$tool" "$RELAY"; then
-      echo "WARNING: relay missing evidence for $tool (2026 h. checks)"
+      echo "FAIL: NOT COMPLETE -- relay missing evidence for $tool (2026 h. checks)"
+      FAIL=1
     fi
   done
   if ! grep -qi "install-test table\|emerge --usepkgonly" "$RELAY"; then
@@ -26,7 +27,8 @@ if [[ -f "$RELAY" ]]; then
     echo "PASS: Install-test table present"
   fi
   if ! grep -qi "DOCKER BATTLE TEST\|docker.*stage3\|ldd.*not found" "$RELAY"; then
-    echo "WARNING: relay missing Docker battle test evidence (stage3 + ldd)"
+    echo "FAIL: NOT COMPLETE -- relay missing Docker battle test evidence (stage3 + ldd)"
+    FAIL=1
   fi
 else
   echo "FAIL: NOT COMPLETE -- $RELAY missing"

@@ -15,14 +15,14 @@ LICENSE="MIT"
 SLOT="0"
 KEYWORDS="~amd64"
 PROPERTIES="live"
-IUSE=""
+IUSE="+jemalloc"
 
 DEPEND="
     app-crypt/libsecret
     dev-cpp/nlohmann_json
     dev-cpp/sdbus-c++
     dev-libs/glib:2
-    dev-libs/jemalloc
+    jemalloc? ( dev-libs/jemalloc:= )
     dev-libs/libical
     dev-libs/libsodium
     dev-libs/libxml2
@@ -46,7 +46,7 @@ DEPEND="
     sci-libs/libqalculate
     sys-auth/polkit
     sys-libs/pam
-    x11-libs/cairo
+    x11-libs/cairo[glib]
     x11-libs/libxkbcommon
     x11-libs/pango
 "
