@@ -11,14 +11,14 @@ LICENSE="GPL-2"
 SLOT="0"
 KEYWORDS="~amd64"
 
+S="${WORKDIR}"
+
 QA_PREBUILT="usr/bin/matugen"
 QA_PRESTRIPPED="usr/bin/matugen"
 
 RDEPEND="
     dev-libs/openssl:=
 "
-
-S="${WORKDIR}"
 
 src_install() {
     dobin matugen

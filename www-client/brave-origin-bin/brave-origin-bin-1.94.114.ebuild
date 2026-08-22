@@ -51,7 +51,6 @@ RDEPEND="
 	x11-libs/pango
 	x11-misc/xdg-utils
 "
-DEPEND=""
 BDEPEND="app-arch/unzip"
 
 src_unpack() {
