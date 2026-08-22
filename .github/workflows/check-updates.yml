@@ -234,21 +234,13 @@ jobs:
                       print(f"  [-] Already up to date (newest artifact {new_ver}).")
                   continue
 
-              # Binary-distributed packages (obsidian, vesktop, zen-browser):
-              # releases/latest may return a mobile-only tag (e.g. obsidian
-              # v1.13.8 has only an APK). Walk releases newest-first and take
-              # the newest tag that actually has the expected .deb / .tar.xz
-              # asset, so we never bump to a version without desktop builds.
-              if pkg_dir.parts[-1] in ("obsidian", "vesktop", "zen-browser"):
+              # Auto-detect binary-distributed packages (any ebuild with QA_PREBUILT/bindist or SRC_URI .deb/.AppImage/zen.): releases/latest may return a mobile-only tag (e.g. obsidian v1.13.8 has only APK). Walk releases newest-first and only bump to tag that actually has desktop assets, so we never bump to a version without builds. Auto-detects whatever is in the repo — no hardcoded package list.
+              is_binary = "QA_PREBUILT" in content or "bindist" in content or ".deb" in content or ".AppImage" in content or "zen.linux" in content
+              if is_binary and "SRC_URI" in content:
                   curr_m2 = re.search(rf'{re.escape(pkg_dir.parts[-1])}-(\S+?)\.ebuild$', ebuild_path.name)
                   if not curr_m2: continue
                   curr_ver = curr_m2.group(1)
                   new_ver = None
-                  asset_suffixes = {
-                      "obsidian": ("obsidian_{ver}_amd64.deb", "obsidian-{ver}.tar.gz"),
-                      "vesktop": ("vesktop_{ver}_amd64.deb",),
-                      "zen-browser": ("zen.linux-x86_64.tar.xz",),
-                  }
                   try:
                       r = session.get(f"https://api.github.com/repos/{repo}/releases?per_page=30", timeout=15)
                       for rel in (r.json() or []):
@@ -256,8 +248,9 @@ jobs:
                           if not re.match(r'^[0-9]', tag):
                               continue
                           rel_names = [a.get("name","") for a in rel.get("assets",[])]
-                          expected = [s.replace("{ver}", tag) for s in asset_suffixes[pkg_dir.parts[-1]]]
-                          if any(e in rel_names for e in expected):
+                          # Desktop assets are .deb/.tar.gz/.tar.xz/.AppImage; mobile-only is .apk
+                          has_desktop = any(n.endswith((".deb", ".tar.gz", ".tar.xz", ".AppImage")) or "zen.linux" in n for n in rel_names)
+                          if has_desktop:
                               new_ver = tag
                               break
                   except Exception as e:
@@ -269,7 +262,7 @@ jobs:
                       new_path = pkg_dir / f"{pkg_dir.parts[-1]}-{new_ver}.ebuild"
                       ebuild_path.rename(new_path)
                       updated_atoms.add(pkg_cat_name)
-                      print(f"  [+] Renamed to: {new_path.name} (asset verified)")
+                      print(f"  [+] Renamed to: {new_path.name} (asset verified, auto-detected)")
                   elif ver_eq(new_ver, curr_ver):
                       print(f"  [-] Already up to date.")
                   else:
