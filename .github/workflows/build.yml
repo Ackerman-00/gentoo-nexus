@@ -932,6 +932,40 @@ jobs:
                   by_cpv[b['CPV']] = b
           entries = sorted(by_cpv.values(), key=lambda b: b['CPV'])
 
+          # MERGE WITH LIVE RELEASE INDEX (lost-update race fix).
+          # This run only has .gpkg.tar files that existed on disk when it
+          # started; a concurrent pipeline may have uploaded newer assets to
+          # the rolling release since. Re-fetch the LIVE Packages index and
+          # keep every entry this run did not build/restore locally, so the
+          # upload below can never silently revert another run's fresher
+          # binaries (verified regression 2026-08-22: an overlapping Build
+          # Gentoo Official run reverted mangowm/noctalia/wlroots entries
+          # built minutes earlier by Build Relay). Local builds always win.
+          try:
+              import subprocess as _sp
+              _env = dict(os.environ)
+              _env.setdefault('GH_TOKEN', os.environ.get('GITHUB_TOKEN', ''))
+              _sp.run(['gh', 'release', 'download', 'rolling', '-p', 'Packages',
+                       '--repo', os.environ.get('GITHUB_REPOSITORY', ''),
+                       '--clobber', '-O', '/tmp/live-Packages'],
+                      check=True, capture_output=True, env=_env, timeout=180)
+              _added = 0
+              for _blk in open('/tmp/live-Packages', errors='replace').read().split('\n\n'):
+                  if not _blk.strip():
+                      continue
+                  _kv = {}
+                  for _line in _blk.splitlines():
+                      if ': ' in _line:
+                          _k, _v = _line.split(': ', 1)
+                          _kv[_k] = _v
+                  _cpv = _kv.get('CPV')
+                  if _cpv and _kv.get('PATH') and _cpv not in by_cpv:
+                      entries.append(_kv)
+                      _added += 1
+              print(f">>> Live-index merge: kept {_added} release-only entries not built this run")
+          except Exception as _e:
+              print(f"  WARN: live-index merge skipped (non-fatal): {_e}")
+
            # Portage's PackageIndex.readHeader only understands 'Key: value'
           # pairs. A bare "'file' 'ARCH' 'N'" line yields an empty header and
           # remote binrepo sync is rejected (VERSION=None). Write a proper
