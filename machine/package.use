@@ -125,7 +125,6 @@ sys-libs/gdbm abi_x86_32
 sys-libs/glibc hash-sysv-compat
 sys-libs/libcap abi_x86_32
 sys-libs/libudev-compat abi_x86_32
-sys-libs/ncurses abi_x86_32
 sys-libs/pam abi_x86_32
 sys-libs/readline abi_x86_32
 sys-libs/zlib abi_x86_32
@@ -168,3 +167,9 @@ x11-libs/pango abi_x86_32
 x11-libs/pixman abi_x86_32
 x11-libs/xcb-util-keysyms abi_x86_32
 x11-misc/colord abi_x86_32
+
+# Force 64-only to avoid gpm<->ncurses mutual-upgrade cycle (upstream packaging
+# interaction; 32-bit consumers of these two libs are not shipped by any binhost
+# consistently). See relay 32575880120 for full RCA.
+sys-libs/ncurses -abi_x86_32
+sys-libs/gpm -abi_x86_32

@@ -426,7 +426,6 @@ sys-apps/util-linux abi_x86_32
 sys-libs/gdbm abi_x86_32
 sys-libs/libcap abi_x86_32
 sys-libs/libudev-compat abi_x86_32
-sys-libs/ncurses abi_x86_32
 sys-libs/pam abi_x86_32
 sys-libs/readline abi_x86_32
 sys-libs/zlib abi_x86_32
