@@ -517,6 +517,17 @@ jobs:
                  If any package is missing from this table, the run is not
                  finished. State confidence (high/medium/low) for anything
                  not fully verified, and why.
+              h. 2026 AUTOMATED EXCELLENCE CHECKS (MANDATORY - August 2026 Gentoo):
+                 For EVERY ebuild you touched (and for at least 5-sample of the full 18), run the modern Gentoo toolchain locally and paste output. This is how an "excellent ebuild" is proven:
+                 - `bash -n <ebuild>` + `pkgcheck scan` (dev-util/pkgcheck, the repoman successor) — must be clean. For full report: `pkgcheck scan --net` (with network, checks HOMEPAGE 404/redirect) and `pkgcheck scan --commits` before commit (standard git workflow 2026). Fix all E: and W:. See `pkgcheck show` for keywords.
+                 - `pkgdev manifest` or `ebuild <ebuild> manifest` — Manifest must regenerate with correct BLAKE2B+SHA512 (thin-manifests per layout.conf). Never hand-edit Manifest hashes.
+                 - `pkgcheck scan` must not report `OutdatedBlocker`/`NonexistentBlocker`, `MisplacedVariable` (ROOT in src_*), trailing whitespace, or `EAPI` outdated — latest EAPI is 8 (devmanual.gentoo.org/ebuild-writing/eapi/, August 2026); new ebuilds must use latest EAPI the eclasses allow, never copy-paste old EAPI.
+                 - `tc-getPKG_CONFIG` from toolchain-funcs.eclass, not bare `pkg-config` — and `virtual/pkgconfig` in BDEPEND (common-mistakes.gentoo.org). Check with `grep -r pkg-config <ebuild>` and `grep virtual/pkgconfig`.
+                 - For binary packages: verify `QA_PREBUILT="*"`/`RESTRICT` correct, run `ldd` on installed ELF + `readelf -d | grep NEEDED` + `equery belongs` to prove RDEPEND atoms exist in ::gentoo under exact slot. Use `iwdevtools` (`rcd`, ELF NEEDED detector) if available.
+                 - `emerge --pretend --verbose --getbinpkg --usepkgonly` must show `[binary]` and `emerge --pretend --verbose --getbinpkg` must not show compile — proof consumer pulls binary (GLEP 78 binhost, same as fedora dnf builddep).
+                 - `pkgdiff-mg -b old.ebuild new.ebuild` (mgorny-dev-scripts) to diff build-system changes between versions — read upstream release notes, do not just bump VR.
+                 - `metadata/layout.conf`, `profiles/repo_name`, `profiles/categories`, `machine/` vs `build.yml` make.conf must stay consistent; `pkgdev commit`/`pkgdev push` is the 2026 standard workflow (not bare git commit).
+                 Log each tool's 1-line result per package; any failure = deps-broken. Tools are available as `tools/teardown-sweep.py:parse_gentoo` + `check_rpm_dependencies` (now also does pkgcheck hooks) — you may call it, but YOU do the reasoning. Teardown is done BY YOU, the agent, not by a separate pass-anyway script; sweep is auxiliary evidence, not the verdict.
 
             KNOWN PACKAGE-SPECIFIC NOTES - THE RIGOR BELOW APPLIES TO EVERY
             PACKAGE, NOT JUST THE EXAMPLE NAMED. For EVERY package, establish
