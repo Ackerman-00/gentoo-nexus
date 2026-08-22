@@ -443,7 +443,16 @@ jobs:
             verification protocol: draft a dependency list from the ebuild,
             independently derive the TRUE list from upstream, then reconcile -
             never trust either alone.
-              a0. CHECK ::guru FIRST (2026 advanced — web search latest, August 2026): `git clone --depth 1 https://github.com/gentoo/guru.git /tmp/guru` then `find /tmp/guru -type f -name "<pkg>-*.ebuild" | sort -V | tail -1` — if found, read its `EAPI`/`RDEPEND`/`DEPEND`/`BDEPEND`/`IUSE`/`SLOT` as the latest reference for dependencies (guru is where newer packages like `noctalia` land first, before `::gentoo`; web-search `site:github.com/gentoo/guru <pkg>` + `packages.gentoo.org` 404 check). If guru has a newer ebuild/dependencies than ours, align with it (keep our `x86-64-v3` `CFLAGS -O2 -march=x86-64-v3` and binhost `RESTRICT`/`QA_PREBUILT`). If guru has no ebuild for this package (404 / no file), then proceed to tear apart upstream `tar`/`deb`/`rpm`/`AppImage` in Docker as below — download into `/tmp` (never repo tree), extract, and derive deps from inside (`ldd` `NEEDED` vs `RDEPEND`). Web-search `2026` for guru + upstream before deciding.
+              a0. CHECK ::guru FIRST via gh api (simple, no clone): for each package, run
+                  gh api "repos/gentoo/guru/contents/<category>/<pkg>" --jq '.[].name'   # does guru have it? (404 = no)
+                  If found, fetch its newest ebuild raw:
+                  gh api "repos/gentoo/guru/contents/<category>/<pkg>/<newest>.ebuild" --jq '.content' | base64 -d
+                  Then compare: is guru's PV newer than ours? Do its RDEPEND/DEPEND/BDEPEND/IUSE differ from ours?
+                  - Guru newer OR deps differ -> align ours with guru's deps (keep our x86-64-v3 CFLAGS and binhost RESTRICT/QA_PREBUILT). This is how we catch missing/wrong dependencies (e.g. mangowm wlroots upper bound, noctalia jemalloc IUSE).
+                  - Guru doesn't have the package (404) -> tear apart upstream tar/deb/rpm/AppImage in Docker as below (download into /tmp, extract, ldd NEEDED vs RDEPEND).
+                  Also check what we MISSED: list guru categories we care about (gui-wm, gui-apps, x11-libs, dev-cpp, media-libs) via
+                  gh api "repos/gentoo/guru/contents/gui-wm" --jq '.[].name'
+                  and diff against our overlay — relevant packages in guru that we don't carry are candidates to add.
               a. OPEN THE PACKAGE. Read the FULL ebuild (EAPI, DESCRIPTION,
                  HOMEPAGE, SRC_URI, LICENSE, SLOT, KEYWORDS, RESTRICT,
                  RDEPEND/DEPEND/BDEPEND, USE-dependent deps, src_* functions,
