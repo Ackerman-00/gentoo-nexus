@@ -19,7 +19,6 @@ permissions:
   issues: write
   actions: write
   id-token: write
-  workflows: write
 
 concurrency:
   group: opencode-schedule
@@ -35,7 +34,6 @@ jobs:
       issues: write
       actions: write
       id-token: write
-      workflows: write
     steps:
       - uses: actions/checkout@v7.0.1
         with:
@@ -172,15 +170,21 @@ jobs:
             modern, buildable, and installable via the binhost - not just "exist".
 
             TOKENS & WORKFLOW-FILE RULE: `git push` authenticates with GITHUB_TOKEN,
-            which has contents, issues, pull-requests, actions, **and workflows write**
-            (explicitly granted in this workflow's `permissions:`). You **can** now push
-            fixes to `.github/workflows/*.yml` directly via `git push` — do so when a
-            workflow is broken (e.g. Issue #13 `check-updates.yml` asset verification).
-            Previously this was blocked (`refusing to allow a GitHub App to create or update
-            workflow ... without workflows permission`) and required manual owner apply;
-            that restriction is now lifted by `workflows: write`. Always
-            `git fetch origin && git pull --rebase origin main` before pushing; validate
-            YAML with `python3 -c "import yaml; yaml.safe_load(open(f))"` before committing.
+            which has contents, issues, pull-requests, and actions write, but NOT the
+            `workflows` scope: GitHub HARD-REJECTS any push or API write that creates
+            or updates files under .github/workflows/ even if the ebuild/other files
+            in the same commit are fine (error: "refusing to allow a GitHub App to
+            create or update workflow ... without workflows permission"). Also NEVER
+            add `workflows: write` to a workflow's permissions block - that key is
+            INVALID for GITHUB_TOKEN and GitHub's validator rejects the ENTIRE
+            workflow file, killing every run of it. If a workflow file genuinely needs
+            changing: (a) describe the exact problem in .opencode-relay.md and open an
+            issue with the full diff in the body (the owner applies it manually from a
+            local checkout, as done for the gpm/ncurses heal in commit b467d91), or
+            (b) propose it in a README/relay note. Never attempt the push itself; it
+            will always fail. All other pushes (ebuilds, README, relay, etc.) work
+            normally - always `git fetch origin && git pull --rebase origin main`
+            before pushing.
 
             STAY CURRENT WITH GENTOO ITSELF. Gentoo policy and tooling move fast;
             a package can stop building simply because Gentoo deprecated its EAPI,
@@ -345,8 +349,8 @@ jobs:
               version. Search in the language the package documents in; if the
               first result page looks dated, refine the query, do not settle.
             - GITHUB API RATE LIMITS (2026 community best practice - docs.github.com/rest/using-the-rest-api/rate-limits-for-the-rest-api + dev.to 2026-08-19): unauthenticated = 60/hour (IP-shared, 304 still costs 1), GITHUB_TOKEN via `gh api` = 1000/hour per repo (Actions) / PAT = 5000/hour / GitHub App = 15000/hour. Modern way to avoid 60/hr:
-              * NEVER use `curl -sI https://github.com/.../releases/tag/...` or `curl https://api.github.com/...` without token — ALWAYS use `gh api repos/<owner>/<repo>/releases/tags/<tag> --jq .tag_name` or `gh api repos/<owner>/<repo>/releases/latest --jq .tag_name` — it authenticates via GITHUB_TOKEN/GH_TOKEN (both set), gets 5000/hour, handles `Authorization` + `If-None-Match` (304 free ONLY with token), pagination, and `--cache 3600s`.
-              * If you must use `curl` for GitHub API, ALWAYS add `-H "Authorization: token $GITHUB_TOKEN"` — unauthenticated 304 does NOT save quota. Prefer `gh api --cache 3600s --jq` and check `x-ratelimit-remaining` (`gh api rate_limit` is free). COPR API is not rate-limited the same way and needs no auth for reads. If you see 403/429, back off 60s, throttle to 1 req/s.
+              * NEVER use `curl -sI https://github.com/.../releases/tag/...` or `curl https://api.github.com/...` without token -- ALWAYS use `gh api repos/<owner>/<repo>/releases/tags/<tag> --jq .tag_name` or `gh api repos/<owner>/<repo>/releases/latest --jq .tag_name` -- it authenticates via GITHUB_TOKEN/GH_TOKEN (both set), gets 5000/hour, handles `Authorization` + `If-None-Match` (304 free ONLY with token), pagination, and `--cache 3600s`.
+              * If you must use `curl` for GitHub API, ALWAYS add `-H "Authorization: token $GITHUB_TOKEN"` -- unauthenticated 304 does NOT save quota. Prefer `gh api --cache 3600s --jq` and check `x-ratelimit-remaining` (`gh api rate_limit` is free). COPR API is not rate-limited the same way and needs no auth for reads. If you see 403/429, back off 60s, throttle to 1 req/s.
 
             EVIDENCE & COMPLETION GATE (MANDATORY - "NO EVIDENCE, NO
             COMPLETION"). Nothing in this run is "done" because you say so -
@@ -513,15 +517,15 @@ jobs:
                  not fully verified, and why.
               h. 2026 AUTOMATED EXCELLENCE CHECKS (MANDATORY - August 2026 Gentoo):
                  For EVERY ebuild you touched (and for at least 5-sample of the full 18), run the modern Gentoo toolchain locally and paste output. This is how an "excellent ebuild" is proven:
-                 - `bash -n <ebuild>` + `pkgcheck scan` (dev-util/pkgcheck, the repoman successor) — must be clean. For full report: `pkgcheck scan --net` (with network, checks HOMEPAGE 404/redirect) and `pkgcheck scan --commits` before commit (standard git workflow 2026). Fix all E: and W:. See `pkgcheck show` for keywords.
-                 - `pkgdev manifest` or `ebuild <ebuild> manifest` — Manifest must regenerate with correct BLAKE2B+SHA512 (thin-manifests per layout.conf). Never hand-edit Manifest hashes.
-                 - `pkgcheck scan` must not report `OutdatedBlocker`/`NonexistentBlocker`, `MisplacedVariable` (ROOT in src_*), trailing whitespace, or `EAPI` outdated — latest EAPI is 8 (devmanual.gentoo.org/ebuild-writing/eapi/, August 2026); new ebuilds must use latest EAPI the eclasses allow, never copy-paste old EAPI.
-                 - `tc-getPKG_CONFIG` from toolchain-funcs.eclass, not bare `pkg-config` — and `virtual/pkgconfig` in BDEPEND (common-mistakes.gentoo.org). Check with `grep -r pkg-config <ebuild>` and `grep virtual/pkgconfig`.
+                 - `bash -n <ebuild>` + `pkgcheck scan` (dev-util/pkgcheck, the repoman successor) -- must be clean. For full report: `pkgcheck scan --net` (with network, checks HOMEPAGE 404/redirect) and `pkgcheck scan --commits` before commit (standard git workflow 2026). Fix all E: and W:. See `pkgcheck show` for keywords.
+                 - `pkgdev manifest` or `ebuild <ebuild> manifest` -- Manifest must regenerate with correct BLAKE2B+SHA512 (thin-manifests per layout.conf). Never hand-edit Manifest hashes.
+                 - `pkgcheck scan` must not report `OutdatedBlocker`/`NonexistentBlocker`, `MisplacedVariable` (ROOT in src_*), trailing whitespace, or `EAPI` outdated -- latest EAPI is 8 (devmanual.gentoo.org/ebuild-writing/eapi/, August 2026); new ebuilds must use latest EAPI the eclasses allow, never copy-paste old EAPI.
+                 - `tc-getPKG_CONFIG` from toolchain-funcs.eclass, not bare `pkg-config` -- and `virtual/pkgconfig` in BDEPEND (common-mistakes.gentoo.org). Check with `grep -r pkg-config <ebuild>` and `grep virtual/pkgconfig`.
                  - For binary packages: verify `QA_PREBUILT="*"`/`RESTRICT` correct, run `ldd` on installed ELF + `readelf -d | grep NEEDED` + `equery belongs` to prove RDEPEND atoms exist in ::gentoo under exact slot. Use `iwdevtools` (`rcd`, ELF NEEDED detector) if available.
-                 - `emerge --pretend --verbose --getbinpkg --usepkgonly` must show `[binary]` and `emerge --pretend --verbose --getbinpkg` must not show compile — proof consumer pulls binary (GLEP 78 binhost, same as fedora dnf builddep).
-                 - `pkgdiff-mg -b old.ebuild new.ebuild` (mgorny-dev-scripts) to diff build-system changes between versions — read upstream release notes, do not just bump VR.
+                 - `emerge --pretend --verbose --getbinpkg --usepkgonly` must show `[binary]` and `emerge --pretend --verbose --getbinpkg` must not show compile -- proof consumer pulls binary (GLEP 78 binhost, same as fedora dnf builddep).
+                 - `pkgdiff-mg -b old.ebuild new.ebuild` (mgorny-dev-scripts) to diff build-system changes between versions -- read upstream release notes, do not just bump VR.
                  - `metadata/layout.conf`, `profiles/repo_name`, `profiles/categories`, `machine/` vs `build.yml` make.conf must stay consistent; `pkgdev commit`/`pkgdev push` is the 2026 standard workflow (not bare git commit).
-                 Log each tool's 1-line result per package; any failure = deps-broken. Tools are available as `tools/teardown-sweep.py:parse_gentoo` + `check_rpm_dependencies` (now also does pkgcheck hooks) — you may call it, but YOU do the reasoning. Teardown is done BY YOU, the agent, not by a separate pass-anyway script; sweep is auxiliary evidence, not the verdict.
+                 Log each tool's 1-line result per package; any failure = deps-broken. Tools are available as `tools/teardown-sweep.py:parse_gentoo` + `check_rpm_dependencies` (now also does pkgcheck hooks) -- you may call it, but YOU do the reasoning. Teardown is done BY YOU, the agent, not by a separate pass-anyway script; sweep is auxiliary evidence, not the verdict.
 
             KNOWN PACKAGE-SPECIFIC NOTES - THE RIGOR BELOW APPLIES TO EVERY
             PACKAGE, NOT JUST THE EXAMPLE NAMED. For EVERY package, establish
@@ -781,11 +785,11 @@ jobs:
                   open a diagnosis issue (see step 8 of the work plan).
 
                 j. DOCKER BATTLE TEST (MANDATORY - every binary + every CLI path must work in a clean stage3 container, not just "untar and look"). This is not optional and not a fallback to manual tar inspection. The repo must be battle-tested inside Docker every run:
-                  1. SPIN UP ONE CLEAN gentoo/stage3:amd64-desktop-openrc container per batch (fresh docker run --rm --privileged, no cached binrepos). If docker is missing: `sudo apt-get update && sudo apt-get install -y docker.io && sudo systemctl start docker` — never skip.
+                  1. SPIN UP ONE CLEAN gentoo/stage3:amd64-desktop-openrc container per batch (fresh docker run --rm --privileged, no cached binrepos). If docker is missing: `sudo apt-get update && sudo apt-get install -y docker.io && sudo systemctl start docker` -- never skip.
                   2. FOR EVERY .gpkg.tar in the rolling release (both overlay `app-*/*` and official atoms `sys-kernel/*`, `x11-libs/*` etc.): download the asset + Packages index from `https://github.com/Ackerman-00/gentoo-nexus/releases/download/rolling/` into a local binhost dir, then inside the container:
-                     `emerge --getbinpkg --usepkgonly <atom>` must exit 0; `equery check <atom>` must pass; `command -v <bin> && <bin> --version/--help` must exit 0 (for libraries: `ldd` shows no "not found"). Test at least 5 diverse packages per run (oldest-uncovered first, plus every touched/rebuilt) and record `| package | emerge --usepkgonly | ldd | --version | status |`. "Manual tar extraction instead" is NOT a battle test — it is explicitly forbidden as a substitute.
+                     `emerge --getbinpkg --usepkgonly <atom>` must exit 0; `equery check <atom>` must pass; `command -v <bin> && <bin> --version/--help` must exit 0 (for libraries: `ldd` shows no "not found"). Test at least 5 diverse packages per run (oldest-uncovered first, plus every touched/rebuilt) and record `| package | emerge --usepkgonly | ldd | --version | status |`. "Manual tar extraction instead" is NOT a battle test -- it is explicitly forbidden as a substitute.
                   3. BATTLE-TEST THE REPO CLI + SETUP: inside the same clean container, clone the overlay, run `tools/nexus --help` / `tools/nexus list` (and any subcommands that don't need network), and dry-run `setup/quickstart.sh` help/--dry-run path. If `tools/nexus` is broken (missing deps, wrong shebang, bad `getbinpkg` invocation), fix it. If `setup/quickstart.sh` instructions in README.md don't match what actually works in the container (wrong `eselect repository enable`, wrong `emerge --sync`, missing `binrepos.conf` step, wrong profile), update README.md + `setup/quickstart.sh` + `machine/` to match the battle-tested path, then re-run the container to prove the updated instructions work.
-                  4. FAILURE = FIX + RE-TEST: any binary that fails to install, any CLI that crashes, any setup step that doesn't reproduce in the clean container is a repo bug. Fix the ebuild/Manifest/binrepos/tool/README, commit, trigger Build Relay if needed, re-download the new binary, and re-run the SAME docker test until green. The run is not complete while any battle test is still red. Think like a new user who just ran `quickstart.sh` — if they would hit it, you must hit it first.
+                  4. FAILURE = FIX + RE-TEST: any binary that fails to install, any CLI that crashes, any setup step that doesn't reproduce in the clean container is a repo bug. Fix the ebuild/Manifest/binrepos/tool/README, commit, trigger Build Relay if needed, re-download the new binary, and re-run the SAME docker test until green. The run is not complete while any battle test is still red. Think like a new user who just ran `quickstart.sh` -- if they would hit it, you must hit it first.
 
             OPTIMIZATION DISCIPLINE (MANDATORY for every ebuild in THIS
             overlay that you touch - new, bumped, or fixed; skip only for
@@ -1548,7 +1552,7 @@ jobs:
               relay run before the timeout.
             - Don't get stuck: cap retries at 3 per package and escalate
               unresolvable problems via issues.
-            - VERIFICATION LOOP (MANDATORY - battle-tested 2026: pre-completion checklist + external verifier, agentpatterns.ai 2026-07-19 / contextOS 2026-08-14): Before declaring `status: complete`, you MUST run `bash tools/verify-gentoo.sh` and paste its `----- VERIFICATION REPORT -----` output. It checks numerical completion (18 rows with `deps-verified`/`deps-fixed` — pre-count 18, post-grep must be 18), evidence strings (`pkgcheck scan` / `emerge --pretend` / `equery` from 2026 h. checks + Docker `stage3` + `ldd`), and install-test + battle-test table. Exit 1 = NOT COMPLETE — keep working until exit 0. Do NOT write `status: complete` if verifier fails. Prompt 70-90%, verifier+gate near-100%.
+            - VERIFICATION LOOP (MANDATORY - battle-tested 2026: pre-completion checklist + external verifier, agentpatterns.ai 2026-07-19 / contextOS 2026-08-14): Before declaring `status: complete`, you MUST run `bash tools/verify-gentoo.sh` and paste its `----- VERIFICATION REPORT -----` output. It checks numerical completion (18 rows with `deps-verified`/`deps-fixed` -- pre-count 18, post-grep must be 18), evidence strings (`pkgcheck scan` / `emerge --pretend` / `equery` from 2026 h. checks + Docker `stage3` + `ldd`), and install-test + battle-test table. Exit 1 = NOT COMPLETE -- keep working until exit 0. Do NOT write `status: complete` if verifier fails. Prompt 70-90%, verifier+gate near-100%.
 
             TEAR-APART SWEEP PROTOCOL (MANDATORY):
             YOU are the sweep. There is no separate script. You tear apart
@@ -1560,7 +1564,7 @@ jobs:
             1. LIST ALL PACKAGES:
                find . -name "*.ebuild" | grep -v files/ | sort
 
-            2. FOR EACH EBUILD — check version against upstream:
+            2. FOR EACH EBUILD -- check version against upstream:
                a. Read the ebuild to get PV, HOMEPAGE, SRC_URI
                b. Query upstream for latest release:
                   - GitHub: gh api repos/OWNER/REPO/releases/latest --jq .tag_name
@@ -1569,7 +1573,7 @@ jobs:
                c. Compare PV vs upstream latest
                d. If STALE → rename ebuild, update SRC_URI, run egencache
 
-            3. FOR EACH BINARY PACKAGE — verify the artifact:
+            3. FOR EACH BINARY PACKAGE -- verify the artifact:
                a. Download the source/binary from SRC_URI
                b. Extract it (tar, zip, deb, AppImage, rpm)
                c. Look for version evidence inside:
@@ -1597,7 +1601,7 @@ jobs:
                livecheck, pkgbump, ecopy
 
             NEVER complete a run without tearing apart every package.
-            The sweep is NOT a separate script — YOU are the sweep.
+            The sweep is NOT a separate script -- YOU are the sweep.
 
             SWEEP SCRIPT IS CODE YOU OWN: tools/teardown-sweep.py and
             tools/docker-sweep.py exist as auxiliary tools you can call, but
@@ -1619,7 +1623,7 @@ jobs:
         run: |
           echo "=== External verifier: tools/verify-gentoo.sh ==="
           bash tools/verify-gentoo.sh || {
-            echo "::error::Verification FAILED — relay missing 18-row deps table or evidence. Agent skipped mandatory audit."
+            echo "::error::Verification FAILED -- relay missing 18-row deps table or evidence. Agent skipped mandatory audit."
             exit 1
           }
 
