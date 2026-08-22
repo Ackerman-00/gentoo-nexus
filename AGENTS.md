@@ -38,36 +38,26 @@ Key functions:
 Exit code = verdict. Exit 0 = all packages verified. Exit 1 = any
 FAIL/MISMATCH/STALE/UNVERIFIED → CI opens an issue.
 
-### Layer 1b: Docker-based install + dependency sweep (`tools/docker-sweep.py`)
+### Layer 1b: Docker battle test + dependency sweep (`tools/docker-sweep.py`) — MANDATORY
 
-Runs INSIDE the agent's execution. For each package:
-1. Spins up a clean Docker container (gentoo/stage3, fedora, voidlinux, nixos/nix)
-2. Installs the package + all dependencies
-3. Verifies all deps resolved (no missing)
-4. Runs the binary (if applicable) and checks it starts
-5. Reports PASS/FAIL per package
+Runs INSIDE the agent, clean `gentoo/stage3:amd64-desktop-openrc` container every run:
+1. Downloads EVERY .gpkg.tar from rolling release (overlay + official atoms) + Packages index
+2. `emerge --getbinpkg --usepkgonly <atom>` + `equery check` + `ldd` + `<bin> --version` for each binary (at least 5 diverse per run, oldest-uncovered first)
+3. Battle-tests `tools/nexus --help` / `list` and `setup/quickstart.sh` dry-run inside same container; if CLI/setup broken or README instructions don't reproduce, fix them and re-test
+4. Verifies `emerge --pretend --getbinpkg` shows `[binary]` (no source rebuild) with consumer `quickstart.sh` config
+5. Reports `| package | emerge --usepkgonly | ldd | --version | status |` — any fail = fix ebuild/Manifest/tool/README and re-run
 
 Key features:
-- `trivy_scan_image()`: scans base Docker images for CRITICAL/HIGH/MEDIUM CVEs
-- `--scan-images` flag: enables Trivy CVE scanning of base layers
-- Works for ANY package type (gentoo, fedora, nix, void, opensuse)
+- `trivy_scan_image()`: scans base images for CRITICAL/HIGH/MEDIUM CVEs
+- `--scan-images` flag: enables Trivy CVE scanning
+- No manual `tar` fallback — docker battle test is mandatory
 
 ### Layer 2: Agentic self-healing prompt (opencode-schedule.yml PROMPT) — MANDATORY
 
-YOU are the sweep. The PROMPT's TEAR-APART SWEEP PROTOCOL is NOT optional.
-It must:
-
-1. Tear every ebuild + Manifest apart itself (SRC_URI download → extract → Cargo.toml/meson.build vs RDEPEND), run 2026 toolchain: `pkgcheck scan --net` + `pkgcheck scan --commits` (EAPI 8, devmanual 2026-08), `pkgdev manifest`, `emerge --pretend`, `tc-getPKG_CONFIG` check, `iwdevtools` NEEDED — log output
-2. Produce mandatory `| package | upstream deps | in ebuild | missing | status |` for ALL 18 packages
-   - OSV.dev vulnerability scan (CVEs on pinned version)
-   - Repology freshness (outdated vs 120+ repos)
-   - Libyear drift (years behind upstream, budget=20yr)
-   - Auto-update tool hints (livecheck, autocopr, nix-update)
-3. For each OUTDATED: use the suggested auto-update tool to fix it
-4. For each FAIL/MISMATCH: re-download, verify checksum, update if re-released
-5. LIBYEAR ENFORCEMENT: if >20 yr, prioritize highest-drift packages
-6. Never close a teardown issue without passing sweep + evidence
-7. False positive defense: fix the sweep script, never weaken checks
+YOU are the sweep. The PROMPT's TEAR-APART + DOCKER BATTLE TEST is NOT optional and NOT pass-anyway:
+1. Tear every ebuild + Manifest apart itself (SRC_URI download → extract → Cargo.toml/meson.build vs RDEPEND), run 2026 toolchain: `pkgcheck scan --net` + `pkgcheck scan --commits` (EAPI 8), `pkgdev manifest`, `emerge --pretend`, `tc-getPKG_CONFIG` — log output
+2. Produce mandatory `| package | upstream deps | in ebuild | missing | status |` for ALL 18 packages and think: if a dep is missing upstream, fix the ebuild; if CLI/setup would break for a new user, fix it — otherwise leave as is
+3. Docker battle-test every binary + `tools/nexus` + `setup/quickstart.sh` as above; update repo instructions only if battle test proves they’re wrong
 
 ### Layer 3: CI gate + issue auto-open — ENFORCED
 
