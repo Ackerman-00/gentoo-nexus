@@ -390,6 +390,44 @@ emerge -g --oneshot media-libs/mesa media-libs/vulkan-loader
 </details>
 
 <details>
+<summary>"Error: circular dependencies" when installing Electron apps (obsidian, vesktop, zen-browser, brave, rootapp)</summary>
+<br>
+
+Upstream packaging interaction: when <code>sys-libs/ncurses</code> and
+<code>sys-libs/gpm</code> both need a USE-flag reinstall in one transaction,
+each binary requires the other at runtime and Portage refuses to order them.
+Install gpm on its own first — its dependencies are already present on any
+stage3 — then rerun your install:
+
+```bash
+emerge --getbinpkg --usepkgonly --nodeps sys-libs/gpm
+```
+
+`setup/quickstart.sh` does this automatically before the main install.
+
+</details>
+
+<details>
+<summary>A few packages always recompile instead of using the binary</summary>
+<br>
+
+Binaries are matched by USE flags too. When ::gentoo flips a profile default
+(e.g. `sysprof`, `gstreamer`), packages built by the binhost before the flip
+no longer match a fresh tree. The shipped `machine/package.use` pins the
+consumer's flags to the published binaries for exactly this reason — keep it
+in sync (it mirrors the builder). Symptom in emerge output:
+
+```text
+!!! The following binary packages have been ignored due to non matching USE:
+    =dev-libs/glib-2.88.3 sysprof
+```
+
+Add the shown flag to `/etc/portage/package.use/` (or copy the latest
+`machine/package.use`) and the binary is accepted again.
+
+</details>
+
+<details>
 <summary>Duplicate repository error</summary>
 <br>
 
