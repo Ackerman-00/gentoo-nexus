@@ -747,6 +747,13 @@ emerge ${BIN_OPTS} --oneshot --quiet sys-apps/systemd-utils virtual/libudev || t
 emerge ${BIN_OPTS} --usepkgonly --nodeps --quiet sys-libs/gpm 2>/dev/null || \
     emerge -1 --getbinpkg --nodeps --quiet sys-libs/gpm 2>/dev/null || true
 
+# Same idea for acct-group/seat (needed by seatd/niri): neither the official v3
+# host nor the rolling release ship this binary (acct-* entries are stripped
+# from the index), so leaving it to the main transaction means a scheduled
+# source build that breaks strict --usepkgonly installs. It is a metadata-only
+# package (a single groupadd) - installing it up front takes ~1 second.
+emerge --quiet --oneshot acct-group/seat 2>/dev/null || true
+
 set +e
 emerge ${BIN_OPTS} "${INSTALL_LIST[@]}"
 AUTOUNMASK_EXIT=$?
