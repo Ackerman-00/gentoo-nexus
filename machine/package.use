@@ -29,7 +29,7 @@ dev-libs/libdbusmenu gtk3
 net-misc/networkmanager bluetooth modemmanager
 sys-libs/zlib-ng abi_x86_32 abi_x86_64 compat
 x11-libs/libdrm video_cards_amdgpu video_cards_radeon
-media-libs/mesa -rust -opencl proprietary-codecs
+media-libs/mesa -rust -opencl proprietary-codecs sysprof
 media-video/ffmpeg x264 x265 vpx opus dav1d vaapi vdpau
 
 # --- builder gaming/multilib block ---
@@ -168,8 +168,16 @@ x11-libs/pixman abi_x86_32
 x11-libs/xcb-util-keysyms abi_x86_32
 x11-misc/colord abi_x86_32
 
-# Force 64-only to avoid gpm<->ncurses mutual-upgrade cycle (upstream packaging
-# interaction; 32-bit consumers of these two libs are not shipped by any binhost
-# consistently). See relay 32575880120 for full RCA.
-sys-libs/ncurses -abi_x86_32
-sys-libs/gpm -abi_x86_32
+# --- binpkg USE-parity pins (2026-08-22) ---
+# The binhosts (nexus rolling AND gentoo-official-v3) built these packages with
+# flags that later flipped default in ::gentoo profiles. Explicit pins keep the
+# consumer's effective USE identical to the shipped binaries so
+# --binpkg-respect-use=y accepts them (otherwise every consumer recompiles).
+dev-libs/glib sysprof
+x11-libs/pango sysprof
+media-video/pipewire gstreamer
+sys-libs/ncurses gpm abi_x86_32
+sys-libs/gpm abi_x86_32
+dev-libs/libxmlb introspection
+dev-vcs/git keyring
+x11-libs/gtk+ colord sysprof

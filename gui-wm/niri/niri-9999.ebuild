@@ -16,6 +16,7 @@ LICENSE+="
     Unicode-3.0 ZLIB
 "
 SLOT="0"
+KEYWORDS="~amd64"
 IUSE="+dbus screencast systemd"
 
 REQUIRED_USE="

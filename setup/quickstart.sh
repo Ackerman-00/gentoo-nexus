@@ -737,6 +737,16 @@ BIN_OPTS="--getbinpkg --usepkg --keep-going --autounmask=y --autounmask-write --
 
 emerge ${BIN_OPTS} --oneshot --quiet sys-apps/systemd-utils virtual/libudev || true
 
+# Break the ncurses[gpm] <-> gpm slot-op upgrade cycle BEFORE the main install:
+# when both sys-libs/{ncurses,gpm} are scheduled for USE-flag reinstalls in one
+# transaction, each binary requires the other at runtime and Portage refuses to
+# order them ("Error: circular dependencies"), which blocks every Electron-app
+# install (obsidian, vesktop, zen-browser, brave-origin-bin, rootapp-bin,
+# protonplus). Installing gpm up front (--nodeps: its deps are already present
+# on any stage3) satisfies ncurses' runtime dep from the installed copy.
+emerge ${BIN_OPTS} --usepkgonly --nodeps --quiet sys-libs/gpm 2>/dev/null || \
+    emerge -1 --getbinpkg --nodeps --quiet sys-libs/gpm 2>/dev/null || true
+
 set +e
 emerge ${BIN_OPTS} "${INSTALL_LIST[@]}"
 AUTOUNMASK_EXIT=$?
