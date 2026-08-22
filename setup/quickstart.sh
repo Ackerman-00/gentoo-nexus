@@ -309,18 +309,12 @@ media-libs/rusticl-opencl gcc-ice-safe
 dev-util/glslang gcc-ice-safe
 ICE
 
-# USE FLAGS — keep deltas minimal, mirroring machine/package.use.
-# Everything here either has NO official binary (kernel, installkernel) or is
-# covered by the nexus rolling tree. Do NOT add flags like pipewire 'extra' or
-# ffmpeg '-sdl' here: the official desktop/gnome builds already ship
-# sound-server/pulseaudio/sdl (verified against the live v3 index), so any
-# deviation forces a source build of that package.
-#
-# MULTILIB CORE (always applied): the nexus rolling binhost builds these atoms
-# WITH abi_x86_32 (see build.yml package.use/gaming). Under the default
-# --binpkg-respect-use=y a consumer without matching abi_x86_32 REJECTS those
-# binaries and recompiles from source (verified 2026-08-22: obsidian pulled
-# nspr/nss/alsa-lib/pipewire as [ebuild] without this list, [binary] with it).
+# USE FLAGS — MUST mirror machine/package.use AND the builder's package.use
+# (.github/workflows/build.yml "nexus" base block + "gaming" block).
+# Portage matches binpkgs under default --binpkg-respect-use=y: any flag delta
+# between consumer and builder REJECTS the prebuilt binary and forces a source
+# build (verified 2026-08-22 in clean stage3: without the multilib list,
+# obsidian pulled nspr/nss/alsa-lib/pipewire as [ebuild]; with it, [binary]).
 # dev-lang/rust(-bin) stay steam-only: not in the rolling binhost, so requiring
 # their 32-bit variant forces a huge source build against the official host.
 cat > /etc/portage/package.use/global_overrides << 'USE'
@@ -328,6 +322,19 @@ sys-kernel/gentoo-kernel savedconfig initramfs
 sys-kernel/installkernel dracut grub
 sys-auth/seatd server
 */* VIDEO_CARDS: -* amdgpu radeonsi
+media-libs/opus abi_x86_64 abi_x86_32
+gui-libs/gtk introspection
+sys-kernel/linux-firmware redistributable initramfs
+sys-libs/minizip-ng compat
+sys-apps/dbus -systemd elogind
+media-video/pipewire -systemd elogind -ffmpeg
+dev-libs/libdbusmenu gtk3
+net-misc/networkmanager bluetooth modemmanager
+sys-libs/ncurses gpm
+sys-libs/zlib-ng abi_x86_32 abi_x86_64 compat
+x11-libs/libdrm video_cards_amdgpu video_cards_radeon
+media-libs/mesa -rust -opencl proprietary-codecs
+media-video/ffmpeg x264 x265 vpx opus dav1d vaapi vdpau
 app-accessibility/at-spi2-core abi_x86_32
 app-arch/brotli abi_x86_32
 app-arch/bzip2 abi_x86_32

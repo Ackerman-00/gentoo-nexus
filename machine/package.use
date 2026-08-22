@@ -1,26 +1,39 @@
 # gentoo-nexus consumer package.use — drop-in for /etc/portage/package.use/
 #
-# VIDEO_CARDS reset MUST live here (package.use), NOT in make.conf.
-# Portage rejects the '-*' operator in make.conf's VIDEO_CARDS line
-# ("Invalid '-' operator in non-incremental variable 'VIDEO_CARDS'").
-# The make.conf value stays a plain list: VIDEO_CARDS="amdgpu radeonsi".
+# THIS FILE MUST MIRROR THE BUILDER'S package.use EXACTLY
+# (.github/workflows/build.yml: "nexus" base block + "gaming" block).
+# Portage matches binpkgs under the default --binpkg-respect-use=y: any flag
+# delta between consumer and builder REJECTS the prebuilt binary and forces a
+# source build (verified 2026-08-22 in clean stage3). Keep in sync.
 #
-# Pure-AMD (Ryzen APU / discrete). Matches nexus builder so prebuilt mesa is reused.
+# dev-lang/rust(-bin) abi_x86_32 are intentionally NOT here: they are not in
+# the rolling binhost, so requiring their 32-bit variant would force a huge
+# local build against the official v3 host. Steam users get them via the
+# optional steam block in setup/quickstart.sh.
+#
+# VIDEO_CARDS reset MUST live here (package.use), NOT in make.conf.
+# Portage rejects the '-*' operator in make.conf's VIDEO_CARDS line.
+# Pure-AMD (Ryzen APU / discrete). Matches nexus builder so prebuilt mesa reused.
 */* VIDEO_CARDS: -* amdgpu radeonsi
 
-# seatd daemon (rc-update add seatd) — matches nexus binpkg (sys-auth/seatd server).
+# --- builder base block ---
+media-libs/opus abi_x86_64 abi_x86_32
+gui-libs/gtk introspection
 sys-auth/seatd server
+sys-kernel/installkernel dracut grub
+sys-kernel/linux-firmware redistributable initramfs
+sys-libs/minizip-ng compat
+sys-apps/dbus -systemd elogind
+media-video/pipewire -systemd elogind -ffmpeg
+dev-libs/libdbusmenu gtk3
+net-misc/networkmanager bluetooth modemmanager
+sys-libs/ncurses gpm
+sys-libs/zlib-ng abi_x86_32 abi_x86_64 compat
+x11-libs/libdrm video_cards_amdgpu video_cards_radeon
+media-libs/mesa -rust -opencl proprietary-codecs
+media-video/ffmpeg x264 x265 vpx opus dav1d vaapi vdpau
 
-# Multilib (abi_x86_32) set — MUST mirror the builder list in
-# .github/workflows/build.yml (package.use/gaming). The nexus rolling binhost
-# builds these atoms WITH abi_x86_32; under the default --binpkg-respect-use=y
-# a stock consumer that does NOT enable abi_x86_32 REJECTS those binaries and
-# recompiles them from source (verified 2026-08-22: obsidian pulled nspr/nss/
-# alsa-lib/pipewire as [ebuild] without this list, [binary] with it).
-# dev-lang/rust + dev-lang/rust-bin are intentionally NOT here: they are not in
-# the rolling binhost and requiring their 32-bit variant would force a huge
-# source build against the official v3 host. Steam users get them via the
-# optional block in setup/quickstart.sh.
+# --- builder gaming/multilib block ---
 app-accessibility/at-spi2-core abi_x86_32
 app-arch/brotli abi_x86_32
 app-arch/bzip2 abi_x86_32
@@ -87,7 +100,6 @@ media-libs/libvorbis abi_x86_32
 media-libs/libwebp abi_x86_32
 media-libs/mesa abi_x86_32
 media-libs/openal abi_x86_32
-media-libs/opus abi_x86_32
 media-libs/tiff abi_x86_32
 media-libs/vulkan-layers abi_x86_32
 media-libs/vulkan-loader abi_x86_32 layers
