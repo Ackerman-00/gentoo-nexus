@@ -676,6 +676,7 @@ sys-apps/dbus **
 media-libs/libsdl3 **
 media-sound/mpg123-base **
 dev-libs/glib **
+<dev-util/glslang-1000 **
 EOF
 
 if [[ "${steam_choice,,}" == "y" ]]; then
@@ -722,7 +723,7 @@ INSTALL_LIST=(
     app-admin/doas sys-auth/elogind sys-auth/seatd
     media-video/pipewire media-video/wireplumber
     net-misc/networkmanager sys-power/upower app-misc/jq
-    sys-block/zram-init media-libs/mesa media-libs/vulkan-loader dev-util/spirv-tools
+    sys-block/zram-init media-libs/mesa media-libs/vulkan-loader dev-util/spirv-tools dev-util/glslang
 )
 
 [[ -n "${UCODE}" ]] && INSTALL_LIST+=( "${UCODE}" )
@@ -734,6 +735,30 @@ case $de_choice in
     4) INSTALL_LIST+=( gnome-base/gnome-light ) ;;
     5) INSTALL_LIST+=( kde-plasma/plasma-meta ) ;;
 esac
+
+# Base-series sync masks (verified 2026-08-23): the rolling release rebuilt
+# some consumers against ::gentoo's NEWEST perl while stage3 and the official
+# v3 binhost sit on the previous series; mixing both in one transaction
+# slot-conflicts ("virtual/perl-* requires dev-lang/perl:0/5.42=" vs 5.44
+# binaries). Pin the consumer to the base series so every pulled binary agrees;
+# official-v3 ships matching module binaries for it.
+cat > /etc/portage/package.mask/base-split << 'MASK'
+>=dev-lang/perl-5.43
+MASK
+
+# libdisplay-info 0.3/0.4 split handling (verified 2026-08-23):
+# - niri upstream still pins <libdisplay-info-0.4 (soname .so.3); rolling mesa
+#   26.2.x and wlroots 0.20.x are built against 0.4 (.so.4). Slot 0 holds one
+#   version, so a niri transaction must stay entirely on the 0.3 series: mask
+#   the 0.4-linked packages and let the official v3 binhost supply mesa
+#   26.1.x/.so.3. Mangowm/scenefx transactions have no niri and use the
+#   rolling .so.4 binaries as-is. Remove this block when niri upstream adopts
+#   display-info 0.4 AND the builder masks in issue #17 are deleted.
+if [[ "$de_choice" == "1" ]]; then
+    cat > /etc/portage/package.mask/display-info-split << 'MASK'
+>=media-libs/libdisplay-info-0.4
+MASK
+fi
 
 case $shell_choice in
     1) INSTALL_LIST+=( gui-wm/noctalia-git gui-apps/noctalia-qs ) ;;
