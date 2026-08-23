@@ -158,7 +158,7 @@ VIDEO_CARDS="amdgpu radeonsi intel"  # Both
 mkdir -p /etc/portage/package.use
 echo "*/* VIDEO_CARDS: -* amdgpu radeonsi" > /etc/portage/package.use/nexus
 ```
-
+```
 FEATURES="getbinpkg parallel-install binpkg-ignore-signature"
 EMERGE_DEFAULT_OPTS="--getbinpkg --quiet-build=y --keep-going"
 BINPKG_FORMAT="gpkg"
