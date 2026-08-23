@@ -110,6 +110,7 @@ src_install() {
 	done < <(find "${S}"/usr/share/applications -name '*.desktop' 2>/dev/null)
 
 	if [[ -d "${S}/usr/share/icons/hicolor" ]]; then
+		dodir /usr/share/icons/hicolor
 		cp -pPR "${S}/usr/share/icons/hicolor/." "${ED}/usr/share/icons/hicolor/" || die
 	elif [[ -f "${ED}${DESTDIR}/resources/icon.png" ]]; then
 		newicon -s 256 "${ED}${DESTDIR}/resources/icon.png" opencode-desktop.png
