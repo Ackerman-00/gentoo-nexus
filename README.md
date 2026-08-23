@@ -117,6 +117,7 @@ lands, CI rebuilds it.
 | `www-client` | `zen-browser` | Privacy-focused Firefox fork |
 | `www-client` | `brave-origin` | Brave browser (upstream binary) |
 | `www-client` | `helium-browser` | Private, fast Chromium-based web browser (tar.xz binary) |
+| `dev-util` | `opencode-desktop` | Desktop app for OpenCode, the open source AI coding agent (.deb binary) |
 
 On top of these, the `rolling` binary host also mirrors the **official** Gentoo
 x86-64-v3 rebuilds — mesa, gcc, llvm, ffmpeg, portage, and most of a typical
