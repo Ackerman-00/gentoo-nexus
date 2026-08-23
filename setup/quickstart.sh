@@ -294,6 +294,7 @@ sys-apps/systemd
 sys-apps/gentoo-systemd-integration
 MASK
 
+
 cat > /etc/portage/package.unmask/overrides << 'UNMASK'
 media-libs/dav1d
 media-libs/libdvdnav
@@ -325,12 +326,11 @@ ICE
 # dev-lang/rust(-bin) stay steam-only: not in the rolling binhost, so requiring
 # their 32-bit variant forces a huge source build against the official host.
 cat > /etc/portage/package.use/global_overrides << 'USE'
-sys-kernel/gentoo-kernel savedconfig initramfs
-sys-kernel/installkernel dracut grub
-sys-auth/seatd server
 */* VIDEO_CARDS: -* amdgpu radeonsi
 media-libs/opus abi_x86_64 abi_x86_32
 gui-libs/gtk introspection
+sys-auth/seatd server
+sys-kernel/installkernel dracut grub
 sys-kernel/linux-firmware redistributable initramfs
 sys-libs/minizip-ng compat
 sys-apps/dbus -systemd elogind
@@ -339,7 +339,7 @@ dev-libs/libdbusmenu gtk3
 net-misc/networkmanager bluetooth modemmanager
 sys-libs/zlib-ng abi_x86_32 abi_x86_64 compat
 x11-libs/libdrm video_cards_amdgpu video_cards_radeon
-media-libs/mesa -rust -opencl proprietary-codecs
+media-libs/mesa -rust -opencl proprietary-codecs sysprof
 media-video/ffmpeg x264 x265 vpx opus dav1d vaapi vdpau
 app-accessibility/at-spi2-core abi_x86_32
 app-arch/brotli abi_x86_32
@@ -407,7 +407,6 @@ media-libs/libvorbis abi_x86_32
 media-libs/libwebp abi_x86_32
 media-libs/mesa abi_x86_32
 media-libs/openal abi_x86_32
-media-libs/opus abi_x86_32
 media-libs/tiff abi_x86_32
 media-libs/vulkan-layers abi_x86_32
 media-libs/vulkan-loader abi_x86_32 layers
@@ -431,6 +430,7 @@ sys-apps/lm-sensors abi_x86_32
 sys-apps/systemd-utils abi_x86_32
 sys-apps/util-linux abi_x86_32
 sys-libs/gdbm abi_x86_32
+sys-libs/glibc hash-sysv-compat
 sys-libs/libcap abi_x86_32
 sys-libs/libudev-compat abi_x86_32
 sys-libs/pam abi_x86_32
@@ -461,16 +461,28 @@ x11-libs/libXfixes abi_x86_32
 x11-libs/libXft abi_x86_32
 x11-libs/libXi abi_x86_32
 x11-libs/libXinerama abi_x86_32
-x11-libs/libxkbcommon abi_x86_32
 x11-libs/libXrandr abi_x86_32
 x11-libs/libXrender abi_x86_32
-x11-libs/libxshmfence abi_x86_32
 x11-libs/libXtst abi_x86_32
 x11-libs/libXxf86vm abi_x86_32
+x11-libs/libdrm abi_x86_32
+x11-libs/libpciaccess abi_x86_32
+x11-libs/libvdpau abi_x86_32
+x11-libs/libxcb abi_x86_32
+x11-libs/libxkbcommon abi_x86_32
+x11-libs/libxshmfence abi_x86_32
 x11-libs/pango abi_x86_32
 x11-libs/pixman abi_x86_32
 x11-libs/xcb-util-keysyms abi_x86_32
 x11-misc/colord abi_x86_32
+dev-libs/glib sysprof
+x11-libs/pango sysprof
+media-video/pipewire gstreamer
+sys-libs/ncurses gpm abi_x86_32
+sys-libs/gpm abi_x86_32
+dev-libs/libxmlb introspection
+dev-vcs/git keyring
+x11-libs/gtk+ colord sysprof
 USE
 
 if [[ "${steam_choice,,}" == "y" ]]; then
@@ -627,7 +639,7 @@ cat > /etc/portage/package.accept_keywords/nexus << 'EOF'
 x11-base/xwayland-satellite **
 gui-wm/niri **
 gui-wm/mangowm **
-gui-wm/noctalia-shell **
+gui-wm/noctalia-git **
 gui-wm/dank-material-shell **
 gui-apps/noctalia-qs **
 gui-apps/quickshell **
@@ -653,9 +665,17 @@ dev-lang/rust-bin **
 sys-kernel/gentoo-kernel **
 virtual/dist-kernel **
 sys-kernel/linux-firmware **
-media-libs/mesa **
-media-libs/vulkan-loader **
-dev-util/spirv-tools **
+<media-libs/mesa-1000 **
+<media-libs/vulkan-loader-1000 **
+<dev-util/spirv-tools-1000 **
+dev-libs/nss **
+dev-libs/nspr **
+media-libs/alsa-lib **
+media-libs/opus **
+sys-apps/dbus **
+media-libs/libsdl3 **
+media-sound/mpg123-base **
+dev-libs/glib **
 EOF
 
 if [[ "${steam_choice,,}" == "y" ]]; then
@@ -716,7 +736,7 @@ case $de_choice in
 esac
 
 case $shell_choice in
-    1) INSTALL_LIST+=( gui-wm/noctalia-shell gui-apps/noctalia-qs ) ;;
+    1) INSTALL_LIST+=( gui-wm/noctalia-git gui-apps/noctalia-qs ) ;;
     2) INSTALL_LIST+=( gui-wm/dank-material-shell gui-apps/quickshell app-misc/dgop sys-apps/danksearch ) ;;
 esac
 
