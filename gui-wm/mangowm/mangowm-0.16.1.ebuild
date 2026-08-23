@@ -13,6 +13,7 @@ S="${WORKDIR}/mango-${PV}"
 
 LICENSE="CC0-1.0 GPL-3+ MIT"
 SLOT="0"
+KEYWORDS="~amd64"
 
 DEPEND="
 	>=gui-libs/wlroots-0.20:0.20=[libinput,session,X?]

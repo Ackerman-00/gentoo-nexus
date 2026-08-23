@@ -217,7 +217,13 @@ esac
 # 2. NETWORK & REPOS
 echo -e "${B}>>> NETWORK & REPOS${C}"
 if ! ping -c 1 -W 5 1.1.1.1 &>/dev/null; then
-    echo -e "${R}[!] No network${C}"; exit 1
+    # ICMP is often blocked (containers, hardened firewalls); fall back to a
+    # TCP probe before declaring the network dead.
+    if (exec 3<>/dev/tcp/1.1.1.1/443) 2>/dev/null; then
+        exec 3>&- 3<&- || true
+    elif ! wget -q --spider --timeout=8 https://github.com 2>/dev/null; then
+        echo -e "${R}[!] No network${C}"; exit 1
+    fi
 fi
 
 mkdir -p /etc/portage/repos.conf /var/db/repos/gentoo /etc/portage/binrepos.conf
@@ -277,6 +283,10 @@ LINUX_FIRMWARE="${LINUX_FW}"
 FEATURES="getbinpkg binpkg-ignore-signature"
 EMERGE_DEFAULT_OPTS="--getbinpkg --quiet-build=y --keep-going"
 ACCEPT_LICENSE="*"
+# ~amd64 across the board: the nexus overlay and the official v3 binhost both
+# ship ~amd64 binpkgs, and machine/make.conf documents the same setting. The
+# per-package package.accept_keywords/nexus list below stays as belt-and-braces.
+ACCEPT_KEYWORDS="~amd64"
 PKGDIR="/var/cache/binpkgs"
 DISTDIR="/var/cache/distfiles"
 LC_MESSAGES=C.UTF-8
@@ -812,6 +822,21 @@ emerge ${BIN_OPTS} --usepkgonly --nodeps --quiet sys-libs/gpm 2>/dev/null || \
 emerge --quiet --oneshot acct-group/seat 2>/dev/null || true
 
 set +e
+# Per-atom strict-binary passes (verified 2026-08-23): one large --usepkg
+# transaction over the whole list lets Portage's backtracker lock a slot-op
+# sub-slot to an official-v3/::gentoo candidate and then MASK the newer,
+# USE-perfect rolling binary of another package (observed live: glslang
+# 0/16.2-vs-0/16.4, pipewire 0/0.4, gdbus-codegen vs glib-2.88), collapsing
+# into impossible source builds (rust-bin[abi_x86_32]) and aborting the
+# entire install. Resolving each atom independently cannot cross-lock slots:
+# everything either installs strictly from the two binhosts here, or is
+# reported and left to the gap-fill pass below.
+for atom in "${INSTALL_LIST[@]}"; do
+    emerge ${BIN_OPTS} --usepkgonly --quiet "$atom" || \
+        echo ">>> [defer] ${atom} not fully binary-coverable yet"
+done
+
+# Gap fill - whatever neither binhost carries is built from source here.
 emerge ${BIN_OPTS} "${INSTALL_LIST[@]}"
 AUTOUNMASK_EXIT=$?
 set -e
