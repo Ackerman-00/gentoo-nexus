@@ -7,4 +7,4 @@ LICENSE=GPL-2
 RDEPEND=dev-libs/openssl:=
 SLOT=0
 SRC_URI=https://github.com/InioX/matugen/releases/download/v4.2.0/matugen-4.2.0-x86_64.tar.gz
-_md5_=562ee20569d3248d0f826a3a9c6de74d
+_md5_=5f3ae576b029064e5178081dd469380c
