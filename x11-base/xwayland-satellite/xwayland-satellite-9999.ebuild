@@ -16,45 +16,44 @@ KEYWORDS="~amd64"
 IUSE="systemd"
 
 PROPERTIES="live"
-RESTRICT="network-sandbox"
 
 DEPEND="
-    dev-libs/wayland
-    x11-libs/libxcb:=
-    x11-libs/xcb-util-cursor
+	dev-libs/wayland
+	x11-libs/libxcb:=
+	x11-libs/xcb-util-cursor
 "
 RDEPEND="${DEPEND}
-    >=x11-base/xwayland-23.1
+	>=x11-base/xwayland-23.1
 "
 BDEPEND="
-    $(llvm_gen_dep 'llvm-core/clang:${LLVM_SLOT}=')
-    virtual/pkgconfig
+	$(llvm_gen_dep 'llvm-core/clang:${LLVM_SLOT}=')
+	virtual/pkgconfig
 "
 
 QA_FLAGS_IGNORED="usr/bin/xwayland-satellite"
 EGIT_COMMIT="3bc915f09dd6"
 
 pkg_setup() {
-    llvm-r2_pkg_setup
-    rust_pkg_setup
+	llvm-r2_pkg_setup
+	rust_pkg_setup
 }
 
 src_unpack() {
-    git-r3_src_unpack
-    cargo_live_src_unpack
+	git-r3_src_unpack
+	cargo_live_src_unpack
 }
 
 src_configure() {
-    local myfeatures=()
-    use systemd && myfeatures+=( systemd )
-    cargo_src_configure
+	local myfeatures=()
+	use systemd && myfeatures+=( systemd )
+	cargo_src_configure
 }
 
 src_install() {
-    cargo_src_install
-    newman xwayland-satellite.man xwayland-satellite.1
+	cargo_src_install
+	newman xwayland-satellite.man xwayland-satellite.1
 }
 
 pkg_postinst() {
-    elog "xwayland-satellite provides rootless Xwayland integration."
+	elog "xwayland-satellite provides rootless Xwayland integration."
 }

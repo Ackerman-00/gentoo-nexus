@@ -16,38 +16,38 @@ SLOT="0"
 KEYWORDS="~amd64"
 
 BDEPEND="
-    $(vala_depend)
-    dev-libs/appstream-glib
-    dev-util/desktop-file-utils
-    sys-devel/gettext
-    virtual/pkgconfig
+	$(vala_depend)
+	dev-libs/appstream-glib
+	dev-util/desktop-file-utils
+	sys-devel/gettext
+	virtual/pkgconfig
 "
 
 DEPEND="
-    >=gui-libs/libadwaita-1.6
-    app-arch/libarchive
-    dev-libs/glib:2
-    dev-libs/json-glib
-    dev-libs/libgee:0.8
-    gui-libs/gtk:4
-    net-libs/libsoup:3.0
-    >=media-libs/libsdl3-3.2
-    x11-libs/libnotify
+	>=gui-libs/libadwaita-1.6
+	app-arch/libarchive
+	dev-libs/glib:2
+	dev-libs/json-glib
+	dev-libs/libgee:0.8
+	gui-libs/gtk:4
+	net-libs/libsoup:3.0
+	>=media-libs/libsdl3-3.2
+	x11-libs/libnotify
 "
 
 RDEPEND="${DEPEND}"
 
 src_prepare() {
-    default
-    vala_setup
+	default
+	vala_setup
 }
 
 pkg_postinst() {
-    xdg_pkg_postinst
-    gnome2_schemas_update
+	xdg_pkg_postinst
+	gnome2_schemas_update
 }
 
 pkg_postrm() {
-    xdg_pkg_postrm
-    gnome2_schemas_update
+	xdg_pkg_postrm
+	gnome2_schemas_update
 }

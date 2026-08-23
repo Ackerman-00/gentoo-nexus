@@ -12,123 +12,120 @@ EGIT_REPO_URI="https://github.com/niri-wm/niri.git"
 
 LICENSE="GPL-3+"
 LICENSE+="
-    Apache-2.0 Apache-2.0-with-LLVM-exceptions BSD-2 BSD ISC MIT MPL-2.0
-    Unicode-3.0 ZLIB
+	Apache-2.0 Apache-2.0-with-LLVM-exceptions BSD-2 BSD ISC MIT MPL-2.0
+	Unicode-3.0 ZLIB
 "
 SLOT="0"
 KEYWORDS="~amd64"
 IUSE="+dbus screencast systemd"
 
 REQUIRED_USE="
-    screencast? ( dbus )
-    systemd? ( dbus )
+	screencast? ( dbus )
+	systemd? ( dbus )
 "
 
-RESTRICT="network-sandbox"
-
 DEPEND="
-    dev-libs/glib:2
-    dev-libs/libinput:=
-    dev-libs/wayland
-    <media-libs/libdisplay-info-0.4.0:=
-    media-libs/mesa
-    sys-auth/seatd:=
-    virtual/libudev:=
-    x11-libs/cairo
-    x11-libs/libxkbcommon
-    x11-libs/pango
-    x11-libs/pixman
-    screencast? ( media-video/pipewire:= )
+	dev-libs/glib:2
+	dev-libs/libinput:=
+	dev-libs/wayland
+	<media-libs/libdisplay-info-0.4.0:=
+	media-libs/mesa
+	sys-auth/seatd:=
+	virtual/libudev:=
+	x11-libs/cairo
+	x11-libs/libxkbcommon
+	x11-libs/pango
+	x11-libs/pixman
+	screencast? ( media-video/pipewire:= )
 "
 
 RDEPEND="
-    ${DEPEND}
-    screencast? ( sys-apps/xdg-desktop-portal-gnome )
+	${DEPEND}
+	screencast? ( sys-apps/xdg-desktop-portal-gnome )
 "
 
 BDEPEND="
-    screencast? ( $(llvm_gen_dep 'llvm-core/clang:${LLVM_SLOT}') )
-    virtual/pkgconfig
+	screencast? ( $(llvm_gen_dep 'llvm-core/clang:${LLVM_SLOT}') )
+	virtual/pkgconfig
 "
 
 QA_FLAGS_IGNORED="usr/bin/niri"
 
 EGIT_COMMIT="dd75865f547f"
 pkg_setup() {
-    llvm-r2_pkg_setup
-    rust_pkg_setup
+	llvm-r2_pkg_setup
+	rust_pkg_setup
 }
 
 src_unpack() {
-    git-r3_src_unpack
-    cargo_live_src_unpack
+	git-r3_src_unpack
+	cargo_live_src_unpack
 }
 
 src_prepare() {
-    default
+	default
 
-    cp resources/niri.desktop resources/niri-openrc.desktop || die
-    
-    local cmd="niri --session"
-    use dbus && cmd="dbus-run-session $cmd"
-    
-    sed -i "s/Exec=niri-session/Exec=${cmd}/" resources/niri-openrc.desktop || die
-    sed -i "s/Name=Niri/Name=Niri (OpenRC)/" resources/niri-openrc.desktop || die
+	cp resources/niri.desktop resources/niri-openrc.desktop || die
+
+	local cmd="niri --session"
+	use dbus && cmd="dbus-run-session $cmd"
+
+	sed -i "s/Exec=niri-session/Exec=${cmd}/" resources/niri-openrc.desktop || die
+	sed -i "s/Name=Niri/Name=Niri (OpenRC)/" resources/niri-openrc.desktop || die
 }
 
 src_configure() {
-    export NIRI_BUILD_COMMIT="${EGIT_VERSION:0:7}"
+	export NIRI_BUILD_COMMIT="${EGIT_VERSION:0:7}"
 
-    local myfeatures=(
-        $(usev dbus)
-        $(usev screencast xdp-gnome-screencast)
-        $(usev systemd)
-    )
+	local myfeatures=(
+		$(usev dbus)
+		$(usev screencast xdp-gnome-screencast)
+		$(usev systemd)
+	)
 
-    cargo_src_configure --no-default-features --frozen
+	cargo_src_configure --no-default-features --frozen
 }
 
 src_compile() {
-    cargo_src_compile
-    "$(cargo_target_dir)"/niri completions bash > niri  || die
-    "$(cargo_target_dir)"/niri completions fish > niri.fish || die
-    "$(cargo_target_dir)"/niri completions zsh > _niri || die
+	cargo_src_compile
+	"$(cargo_target_dir)"/niri completions bash > niri  || die
+	"$(cargo_target_dir)"/niri completions fish > niri.fish || die
+	"$(cargo_target_dir)"/niri completions zsh > _niri || die
 }
 
 src_install() {
-    cargo_src_install
-    dobin resources/niri-session
-    
-    systemd_douserunit resources/niri{.service,-shutdown.target}
-    
-    insinto /usr/share/wayland-sessions
-    doins resources/niri.desktop
-    doins resources/niri-openrc.desktop
-    
-    insinto /usr/share/xdg-desktop-portal
-    doins resources/niri-portals.conf
-    
-    dobashcomp niri
-    dofishcomp niri.fish
-    dozshcomp _niri
+	cargo_src_install
+	dobin resources/niri-session
+
+	systemd_douserunit resources/niri{.service,-shutdown.target}
+
+	insinto /usr/share/wayland-sessions
+	doins resources/niri.desktop
+	doins resources/niri-openrc.desktop
+
+	insinto /usr/share/xdg-desktop-portal
+	doins resources/niri-portals.conf
+
+	dobashcomp niri
+	dofishcomp niri.fish
+	dozshcomp _niri
 }
 
 src_test() {
-    local -x XDG_RUNTIME_DIR="${T}/xdg"
-    mkdir "${XDG_RUNTIME_DIR}" || die
-    chmod 0700 "${XDG_RUNTIME_DIR}" || die
-    
-    local -x RAYON_NUM_THREADS=2
-    local skip=(
-        --skip=::egl
-    )
-    cargo_src_test -- --test-threads=2 "${skip[@]}"
+	local -x XDG_RUNTIME_DIR="${T}/xdg"
+	mkdir "${XDG_RUNTIME_DIR}" || die
+	chmod 0700 "${XDG_RUNTIME_DIR}" || die
+
+	local -x RAYON_NUM_THREADS=2
+	local skip=(
+		--skip=::egl
+	)
+	cargo_src_test -- --test-threads=2 "${skip[@]}"
 }
 
 pkg_postinst() {
-    optfeature "Xwayland support" "gui-apps/xwayland-satellite"
-    optfeature_header "Default applications"
-    optfeature "Application launcher" "gui-apps/fuzzel"
-    optfeature "Status bar" "gui-apps/waybar"
-    optfeature "Terminal" "x11-terms/alacritty"
+	optfeature "Xwayland support" "x11-base/xwayland-satellite"
+	optfeature_header "Default applications"
+	optfeature "Status bar" "gui-apps/waybar"
+	optfeature "Terminal" "x11-terms/alacritty"
 }

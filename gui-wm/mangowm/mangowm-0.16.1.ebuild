@@ -9,6 +9,8 @@ DESCRIPTION="Lightweight, high-performance Wayland compositor built on dwl"
 HOMEPAGE="https://github.com/mangowm/mango https://mangowm.github.io"
 SRC_URI="https://github.com/mangowm/mango/archive/refs/tags/${PV}.tar.gz -> ${P}.tar.gz"
 
+S="${WORKDIR}/mango-${PV}"
+
 LICENSE="CC0-1.0 GPL-3+ MIT"
 SLOT="0"
 
@@ -42,8 +44,6 @@ BDEPEND="
 "
 
 DOCS=( README.md .github/CONTRIBUTING.md )
-
-S="${WORKDIR}/mango-${PV}"
 IUSE="X asan"
 
 src_configure() {

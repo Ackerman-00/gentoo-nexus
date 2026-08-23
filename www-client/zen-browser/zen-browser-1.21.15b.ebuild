@@ -52,19 +52,19 @@ RDEPEND="${DEPEND}"
 
 src_install() {
 	local destdir="/opt/zen"
-	
+
 	dodir "${destdir}"
 	cp -pPR * "${ED}${destdir}/" || die
-	
+
 	dosym -r "${destdir}/zen" "/usr/bin/zen"
-	
+
 	local size
 	for size in 16 32 48 64 128; do
 		newicon -s ${size} "browser/chrome/icons/default/default${size}.png" zen.png
 	done
-	
+
 	make_desktop_entry "/usr/bin/zen %U" "Zen Browser" zen "Network;WebBrowser" "$(cat "${FILESDIR}"/desktop_options)"
-	
+
 	insinto "${destdir}/distribution"
 	doins "${FILESDIR}/policies.json"
 }

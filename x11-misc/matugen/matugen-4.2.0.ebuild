@@ -7,19 +7,19 @@ DESCRIPTION="A Material You color generation tool with templates"
 HOMEPAGE="https://github.com/InioX/matugen"
 SRC_URI="https://github.com/InioX/matugen/releases/download/v${PV}/matugen-${PV}-x86_64.tar.gz"
 
+S="${WORKDIR}"
+
 LICENSE="GPL-2"
 SLOT="0"
 KEYWORDS="~amd64"
-
-S="${WORKDIR}"
 
 QA_PREBUILT="usr/bin/matugen"
 QA_PRESTRIPPED="usr/bin/matugen"
 
 RDEPEND="
-    dev-libs/openssl:=
+	dev-libs/openssl:=
 "
 
 src_install() {
-    dobin matugen
+	dobin matugen
 }

@@ -9,7 +9,7 @@ DESCRIPTION="A lightweight Wayland shell built directly on Wayland and OpenGL ES
 HOMEPAGE="https://github.com/noctalia-dev/noctalia"
 EGIT_REPO_URI="https://github.com/noctalia-dev/noctalia.git"
 EGIT_BRANCH="main"
-EGIT_COMMIT="ee8414f10ad5"
+EGIT_COMMIT="a9cd1c86bdd6"
 
 LICENSE="MIT"
 SLOT="0"
@@ -18,43 +18,43 @@ PROPERTIES="live"
 IUSE="+jemalloc"
 
 DEPEND="
-    app-crypt/libsecret
-    dev-cpp/nlohmann_json
-    dev-cpp/sdbus-c++
-    dev-libs/glib:2
-    jemalloc? ( dev-libs/jemalloc:= )
-    dev-libs/libical
-    dev-libs/libsodium
-    dev-libs/libxml2
-    dev-libs/wayland
-    gnome-base/librsvg:2
-    media-libs/fontconfig
-    media-libs/freetype
-    media-libs/harfbuzz
-    media-libs/libepoxy
-    media-libs/libglvnd
-    media-libs/libjxl
-    media-libs/libsndfile
-    media-libs/libwebp
-    media-libs/mesa[egl(+),gles2(+)]
-    media-video/pipewire
-    media-video/wireplumber
-    dev-libs/md4c
-    dev-cpp/tomlplusplus
-    dev-libs/stb
-    net-misc/curl
-    sci-libs/libqalculate
-    sys-auth/polkit
-    sys-libs/pam
-    x11-libs/cairo[glib]
-    x11-libs/libxkbcommon
-    x11-libs/pango
+	app-crypt/libsecret
+	dev-cpp/nlohmann_json
+	dev-cpp/sdbus-c++
+	dev-libs/glib:2
+	jemalloc? ( dev-libs/jemalloc:= )
+	dev-libs/libical
+	dev-libs/libsodium
+	dev-libs/libxml2
+	dev-libs/wayland
+	gnome-base/librsvg:2
+	media-libs/fontconfig
+	media-libs/freetype
+	media-libs/harfbuzz
+	media-libs/libepoxy
+	media-libs/libglvnd
+	media-libs/libjxl
+	media-libs/libsndfile
+	media-libs/libwebp
+	media-libs/mesa[egl(+),gles2(+)]
+	media-video/pipewire
+	media-video/wireplumber
+	dev-libs/md4c
+	dev-cpp/tomlplusplus
+	dev-libs/stb
+	net-misc/curl
+	sci-libs/libqalculate
+	sys-auth/polkit
+	sys-libs/pam
+	x11-libs/cairo[glib]
+	x11-libs/libxkbcommon
+	x11-libs/pango
 "
 RDEPEND="${DEPEND}"
 
 BDEPEND="
-    dev-build/just
-    dev-libs/wayland-protocols
-    dev-util/wayland-scanner
-    virtual/pkgconfig
+	dev-build/just
+	dev-libs/wayland-protocols
+	dev-util/wayland-scanner
+	virtual/pkgconfig
 "

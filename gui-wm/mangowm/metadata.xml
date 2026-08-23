@@ -8,4 +8,7 @@
   <upstream>
     <remote-id type="github">mangowm/mango</remote-id>
   </upstream>
+  <use>
+    <flag name="asan">Build with AddressSanitizer instrumentation (debugging only)</flag>
+  </use>
 </pkgmetadata>

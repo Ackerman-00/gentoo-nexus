@@ -11,7 +11,7 @@ SRC_URI="https://installer.rootapp.com/installer/Linux/X64/Root.AppImage -> ${P}
 
 S="${WORKDIR}"
 
-LICENSE="custom"
+LICENSE="all-rights-reserved"
 SLOT="0"
 KEYWORDS="-* ~amd64"
 RESTRICT="bindist mirror strip test"
