@@ -11,8 +11,6 @@ SRC_URI="https://github.com/mangowm/mango/archive/refs/tags/${PV}.tar.gz -> ${P}
 
 LICENSE="CC0-1.0 GPL-3+ MIT"
 SLOT="0"
-KEYWORDS="~amd64"
-IUSE="X asan"
 
 DEPEND="
 	>=gui-libs/wlroots-0.20:0.20=[libinput,session,X?]
@@ -46,6 +44,7 @@ BDEPEND="
 DOCS=( README.md .github/CONTRIBUTING.md )
 
 S="${WORKDIR}/mango-${PV}"
+IUSE="X asan"
 
 src_configure() {
 	local emesonargs=(
