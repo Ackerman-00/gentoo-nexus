@@ -59,7 +59,7 @@ src_unpack() {
 }
 
 src_install() {
-	local destdir="/opt/brave-origin-bin"
+	local destdir="/opt/brave-origin"
 
 	dodir "${destdir}"
 	cp -pPR brave/* "${ED}${destdir}/" || die
@@ -81,7 +81,7 @@ src_install() {
 pkg_postinst() {
 	xdg_desktop_database_update
 	xdg_icon_cache_update
-	elog "Brave Origin has been installed to /opt/brave-origin-bin"
+	elog "Brave Origin has been installed to /opt/brave-origin"
 	elog "The brave-origin executable is symlinked to /usr/bin/brave-origin"
 }
 

@@ -8,7 +8,7 @@ on:
   workflow_dispatch:
     inputs:
       package_list:
-        description: 'Space-separated list of =cat/pkg-ver to build manually (e.g. "=gui-wm/niri-25.02 =www-client/brave-origin-bin-1.75.0"). Overrides auto-detect when provided.'
+        description: 'Space-separated list of =cat/pkg-ver to build manually (e.g. "=gui-wm/niri-25.02 =www-client/brave-origin-1.75.0"). Overrides auto-detect when provided.'
         required: false
         default: ''
         type: string
@@ -170,7 +170,7 @@ jobs:
               pkg_cat_name = f"{pkg_dir.parts[-2]}/{pkg_dir.parts[-1]}"
               content = ebuild_path.read_text(encoding="utf-8")
 
-              if pkg_dir.parts[-1] == "rootapp-bin":
+              if pkg_dir.parts[-1] == "rootapp":
                   print(f"--- Scanning {pkg_cat_name} (AppImage) ---")
                   curr_m = re.search(rf'{re.escape(pkg_dir.parts[-1])}-(\S+?)\.ebuild$', ebuild_path.name)
                   if not curr_m: continue
@@ -196,12 +196,12 @@ jobs:
               repo = repo_m.group(1).rstrip('.')
               print(f"--- Scanning {pkg_cat_name} ({repo}) ---")
 
-              # brave-origin-bin: the "brave-origin-<ver>-linux-amd64.zip"
+              # brave-origin: the "brave-origin-<ver>-linux-amd64.zip"
               # asset is NOT published for every brave release (1.95.x/1.96.x
               # have none). Never bump to a version whose artifact 404s —
               # walk the release list newest-first and take the newest tag
               # whose zip actually exists.
-              if pkg_dir.parts[-1] == "brave-origin-bin":
+              if pkg_dir.parts[-1] == "brave-origin":
                   curr_m2 = re.search(rf'{re.escape(pkg_dir.parts[-1])}-(\S+?)\.ebuild$', ebuild_path.name)
                   if not curr_m2: continue
                   curr_ver = curr_m2.group(1)

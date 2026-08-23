@@ -41,7 +41,7 @@ tools around them.
 
 | What | Details |
 |---|---|
-| **Overlay** | niri, mangowm, noctalia-v5, scenefx, and the rest of the Wayland stack |
+| **Overlay** | niri, mangowm, noctalia-git, scenefx, and the rest of the Wayland stack |
 | **Official rebuilds** | mesa, kernel, llvm, gcc, blender, godot, zed, and more, recompiled for x86-64-v3, with 32-bit support for gaming |
 | **CI** | Rebuilds on a 12-hour rotating schedule — repo update → official update → brain-agent audit — or whenever upstream ships something new |
 | **Setup** | One script sets up the overlay, binary host, and package signing together |
@@ -100,7 +100,7 @@ lands, CI rebuilds it.
 |---|---|---|
 | `gui-wm` | `niri` | Scrollable-tiling Wayland compositor |
 | `gui-wm` | `mangowm` | Custom Wayland compositor |
-| `gui-wm` | `noctalia-v5` | Desktop shell for niri |
+| `gui-wm` | `noctalia-git` | Desktop shell for niri |
 | `gui-libs` | `scenefx` | Scene-graph rendering layer for wlroots |
 | `x11-base` | `xwayland-satellite` | Rootless XWayland |
 | `x11-misc` | `matugen` | Material You color palette generator |
@@ -108,14 +108,15 @@ lands, CI rebuilds it.
 | `net-im` | `vesktop` | Discord client with Vencord |
 | `games-util` | `faugus-launcher` | Game launcher |
 | `games-util` | `protonplus` | Proton version manager |
-| `app-misc` | `rootapp-bin` | Rootful app launcher |
+| `app-misc` | `rootapp` | Rootful app launcher |
 | `app-misc` | `cliphist` | Clipboard history manager |
 | `app-misc` | `brightnessctl` | Backlight control |
 | `app-misc` | `nwg-look` | GTK theme settings for wlroots |
 | `app-office` | `obsidian` | Knowledge base / notes app |
 | `dev-python` | `icoextract` | Icon extractor for Windows executables |
 | `www-client` | `zen-browser` | Privacy-focused Firefox fork |
-| `www-client` | `brave-origin-bin` | Brave browser (upstream binary) |
+| `www-client` | `brave-origin` | Brave browser (upstream binary) |
+| `www-client` | `helium-browser` | Private, fast Chromium-based web browser (tar.xz binary) |
 
 On top of these, the `rolling` binary host also mirrors the **official** Gentoo
 x86-64-v3 rebuilds — mesa, gcc, llvm, ffmpeg, portage, and most of a typical

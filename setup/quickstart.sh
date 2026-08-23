@@ -168,6 +168,13 @@ get_choice "Vesktop? [y/n]:" "^[yYnN]$" vesktop_choice
 get_choice "RootApp? [y/n]:" "^[yYnN]$" rootapp_choice
 get_choice "Matugen (Material You colors)? [y/n]:" "^[yYnN]$" matugen_choice
 
+echo -e "${B}>>> BROWSER${C}"
+echo "1) Zen Browser"
+echo "2) Brave Origin"
+echo "3) Helium Browser"
+echo "4) None"
+get_choice "Browser [1-4]:" "^[1-4]$" browser_choice
+
 # COMPOSITOR
 echo -e "${B}>>> COMPOSITOR${C}"
 echo "1) niri"
@@ -723,7 +730,12 @@ esac
 [[ "${steam_choice,,}" == "y" ]]    && INSTALL_LIST+=( games-util/steam-launcher )
 [[ "${games_choice,,}" == "y" ]]    && INSTALL_LIST+=( games-util/protonplus games-util/heroic-bin )
 [[ "${vesktop_choice,,}" == "y" ]]  && INSTALL_LIST+=( net-im/vesktop )
-[[ "${rootapp_choice,,}" == "y" ]]  && INSTALL_LIST+=( app-misc/rootapp-bin )
+[[ "${rootapp_choice,,}" == "y" ]]  && INSTALL_LIST+=( app-misc/rootapp )
+case $browser_choice in
+    1) INSTALL_LIST+=( www-client/zen-browser ) ;;
+    2) INSTALL_LIST+=( www-client/brave-origin ) ;;
+    3) INSTALL_LIST+=( www-client/helium-browser ) ;;
+esac
 [[ "${NEED_WIFI}" == "yes" ]]       && INSTALL_LIST+=( net-wireless/iwd net-wireless/wpa_supplicant )
 
 INSTALL_LIST+=(
@@ -741,8 +753,8 @@ emerge ${BIN_OPTS} --oneshot --quiet sys-apps/systemd-utils virtual/libudev || t
 # when both sys-libs/{ncurses,gpm} are scheduled for USE-flag reinstalls in one
 # transaction, each binary requires the other at runtime and Portage refuses to
 # order them ("Error: circular dependencies"), which blocks every Electron-app
-# install (obsidian, vesktop, zen-browser, brave-origin-bin, rootapp-bin,
-# protonplus). Installing gpm up front (--nodeps: its deps are already present
+# install (obsidian, vesktop, zen-browser, brave-origin, helium-browser,
+# rootapp, protonplus). Installing gpm up front (--nodeps: its deps are already present
 # on any stage3) satisfies ncurses' runtime dep from the installed copy.
 emerge ${BIN_OPTS} --usepkgonly --nodeps --quiet sys-libs/gpm 2>/dev/null || \
     emerge -1 --getbinpkg --nodeps --quiet sys-libs/gpm 2>/dev/null || true

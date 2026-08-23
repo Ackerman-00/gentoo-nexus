@@ -64,6 +64,18 @@ YOU are the sweep. The PROMPT's TEAR-APART + DOCKER BATTLE TEST is NOT optional 
 `gate_passes()` now hard-checks that `.opencode-relay.md` contains `run_id` + `status: complete` + `PACKAGE.*BR.*Req` / `deps-verified` / `dependency audit`.
 If the agent skips the table, the job fails and retries with stronger model.
 
+### Rolling release hygiene — REPLACE, NEVER ACCUMULATE (added 2026-08-23)
+
+The `rolling` release is a binhost, not an archive: exactly ONE `.gpkg.tar`
+per package name (the newest build). Every newly compiled binary REPLACES
+the older binary of the same package in the same operation; superseded,
+renamed-away (`rootapp-bin`, `brave-origin-bin`, …), or stale assets are
+pruned and the Packages index reconciled. The opencode-schedule PROMPT
+enforces this via step 4 (hygiene contract + orphan sweep + deliverable
+table + control-plane authority: fix build.yml/check-updates.yml yourself
+when replace logic leaks), a HARD RULE, and PRE-COMPLETION GATE item 8.
+A release holding two versions of one package = failed gate.
+
 ### Why this architecture
 
 - **Deterministic + intelligent**: the sweep is pure Python (no LLM needed,

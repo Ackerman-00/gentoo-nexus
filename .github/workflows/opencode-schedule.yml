@@ -163,28 +163,35 @@ jobs:
 
             UNDERSTAND WHAT THIS REPO IS TRYING TO DO. It is not a generic
             package dump: it is a curated, pre-built Wayland-desktop overlay and
-            x86-64-v3 binhost for compositors/shells (niri, mangowm, noctalia-v5,
+            x86-64-v3 binhost for compositors/shells (niri, mangowm, noctalia-git,
             scenefx), gaming tools, and daily-driver apps, rebuilt for a binary
             install model. Before changing anything, read README.md fully and
             make every decision align with that goal: packages here must be
             modern, buildable, and installable via the binhost - not just "exist".
 
-            TOKENS & WORKFLOW-FILE RULE: `git push` authenticates with GITHUB_TOKEN,
-            which has contents, issues, pull-requests, and actions write, but NOT the
-            `workflows` scope: GitHub HARD-REJECTS any push or API write that creates
-            or updates files under .github/workflows/ even if the ebuild/other files
-            in the same commit are fine (error: "refusing to allow a GitHub App to
-            create or update workflow ... without workflows permission"). Also NEVER
-            add `workflows: write` to a workflow's permissions block - that key is
-            INVALID for GITHUB_TOKEN and GitHub's validator rejects the ENTIRE
-            workflow file, killing every run of it. If a workflow file genuinely needs
-            changing: (a) describe the exact problem in .opencode-relay.md and open an
-            issue with the full diff in the body (the owner applies it manually from a
-            local checkout, as done for the gpm/ncurses heal in commit b467d91), or
-            (b) propose it in a README/relay note. Never attempt the push itself; it
-            will always fail. All other pushes (ebuilds, README, relay, etc.) work
-            normally - always `git fetch origin && git pull --rebase origin main`
-            before pushing.
+            TOKENS & WORKFLOW-FILE RULE (UPDATED 2026-08-23 - SUPERSEDES THE
+            OLD "NEVER TOUCH WORKFLOWS" RESTRICTION): the owner has granted
+            you FULL repo access - `git push` and API writes cover contents,
+            issues, pull-requests, actions, AND .github/workflows/* (see
+            CONTEXT/TOKENS below). You CAN create or update workflow files,
+            commit them, and push straight to main; this is the PRIMARY path
+            whenever a pipeline needs fixing (e.g. rolling-release replace/
+            prune logic, step 4d above). Rules for doing it safely:
+            - Validate YAML syntax before committing (python3 -c
+              "import yaml; yaml.safe_load(open('<file>'))").
+            - Keep workflow edits minimal, purposeful, and recorded in
+              .opencode-relay.md.
+            - NEVER add `workflows: write` to a permissions block unless you
+              verified it is needed AND valid for this repo's token setup -
+              an invalid permission key makes GitHub reject the ENTIRE
+              workflow file and kills every run.
+            - FALLBACK ONLY: if a push is actually rejected with an explicit
+              GitHub permissions error ("refusing to allow ... without
+              workflows permission"), do NOT retry blindly: describe the
+              exact problem in .opencode-relay.md and open an issue with the
+              full diff so the owner applies it manually. All other pushes
+              work normally - always `git fetch origin && git pull --rebase
+              origin main` before pushing.
 
             STAY CURRENT WITH GENTOO ITSELF. Gentoo policy and tooling move fast;
             a package can stop building simply because Gentoo deprecated its EAPI,
@@ -239,7 +246,7 @@ jobs:
               (mesa, kernel, llvm, gcc, blender, godot, zed, portage, etc.) for
               the x86-64-v3 binhost. These are driven by atom lists, not by
               ebuilds in this repo.
-            - Live packages (gui-wm/niri, gui-wm/noctalia-v5,
+            - Live packages (gui-wm/niri, gui-wm/noctalia-git,
               x11-base/xwayland-satellite) use 9999 ebuilds with an EGIT_COMMIT
               pin; the built commit is recorded in commits.json in the rolling
               release.
@@ -466,8 +473,8 @@ jobs:
                  - Python: pyproject.toml / setup.py / requirements.txt
                  - Go: go.mod
                  - Anything else: install docs, Dockerfile, CI workflows.
-                 For ALL binary-distributed packages - AppImage (rootapp-bin,
-                 vesktop, zen-browser, brave-origin-bin, obsidian, ...), .deb,
+                 For ALL binary-distributed packages - AppImage (rootapp,
+                 vesktop, zen-browser, brave-origin, obsidian, ...), .deb,
                  prebuilt tarballs, self-contained/static binaries, CDN
                  installers - tear the artifact apart EXACTLY like the KNOWN
                  PACKAGE-SPECIFIC NOTES section describes: AppImages with
@@ -543,19 +550,19 @@ jobs:
             owner-tested sibling-repo packaging if one exists, (3) the upstream
             project itself, and (4) the actual source/binary artifact, opened
             and inspected (see the DEEP AUDIT above). Never special-case only
-            rootapp-bin - treat EVERY prebuilt-binary package in this repo the
-            same way (brave-origin-bin, faugus-launcher, obsidian, protonplus,
-            rootapp-bin, vesktop, zen-browser, ...): tear the artifact apart,
+            rootapp - treat EVERY prebuilt-binary package in this repo the
+            same way (brave-origin, faugus-launcher, obsidian, protonplus,
+            rootapp, vesktop, zen-browser, ...): tear the artifact apart,
             read the real version from inside, and verify the Manifest hash
-            against the downloaded file. rootapp-bin below is the canonical
+            against the downloaded file. rootapp below is the canonical
             worked example.
 
-            WORKED EXAMPLE (rootapp-bin): rootapp is a proprietary AppImage
+            WORKED EXAMPLE (rootapp): rootapp is a proprietary AppImage
             from https://installer.rootapp.com/installer/Linux/X64/Root.AppImage
             (no GitHub releases/tags - the version comes from INSIDE the
             AppImage). Authoritative references, in priority order:
-              1. THIS REPO: app-misc/rootapp-bin/rootapp-bin-0.9.125.ebuild
-                 (currently 0.9.125; check its SRC_URI and Manifest).
+              1. THIS REPO: app-misc/rootapp/rootapp-0.9.127.ebuild
+                 (currently 0.9.127; check its SRC_URI and Manifest).
               2. fedora-nexus (github.com/Ackerman-00/fedora-nexus,
                  rootapp/rootapp.spec + update.sh). The fedora-nexus packaging
                  was personally tested and patched by the repo owner - it IS
@@ -1138,7 +1145,7 @@ jobs:
                   zero source rebuilds. A binary that is in the release but
                   does not install, or installs only by recompiling, is a
                   FAIL of the sweep.
-                - The live 9999 ebuilds (niri, noctalia-v5, xwayland-
+                - The live 9999 ebuilds (niri, noctalia-git, xwayland-
                   satellite) must match a built binary whose commits.json
                   records the pinned EGIT_COMMIT; if the release binary is
                   stale vs the pin, trigger a rebuild - do not fabricate.
@@ -1186,7 +1193,7 @@ jobs:
                  package.json / changelog / binary version strings), and
                  cross-check against the project homepage, its changelog, the
                  ::gentoo ebuild, repology, or the AUR. This applies to EVERY
-                 binary-distributed package, not just rootapp-bin - never trust
+                 binary-distributed package, not just rootapp - never trust
                  a filename or homepage string alone.
                - For GitHub projects, use `gh api` (not curl!) and reconcile results:
                      gh api repos/<owner>/<repo>/releases/latest --jq '.tag_name'
@@ -1212,7 +1219,7 @@ jobs:
                with the container tooling.
 
                 (See the global KNOWN PACKAGE-SPECIFIC NOTES section above - it
-                applies to EVERY package; rootapp-bin is just the worked example.
+                applies to EVERY package; rootapp is just the worked example.
                 fedora-nexus is its source of truth; never trust the AUR version
                 or "19.2.5".)
 
@@ -1303,14 +1310,72 @@ jobs:
                  never triggered. Verify against the actual release assets, then
                  apply your own judgment on what to do.
 
-            4. REPAIR RELEASE CONSISTENCY.
-               GET https://api.github.com/repos/Ackerman-00/gentoo-nexus/releases/tags/rolling,
-               list the assets, and compare against every ebuild's current
-               version/revision (and every 9999 EGIT_COMMIT). Rebuild any package
-               whose expected binary is missing or stale, and fix the Packages
-               index if it is out of sync with the assets.
+             4. REPAIR RELEASE CONSISTENCY.
+                GET https://api.github.com/repos/Ackerman-00/gentoo-nexus/releases/tags/rolling,
+                list the assets, and compare against every ebuild's current
+                version/revision (and every 9999 EGIT_COMMIT). Rebuild any package
+                whose expected binary is missing or stale, and fix the Packages
+                index if it is out of sync with the assets.
 
-             5. REVIEW ALL OPEN ISSUES like a human maintainer - AND REPLY.
+                ROLLING RELEASE HYGIENE - ONE VERSION PER PACKAGE (NON-
+                NEGOTIABLE CONTRACT - "REPLACE, NEVER ACCUMULATE"): the
+                "rolling" release is a rolling binhost, NOT an archive. For
+                EVERY package name it must contain EXACTLY ONE binary - the
+                newest built .gpkg.tar - plus its single Packages index
+                entry. Every new compiled binary REPLACES the older binary
+                of the same package inside the release; the old version
+                must NOT exist anymore. Superseded/stale/orphaned binaries
+                accumulating in the release are a BUG (they bloat the
+                binhost, slow downloads, confuse emerge, and break the
+                "every shipped asset installs" guarantee).
+                a. REPLACE ON PUBLISH: whenever a build you triggered lands,
+                   prove the replacement happened: list assets with
+                     gh release view rolling --json assets --jq '.assets[].name'
+                   and verify each rebuilt PN has EXACTLY ONE
+                   <PN>-<version>_r<rev>.gpkg.tar - the NEW one. If any
+                   older version of that PN survives, DELETE it in the same
+                   breath:
+                     gh release delete-asset rolling "<old-asset>.gpkg.tar" -y
+                   then confirm the Packages index points only at the kept
+                   asset. build.yml's upload step deletes per-PN old assets
+                   automatically - your job is to CATCH WHAT IT MISSES and
+                   finish the replacement by hand.
+                b. ORPHAN + STALE SWEEP (EVERY RUN): diff the full asset
+                   list against (1) current overlay ebuilds, (2) the
+                   official atom lists, (3) the Packages index. Any asset
+                   that is (i) a PN with no matching ebuild/atom (renamed
+                   packages leave these: rootapp-bin -> rootapp,
+                   brave-origin-bin -> brave-origin, ...), (ii) an older
+                   version than the current ebuild, or (iii) missing from
+                   the Packages index is STALE: delete it and reconcile the
+                   index. NEVER keep old binaries "as backup" - the git
+                   history and upstream releases are the archive, the
+                   rolling release is only the latest.
+                c. DELIVERABLE - release-hygiene table in your final summary:
+                   | package | newest asset kept | stale assets deleted | status |
+                   status in: clean / pruned-(n) / blocked-(reason).
+                   A rolling release holding two versions of the same
+                   package at the end of your run = FAIL of this mandate;
+                   do not write `status: complete` while it holds.
+                d. FIX THE PIPELINE ITSELF WHEN NEEDED (CONTROL-PLANE
+                   AUTHORITY - OWNER-GRANTED): if the automated
+                   replace-old-with-newest logic is missing, broken, or
+                   leaks superseded assets anywhere in the pipelines
+                   (build.yml upload/delete steps, check-updates.yml
+                   sync_overlay.sh binhost audit, official-build
+                   workflows), UPDATE THE .YML YOURSELF - you have FULL
+                   repo access, including .github/workflows/* (see the
+                   TOKENS rule below: direct edit + push is the PRIMARY
+                   path). Validate YAML syntax before committing, keep the
+                   change minimal and scoped to the replacement/pruning
+                   behavior, push, trigger a build, and verify from the NEW
+                   run's asset list that the replacement now happens
+                     automatically. Record what you changed and why in
+                   .opencode-relay.md. Fall back to a relay note + issue
+                   with the full diff ONLY if the push is rejected by
+                   GitHub with an explicit permissions error.
+
+              5. REVIEW ALL OPEN ISSUES like a human maintainer - AND REPLY.
                 GET https://api.github.com/repos/Ackerman-00/gentoo-nexus/issues
                 (state=open, no pull requests). EVERY open issue MUST get a reply
                 - silence is not an option. For each issue:
@@ -1484,21 +1549,30 @@ jobs:
                  checksums).
                6. You have stated what you did NOT verify and why - a named
                   gap is a stated FAIL, not a silent skip.
-               7. You updated and pushed `.opencode-relay.md` on main WITHIN
-                  this run, and it contains the line `run_id: $RUN_ID`
-                  (RUN_ID = the env var value, e.g. "run_id: 1234567890" -
-                  read it with `echo $RUN_ID`, the literal text `$RUN_ID`
-                  in the file is WRONG and counts as a FAIL)
-                  and a terminal status - `status: complete` if the work is
-                  done, or `status: unfinished` ONLY if you are handing off
-                  to a relay (see RELAY / LONG-RUN HANDOFF below). This
-                  relay update IS the ONLY proof this run finished its
-                  deliberate work - the workflow fetches the relay from main
-                  after your process exits and checks it contains this run's
-                  run_id; if it does NOT, the run is treated as FAILED and a
-                  stronger model tries again from scratch. NEVER create
-                  separate completion files - the relay is the single
-                  completion record.
+             7. You updated and pushed `.opencode-relay.md` on main WITHIN
+                   this run, and it contains the line `run_id: $RUN_ID`
+                   (RUN_ID = the env var value, e.g. "run_id: 1234567890" -
+                   read it with `echo $RUN_ID`, the literal text `$RUN_ID`
+                   in the file is WRONG and counts as a FAIL)
+                   and a terminal status - `status: complete` if the work is
+                   done, or `status: unfinished` ONLY if you are handing off
+                   to a relay (see RELAY / LONG-RUN HANDOFF below). This
+                   relay update IS the ONLY proof this run finished its
+                   deliberate work - the workflow fetches the relay from main
+                   after your process exits and checks it contains this run's
+                   run_id; if it does NOT, the run is treated as FAILED and a
+                   stronger model tries again from scratch. NEVER create
+                   separate completion files - the relay is the single
+                   completion record.
+                8. ROLLING RELEASE HYGIENE PASS (visible checklist - declare,
+                   execute, announce): paste the post-sweep asset list proof
+                   (`gh release view rolling --json assets --jq '.assets[].name'`)
+                   showing EXACTLY ONE .gpkg.tar per package name - every new
+                   compiled binary has REPLACED its older binary, zero
+                   superseded/orphaned/stale versions remain - plus your
+                   release-hygiene table from step 4c. Any package name with
+                   two or more versions still in the release = FAIL; prune,
+                   re-run this item, then finish.
             Announce this checklist in your final summary with PASS/FAIL and
             the evidence for every item. Any FAIL means: fix it, re-run the
             gate, then finish.
@@ -1555,6 +1629,12 @@ jobs:
               triggering a successful build.
             - No churn: only touch packages that are actually broken, missing, or
               outdated. Do not bump versions gratuitously.
+            - Rolling releases hold ONE version per package, ever: a newly
+              compiled binary must REPLACE the older binary of the same
+              package in the "rolling" release before you call it shipped;
+              superseded, orphaned, or stale .gpkg.tar assets are deleted in
+              the same operation (step 4 ROLLING RELEASE HYGIENE). Never
+              leave old versions accumulating in the release.
             - Never echo, print, commit, or paste OPENCODE_API_KEY /
               GITHUB_TOKEN values anywhere (terminal output, issues, files, logs).
             - Relay, don't die: never let a run end with uncommitted work or

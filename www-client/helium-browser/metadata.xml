@@ -1,0 +1,15 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<!DOCTYPE pkgmetadata SYSTEM "https://www.gentoo.org/dtd/metadata.dtd">
+<pkgmetadata>
+  <maintainer type="person">
+    <email>ackerman-00@users.noreply.github.com</email>
+    <name>Ackerman</name>
+  </maintainer>
+  <use>
+    <flag name="qt6">Install Qt 6 shim for native Qt theming/integration</flag>
+    <flag name="selinux">Pull in SELinux policy for Chromium-based browsers</flag>
+  </use>
+  <upstream>
+    <remote-id type="github">imputnet/helium-linux</remote-id>
+  </upstream>
+</pkgmetadata>
