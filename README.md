@@ -170,7 +170,7 @@ MAKEOPTS="-j4"
 LC_MESSAGES=C.UTF-8
 ```
 
-Or copy the ready-made config: `machine/make.conf` → `/etc/portage/make.conf`.
+> Or copy the ready-made config: `machine/make.conf` → `/etc/portage/make.conf`.
 
 ### 2 · Add the overlay
 
