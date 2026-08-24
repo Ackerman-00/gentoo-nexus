@@ -489,7 +489,6 @@ dev-libs/glib sysprof
 x11-libs/pango sysprof
 media-video/pipewire gstreamer
 sys-libs/ncurses -gpm
-sys-libs/gpm abi_x86_32
 dev-libs/libxmlb introspection
 dev-vcs/git keyring
 x11-libs/gtk+ colord sysprof
