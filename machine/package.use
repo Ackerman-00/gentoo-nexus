@@ -186,6 +186,8 @@ sys-libs/ncurses -gpm
 # nexus builds whose mutual runtime deps deadlock binary-only transactions.
 # Nothing in the desktop stack needs 32-bit libncurses/libgpm (wine/steam
 # bundle their own); the official v3 pair is consumed as-is.
-dev-libs/libxmlb introspection
 dev-vcs/git keyring
+# libxmlb introspection pin removed 2026-08-24: rolling release does not ship
+# libxmlb and the official v3 binary is built without it - the pin forced a
+# source build for every consumer (appstream dep of protonplus).
 x11-libs/gtk+ colord sysprof
