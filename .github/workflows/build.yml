@@ -983,6 +983,27 @@ jobs:
                   pkgs.write('\n')
 
           print(f">>> Reconciled Packages index: {len(entries)} entries")
+
+          # Emit a basename->PN map for the upload step so its "delete old
+          # versions of the same package" loop matches ALL older versions of
+          # the package name. Filename suffix-stripping only yields <pf>
+          # (e.g. mesa-26.2.1), which never matched superseded versions
+          # (mesa-26.1.x) and let them accumulate in the rolling release.
+          def pn_from_cpv(cpv):
+              # PMS: category/pn-version[-rN]; version starts at the first
+              # dash-separated component beginning with a digit.
+              pv = cpv.split('/', 1)[-1]
+              parts = pv.split('-')
+              for i, part in enumerate(parts):
+                  if part[:1].isdigit():
+                      return '-'.join(parts[:i])
+              return pv
+
+          with open(os.path.join(pkgdir, '.upload_pn_map'), 'w') as pnmap:
+              for b in entries:
+                  base = os.path.basename(b['PATH'])
+                  pnmap.write(f"{base}\t{pn_from_cpv(b['CPV'])}\n")
+          print(f">>> Wrote .upload_pn_map for {len(entries)} packages")
           PYEOF
 
       # ---- topic: validate-and-upload ----
@@ -1059,7 +1080,12 @@ jobs:
             # so the package name is derived from the filename, never from path
             # fields (awk -F/ '{print $3}' yields the arch). Strip the trailing
             # -<buildid> suffix to get <pf> (e.g. highway-1.4.0-2 -> highway-1.4.0).
-            PN=$(echo "$ASSET_NAME" | sed -E 's/\.gpkg\.tar$//; s/-[0-9]+$//')
+            # Authoritative PN from the gpkg-derived map (Reconcile step);
+            # filename strip is only a fallback for files missing from the map.
+            PN=$(awk -F'\t' -v n="$ASSET_NAME" '$1==n{print $2; exit}' binpkgs/.upload_pn_map 2>/dev/null || true)
+            if [ -z "$PN" ]; then
+              PN=$(echo "$ASSET_NAME" | sed -E 's/\.gpkg\.tar$//; s/-[0-9]+$//')
+            fi
             echo "  Processing: $ASSET_NAME (PN=$PN)"
 
             # Delete old versions of the same package name
@@ -1091,8 +1117,11 @@ jobs:
             -e 's|^URI: .*/([^/]+\.gpkg\.tar)$|URI: \1|' \
             binpkgs/Packages 2>/dev/null || true
 
-          awk '/^CPV: acct-(group|user)\//{skip=1} /^$/{if(skip){skip=0; next}} !skip' \
-            binpkgs/Packages > binpkgs/Packages.tmp && mv binpkgs/Packages.tmp binpkgs/Packages 2>/dev/null || true
+          # acct-group/acct-user entries are KEPT: they install fine as
+          # binpkgs (metadata-only; pkg_preinst runs on the consumer) and the
+          # official x86-64-v3 binhost ships them too. Stripping them here
+          # made --usepkgonly fail with "no binary packages to satisfy
+          # acct-group/*" (issue #16). Root fix, 2026-08-23.
 
           rm -f binpkgs/Packages.gz
           gzip -c binpkgs/Packages 2>/dev/null > binpkgs/Packages.gz || true
