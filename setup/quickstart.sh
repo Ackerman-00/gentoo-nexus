@@ -488,7 +488,7 @@ x11-misc/colord abi_x86_32
 dev-libs/glib sysprof
 x11-libs/pango sysprof
 media-video/pipewire gstreamer
-sys-libs/ncurses gpm abi_x86_32
+sys-libs/ncurses -gpm
 sys-libs/gpm abi_x86_32
 dev-libs/libxmlb introspection
 dev-vcs/git keyring
@@ -591,7 +591,6 @@ sys-apps/util-linux abi_x86_32
 sys-libs/gdbm abi_x86_32
 sys-libs/libcap abi_x86_32
 sys-libs/libudev-compat abi_x86_32
-sys-libs/ncurses abi_x86_32
 sys-libs/pam abi_x86_32
 sys-libs/readline abi_x86_32
 sys-libs/zlib abi_x86_32
@@ -804,15 +803,11 @@ BIN_OPTS="--getbinpkg --usepkg --keep-going --autounmask=y --autounmask-write --
 
 emerge ${BIN_OPTS} --oneshot --quiet sys-apps/systemd-utils virtual/libudev || true
 
-# Break the ncurses[gpm] <-> gpm slot-op upgrade cycle BEFORE the main install:
-# when both sys-libs/{ncurses,gpm} are scheduled for USE-flag reinstalls in one
-# transaction, each binary requires the other at runtime and Portage refuses to
-# order them ("Error: circular dependencies"), which blocks every Electron-app
-# install (obsidian, vesktop, zen-browser, brave-origin, helium-browser,
-# rootapp, protonplus). Installing gpm up front (--nodeps: its deps are already present
-# on any stage3) satisfies ncurses' runtime dep from the installed copy.
-emerge ${BIN_OPTS} --usepkgonly --nodeps --quiet sys-libs/gpm 2>/dev/null || \
-    emerge -1 --getbinpkg --nodeps --quiet sys-libs/gpm 2>/dev/null || true
+# NOTE: the historical ncurses[gpm] <-> gpm circular-dependency workaround was
+# removed on 2026-08-24: the binhost now ships sys-libs/ncurses built with
+# -gpm (matching the official Gentoo v3 binhost) and the consumer package.use
+# pins -gpm, so the ncurses->gpm runtime edge no longer exists and binary-only
+# transactions can never deadlock. gpm itself is still shipped and installable.
 
 # Same idea for acct-group/seat (needed by seatd/niri): neither the official v3
 # host nor the rolling release ship this binary (acct-* entries are stripped

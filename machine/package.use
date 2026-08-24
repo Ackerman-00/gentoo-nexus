@@ -176,7 +176,11 @@ x11-misc/colord abi_x86_32
 dev-libs/glib sysprof
 x11-libs/pango sysprof
 media-video/pipewire gstreamer
-sys-libs/ncurses gpm abi_x86_32
+# -gpm (2026-08-24): ncurses[gpm] + gpm form a mutual runtime dep that
+# binary-only transactions cannot order. Both binhosts now ship ncurses with
+# -gpm exactly like the official Gentoo v3 host; this pin keeps the consumer's
+# effective USE aligned so the binary is accepted and the cycle cannot occur.
+sys-libs/ncurses -gpm
 sys-libs/gpm abi_x86_32
 dev-libs/libxmlb introspection
 dev-vcs/git keyring

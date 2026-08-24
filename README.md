@@ -395,17 +395,14 @@ emerge -g --oneshot media-libs/mesa media-libs/vulkan-loader
 <summary>"Error: circular dependencies" when installing Electron apps (obsidian, vesktop, zen-browser, brave, rootapp)</summary>
 <br>
 
-Upstream packaging interaction: when <code>sys-libs/ncurses</code> and
-<code>sys-libs/gpm</code> both need a USE-flag reinstall in one transaction,
-each binary requires the other at runtime and Portage refuses to order them.
-Install gpm on its own first — its dependencies are already present on any
-stage3 — then rerun your install:
-
-```bash
-emerge --getbinpkg --usepkgonly --nodeps sys-libs/gpm
-```
-
-`setup/quickstart.sh` does this automatically before the main install.
+<b>Fixed at the root on 2026-08-24.</b> Upstream <code>sys-libs/ncurses</code>
+with the <code>gpm</code> flag and <code>sys-libs/gpm</code> require each other
+at runtime — a cycle Portage cannot order inside one binary-only transaction.
+The binhost now ships <code>ncurses</code> built with <code>-gpm</code>
+(exactly like the official Gentoo x86-64-v3 binhost) and the shipped
+<code>machine/package.use</code> pins <code>sys-libs/ncurses -gpm</code>, so
+the ncurses→gpm runtime edge never exists and the cycle cannot occur.
+If you pinned <code>+gpm</code> manually, switch to the shipped config.
 
 </details>
 
