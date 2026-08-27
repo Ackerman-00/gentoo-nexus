@@ -9,7 +9,7 @@ DESCRIPTION="A lightweight Wayland shell built directly on Wayland and OpenGL ES
 HOMEPAGE="https://github.com/noctalia-dev/noctalia"
 EGIT_REPO_URI="https://github.com/noctalia-dev/noctalia.git"
 EGIT_BRANCH="main"
-EGIT_COMMIT="b0958cf2885c"
+EGIT_COMMIT="74e6c2790dd8"
 
 LICENSE="MIT"
 SLOT="0"
